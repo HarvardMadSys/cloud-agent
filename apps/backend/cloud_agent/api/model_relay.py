@@ -31,11 +31,14 @@ deployment's key, not what a header can make that key do.
 owner has a budget per UTC day on a connection's models together. The answer
 to an inference request names the tokens it used (``domain.model_usage``);
 when it ends, those tokens at the model's prices are added to what the owner
-spent today (``record_operator_request``). An answer that named no usage, or
-was cut short before it could, is charged by estimate: the request's text
-taken as input tokens, at the input price
-(``domain.operator_models.estimated_prompt_tokens``). A request the provider
-did not serve (unreachable, or answered with an error) costs nothing.
+spent today (``record_operator_request``), with the gateway's formula and
+rounding. An answer that named no usage, or was cut short before it could, is
+charged by estimate, as the gateway bills a stream its client closed: the
+request's text as input, and the text the answer produced so far as output
+(``domain.model_usage``). A request the provider did not serve (unreachable,
+or answered with an error) costs nothing. A charge that could not be written
+stays counted against the owner's budget and is written again later
+(``_model_relay_charges``), as the gateway keeps a cost it has not written.
 
 **What is in flight is held back.** A cost is known only when an answer ends,
 so each admitted request reserves its estimate of the owner's budget until
@@ -66,6 +69,7 @@ import json
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -73,22 +77,28 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from cloud_agent.api._model_relay_charges import (
+    Charge,
+    PendingCharges,
+    report,
+    write_charge,
+)
 from cloud_agent.api.deps import get_storage
 from cloud_agent.application.model_connection_check import guard_base_url
 from cloud_agent.application.model_connection_stream import CheckStop
 from cloud_agent.application.model_connections import operator_connection_cipher
 from cloud_agent.crypto.credential_cipher import CredentialCipherError
 from cloud_agent.crypto.domain_cipher import settings_root_key
-from cloud_agent.domain.model_usage import TokenUsage, UsageReader
+from cloud_agent.domain.model_usage import TokenUsage, UsageReader, estimated_prompt_tokens
 from cloud_agent.domain.operator_models import (
     end_user_tag,
-    estimated_prompt_tokens,
     is_messages_path,
     relay_route,
     request_cost,
 )
 from cloud_agent.logging_utils import get_logger
 from cloud_agent.mcp.transports import pinned_transport
+from cloud_agent.ports.operator_models import ChargeOutcomeUnknown
 from cloud_agent.tokens import InvalidAgentToken, parse_residency_model_token
 from cloud_agent_shared.shared_protocol import is_residency_model_credential
 
@@ -240,6 +250,9 @@ class Reserved:
 _SLOTS = Slots()
 #: This process's reservations. A test replaces it through :func:`get_reserved`.
 _RESERVED = Reserved()
+#: This process's charges not written yet, counted in its reservations. A test
+#: replaces it through :func:`get_pending`.
+_PENDING = PendingCharges(_RESERVED)
 
 
 def get_slots() -> Slots:
@@ -250,6 +263,16 @@ def get_slots() -> Slots:
 def get_reserved() -> Reserved:
     """Dependency: the process's budget reservations."""
     return _RESERVED
+
+
+def get_pending() -> PendingCharges:
+    """Dependency: the process's charges not written yet."""
+    return _PENDING
+
+
+async def close_pending(timeout: float = 10.0) -> None:
+    """Before the process stops: try each charge not written yet once more."""
+    await _PENDING.close(timeout)
 
 
 def get_relay_client(request: Request) -> httpx.AsyncClient | None:
@@ -290,14 +313,15 @@ class _Admitted:
     store: _RelayStorage
     slots: Slots
     reserved: Reserved
+    pending: PendingCharges
     caller: dict[str, Any]
     #: The path's route; ``None`` until the caller's connection is known.
     route: RelayRoute | None = None
     model: str | None = None
     prices: ModelPrices | None = None
     keys: list[tuple[tuple[str, ...], int | None]] = field(default_factory=list)
-    #: The request's text as input tokens: what is charged, at the input
-    #: price, when the answer names no usage.
+    #: The request's text as input tokens: what is charged as its input
+    #: when the answer names none.
     estimated_tokens: int = 0
     #: What is held of the owner's budget while the request is in flight.
     hold: tuple[tuple[str, ...], int] | None = None
@@ -322,63 +346,48 @@ class _Admitted:
         if self.hold is not None:
             self.reserved.free(*self.hold)
 
-    async def charge(self, usage: TokenUsage | None, *, complete: bool = False) -> None:
+    async def charge(self, used: TokenUsage, *, estimated: bool) -> None:
         """Add what the request cost to its owner's use today, once.
 
-        ``usage`` is what the answer said it used, ``None`` when it named
-        nothing; ``complete`` is whether the answer was read to its end. A
-        request that is not an inference call is never charged.
+        ``used`` is what the answer named, or the estimate of it
+        (``estimated``). A request that is not an inference call is never
+        charged. A write that failed is kept and written later, counted
+        against the owner's budget meanwhile; one whose outcome is unknown is
+        reported, not written twice.
         """
         if self.charged or self.model is None or self.prices is None:
             return
         self.charged = True
-        used = usage if usage is not None else TokenUsage(prompt=self.estimated_tokens)
-        estimated = usage is None or not complete
-        cost = request_cost(self.prices, used)
-        connection_id, user_id = str(self.connection["id"]), str(self.caller["user_id"])
+        charge = Charge(
+            connection_id=str(self.connection["id"]),
+            user_id=str(self.caller["user_id"]),
+            model=self.model,
+            day=datetime.now(UTC).date(),
+            cost_microusd=request_cost(self.prices, used),
+            used=used,
+            estimated=estimated,
+            job_id=self.caller.get("job_id"),
+        )
         try:
-            await self.store.operator_models.record_operator_request(
-                connection_id=connection_id,
-                user_id=user_id,
-                model=self.model,
-                cost_microusd=cost,
-                input_tokens=used.prompt,
-                cache_read_tokens=used.cache_read,
-                cache_write_tokens=used.cache_write,
-                output_tokens=used.output,
-                estimated=estimated,
-            )
+            await write_charge(self.store, charge)
+        except ChargeOutcomeUnknown:
+            report("agent_model_relay_charge_unknown", charge, error=True)
+            return
         except Exception:
-            # The answer was relayed; a cost that could not be written is the
-            # deployment's loss, and is reported rather than failing the turn.
-            logger.error(
-                "agent_model_relay_charge_failed",
-                extra={
-                    "event": "agent_model_relay_charge_failed",
-                    "connection_id": connection_id,
-                    "user_id": user_id,
-                    "model": self.model,
-                    "cost_microusd": cost,
-                },
+            # The answer was relayed: its cost is kept and written later
+            # rather than failing the turn or being let go.
+            logger.warning(
+                "agent_model_relay_charge_retry",
+                extra={"event": "agent_model_relay_charge_retry", **charge.facts()},
                 exc_info=True,
             )
+            self.pending.keep(self.store, charge)
             return
-        logger.info(
-            "agent_model_relay_charged",
-            extra={
-                "event": "agent_model_relay_charged",
-                "job_id": self.caller.get("job_id"),
-                "connection_id": connection_id,
-                "user_id": user_id,
-                "model": self.model,
-                "cost_microusd": cost,
-                "input_tokens": used.prompt,
-                "cache_read_tokens": used.cache_read,
-                "cache_write_tokens": used.cache_write,
-                "output_tokens": used.output,
-                "estimated": estimated,
-            },
-        )
+        report("agent_model_relay_charged", charge)
+
+    async def charge_estimate(self) -> None:
+        """Charge a request whose answer was never read: its input, by estimate."""
+        await self.charge(TokenUsage(prompt=self.estimated_tokens), estimated=True)
 
 
 def _refusal(raw_path: str, refused: _Refused) -> Response:
@@ -556,6 +565,7 @@ async def relay(
     http: httpx.AsyncClient | None = Depends(get_relay_client),
     slots: Slots = Depends(get_slots),
     reserved: Reserved = Depends(get_reserved),
+    pending: PendingCharges = Depends(get_pending),
     guard: Callable[[str], Awaitable[None]] = Depends(get_endpoint_guard),
 ) -> Response:
     """Forward one model request with the deployment's key, or refuse it."""
@@ -564,7 +574,7 @@ async def relay(
     started = time.monotonic()
     admitted: _Admitted | None = None
     try:
-        admitted, style, body = await _admit(request, store, slots, reserved, raw_path)
+        admitted, style, body = await _admit(request, store, slots, reserved, pending, raw_path)
         response = await _forward(request, http, guard, admitted, style, body, raw_path)
     except _Refused as refused:
         if admitted is not None:
@@ -578,7 +588,7 @@ async def relay(
                     # The provider had the request and may have served it,
                     # whatever failed here afterwards: it is charged by
                     # estimate. One that never left costs its owner nothing.
-                    await admitted.charge(None)
+                    await admitted.charge_estimate()
             finally:
                 admitted.release()
         raise
@@ -591,6 +601,7 @@ async def _admit(
     store: _RelayStorage | None,
     slots: Slots,
     reserved: Reserved,
+    pending: PendingCharges,
     raw_path: str,
 ) -> tuple[_Admitted, str, bytes]:
     """Resolve the placeholder to its turn and settle whether this request may go on."""
@@ -619,7 +630,9 @@ async def _admit(
         raise _Refused(
             401, "invalid_credential", "This chat has no running turn, so it cannot reach a model."
         )
-    admitted = _Admitted(store=store, slots=slots, reserved=reserved, caller=caller)
+    admitted = _Admitted(
+        store=store, slots=slots, reserved=reserved, pending=pending, caller=caller
+    )
     connection = _live_connection(caller)
     route = relay_route(str(connection["base_url"]), request.method, raw_path)
     if route is None:
@@ -704,7 +717,7 @@ async def _forward(
     if answer is None:
         # The provider had the request and may bill for it: charged by estimate.
         try:
-            await admitted.charge(None)
+            await admitted.charge_estimate()
         finally:
             admitted.release()
             await close_client()
@@ -720,7 +733,8 @@ async def _forward(
                 # Charged before the reservation is given back, so that the
                 # cost counts somewhere at every moment.
                 if reader is not None:
-                    await admitted.charge(reader.usage(), complete=reader.complete)
+                    used, estimated = reader.billed(admitted.estimated_tokens)
+                    await admitted.charge(used, estimated=estimated)
             finally:
                 admitted.release()
                 await close_client()
@@ -880,9 +894,12 @@ def _log(
 
 __all__ = [
     "MAX_BODY_BYTES",
+    "PendingCharges",
     "Reserved",
     "Slots",
+    "close_pending",
     "get_endpoint_guard",
+    "get_pending",
     "get_relay_client",
     "get_reserved",
     "get_slots",

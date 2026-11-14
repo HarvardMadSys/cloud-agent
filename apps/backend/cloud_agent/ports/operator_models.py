@@ -9,6 +9,15 @@ if TYPE_CHECKING:
     from datetime import date
 
 
+class ChargeOutcomeUnknown(Exception):
+    """A charge's statement was sent and its outcome never came back.
+
+    It may have been counted. Writing it again could count it twice, so it is
+    reported instead of retried. Any other failure of
+    :meth:`OperatorModelRepository.record_operator_request` wrote nothing.
+    """
+
+
 class OperatorModelRepository(Protocol):
     """Persist provided connections and record what the model relay's requests cost.
 
@@ -155,11 +164,18 @@ class OperatorModelRepository(Protocol):
         cache_write_tokens: int,
         output_tokens: int,
         estimated: bool,
+        day: date | None = None,
     ) -> None:
-        """Add one served request, its tokens and its cost to the owner's use today.
+        """Add one served request, its tokens and its cost to the owner's use on ``day``.
 
+        ``day`` is the UTC day its answer ended on, today when ``None``.
         ``input_tokens`` is every input token, the cached ones included.
         ``estimated`` says the answer named no usage, or was cut short, and
-        the cost is the relay's estimate.
+        the cost is the relay's estimate. Raises :class:`ChargeOutcomeUnknown`
+        when the statement was sent and its outcome is not known; any other
+        failure wrote nothing.
         """
         ...
+
+
+__all__ = ["ChargeOutcomeUnknown", "OperatorModelRepository"]

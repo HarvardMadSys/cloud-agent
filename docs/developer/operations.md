@@ -4479,12 +4479,15 @@ from one account the same way.
 **What a request is charged.** When an answer ends, the relay reads the usage
 record the provider put in it (the three inference APIs each carry one, in a
 stream on its last events) and adds the tokens at the model's prices to what
-the owner spent today. Output tokens include reasoning. An answer that named
-no usage, was cut short before it could (Stop, a dropped connection) or
-arrived in a content encoding the relay did not ask for is charged by
-estimate: the request's text as input tokens (one per four bytes, and a fixed
-1,500 for each embedded image or file) at the input price, and nothing for
-output. The usage table counts those requests separately. A request the provider did not serve (unreachable, or answered
+the owner spent today. The formula and its rounding (half up to a millionth
+of a dollar per request) are the inference gateway's own, and so are the cases
+it is tested with. Output tokens include reasoning. An answer that named no
+usage, was cut short before it could (Stop, a dropped connection) or arrived
+in a content encoding the relay did not ask for is charged by estimate, as
+the gateway bills a stream its client closed: the request's text as input,
+and the text the answer had produced as output, at one token per four bytes;
+an image, an audio clip or a video in the request counts as 85, 200 or 1,000
+tokens whatever its size. The usage table counts those requests separately. A request the provider did not serve (unreachable, or answered
 with an error) costs nothing, and neither do listing models and counting
 tokens.
 
@@ -4546,9 +4549,14 @@ Things to know when operating it:
   each answer that was cut is charged by estimate. Turns on owners' own
   connections do not pass through it.
 - **A cost that could not be written.** If the database is away when an
-  answer ends, the answer is still relayed, the relay logs
-  `agent_model_relay_charge_failed` with the amount, and that request is
-  missing from the owner's spending.
+  answer ends, the answer is still relayed and its cost is kept: it counts
+  against the owner's budget and is written again after 1, 2, 5, 10, 30, 60,
+  120, 180 and 240 seconds (`agent_model_relay_charge_retry`, then
+  `agent_model_relay_charged_late`). If none of those lands, the relay logs
+  `agent_model_relay_charge_lost` with the amount. A write whose connection
+  broke after the statement was sent may have landed and is not written
+  again: `agent_model_relay_charge_unknown`, with the amount. A relay process
+  that stops tries each cost it still keeps once more first.
 - **A refused key.** If the provider answers `401` to the deployment's key,
   the relay answers `502` to the agent, logs
   `agent_model_relay_key_refused` and the admin page shows since when. It

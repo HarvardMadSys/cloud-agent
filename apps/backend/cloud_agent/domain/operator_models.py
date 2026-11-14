@@ -53,19 +53,10 @@ DEFAULT_USER_CONCURRENCY = 4
 
 #: Money is kept in whole millionths of a US dollar, and a price in those per
 #: million tokens, so that a cost is integer arithmetic: 2_800_000 is $2.80
-#: per million tokens, and a request's cost is rounded up to the next millionth.
+#: per million tokens, and a request's cost is rounded half up to the nearest
+#: millionth, as the gateway's cost counters round each request.
 MICROUSD_PER_USD = 1_000_000
 TOKENS_PER_PRICE = 1_000_000
-#: Bytes of a request's text taken as one input token when its answer named no
-#: usage, and when reserving for a request still in flight.
-BYTES_PER_ESTIMATED_TOKEN = 4
-#: What a file embedded in a request (an image, a document) is taken to be in
-#: input tokens, whatever its size: its bytes are not text, and a screenshot
-#: of a few megabytes is on the order of a thousand tokens to a model.
-ESTIMATED_FILE_TOKENS = 1500
-#: A string at least this long with no whitespace in it is an embedded file
-#: in base64, not text.
-_EMBEDDED_MIN_CHARS = 4096
 
 _HEADER_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,62}")
 #: Headers the relay writes, strips or passes on from the client; an owner tag
@@ -129,12 +120,14 @@ def _price(value: Any) -> int | None:
 
 
 def request_cost(prices: ModelPrices, usage: TokenUsage) -> int:
-    """What a request cost, in micro-dollars, rounded up.
+    """What a request cost, in micro-dollars, rounded half up.
 
     ``usage.prompt`` counts every input token. Tokens read from or written to
     the provider's cache are taken out of it and charged at their own price
     only where the model has one; otherwise they stay in it, at the input
-    price.
+    price. The gateway's formula (``serving.storage.utils.calculate_cost``)
+    and its rounding (``serving.spend_ledger.counted_amount``), in integers:
+    the tests carry its own cases.
     """
     plain = usage.prompt
     read_price, write_price = prices.cache_read or 0, prices.cache_write or 0
@@ -148,42 +141,7 @@ def request_cost(prices: ModelPrices, usage: TokenUsage) -> int:
         + usage.cache_read * read_price
         + usage.cache_write * write_price
     )
-    return -(-total // TOKENS_PER_PRICE)
-
-
-def estimated_prompt_tokens(document: Any) -> int:
-    """The input tokens a request is taken to be, from its decoded JSON body.
-
-    The text in it, keys and string values alike, at one token per four
-    bytes; and a fixed number for each embedded file. Counting a body's raw
-    bytes would take a conversation's screenshots for megabytes of text. It
-    is an estimate for when the provider's own count is not to be had, not a
-    tokenizer: it knows nothing of a model's vocabulary or of what the
-    provider will serve from its cache.
-    """
-    text = files = 0
-    pending = [document]
-    while pending:
-        node = pending.pop()
-        if isinstance(node, str):
-            if _embedded_file(node):
-                files += 1
-            else:
-                text += len(node.encode("utf-8", "surrogatepass"))
-        elif isinstance(node, dict):
-            for key, value in node.items():
-                text += len(str(key))
-                pending.append(value)
-        elif isinstance(node, list):
-            pending.extend(node)
-    return -(-text // BYTES_PER_ESTIMATED_TOKEN) + files * ESTIMATED_FILE_TOKENS
-
-
-def _embedded_file(value: str) -> bool:
-    """Whether a string in a request is a file's bytes rather than text."""
-    if value.startswith("data:"):
-        return True
-    return len(value) >= _EMBEDDED_MIN_CHARS and not any(ch in value for ch in " \n\t")
+    return (total + TOKENS_PER_PRICE // 2) // TOKENS_PER_PRICE
 
 
 @dataclass(frozen=True)
@@ -338,11 +296,9 @@ def is_messages_path(raw_path: str) -> bool:
 
 
 __all__ = [
-    "BYTES_PER_ESTIMATED_TOKEN",
     "DEFAULT_USER_CONCURRENCY",
     "END_USER_TAG_CHARS",
     "END_USER_TAG_DOMAIN",
-    "ESTIMATED_FILE_TOKENS",
     "MICROUSD_PER_USD",
     "NOT_OFFERED",
     "OPERATOR_CONNECTION_KEY_DOMAIN",
@@ -356,7 +312,6 @@ __all__ = [
     "effective_allowance",
     "effective_budget",
     "end_user_tag",
-    "estimated_prompt_tokens",
     "is_messages_path",
     "model_prices",
     "next_reset",

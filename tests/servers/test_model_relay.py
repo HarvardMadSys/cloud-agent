@@ -18,13 +18,9 @@ from cloud_agent.api import model_relay
 from cloud_agent.api.deps import get_storage
 from cloud_agent.application.model_connection_stream import CheckStop
 from cloud_agent.application.model_connections import operator_connection_cipher
-from cloud_agent.domain.operator_models import (
-    ESTIMATED_FILE_TOKENS,
-    Allowance,
-    ModelPrices,
-    end_user_tag,
-    estimated_prompt_tokens,
-)
+from cloud_agent.domain.model_usage import IMAGE_TOKEN_ESTIMATE, estimated_prompt_tokens
+from cloud_agent.domain.operator_models import Allowance, ModelPrices, end_user_tag
+from cloud_agent.ports.operator_models import ChargeOutcomeUnknown
 from cloud_agent.tokens import (
     mint_residency_github_token,
     mint_residency_mcp_token,
@@ -67,7 +63,10 @@ class _Store:
         self.running = running
         self.budget, self.spent, self.offered, self.prices = budget, spent, offered, prices
         self.charges: list[dict[str, Any]] = []
-        self.charge_fails = False
+        #: The day each charge was written for.
+        self.days: list[Any] = []
+        #: What the next writes raise, one each, before they succeed.
+        self.write_failures: list[BaseException] = []
         self.key_refused: list[bool] = []
         self.global_concurrency: int | None = None
         self.bound_revision: int | None = 3
@@ -108,10 +107,11 @@ class _Store:
             "global_concurrency": self.global_concurrency,
         }
 
-    async def record_operator_request(self, *, connection_id, user_id, **charge):
+    async def record_operator_request(self, *, connection_id, user_id, day, **charge):
         assert (connection_id, user_id) == (_CONNECTION, "user_1")
-        if self.charge_fails:
-            raise RuntimeError("the database is away")
+        if self.write_failures:
+            raise self.write_failures.pop(0)
+        self.days.append(day)
         self.charges.append(charge)
         self.spent += charge["cost_microusd"]
 
@@ -134,10 +134,11 @@ def _charge(
     }
 
 
-def _estimate(body: bytes) -> dict[str, Any]:
+def _estimate(body: bytes, *, output: int = 0) -> dict[str, Any]:
     """What a request with this body is charged when its answer named no usage."""
     tokens = estimated_prompt_tokens(json.loads(body))
-    return _charge(-(-tokens * _PRICES.input // 1_000_000), prompt=tokens, output=0, estimated=True)
+    cost = (tokens * _PRICES.input + output * _PRICES.output + 500_000) // 1_000_000
+    return _charge(cost, prompt=tokens, output=output, estimated=True)
 
 
 class _Provider:
@@ -189,6 +190,7 @@ def _app(
     *,
     slots: model_relay.Slots | None = None,
     reserved: model_relay.Reserved | None = None,
+    pending: model_relay.PendingCharges | None = None,
     guard: Any = None,
 ) -> FastAPI:
     app = FastAPI()
@@ -199,6 +201,8 @@ def _app(
     app.dependency_overrides[model_relay.get_slots] = lambda: held
     kept = reserved or model_relay.Reserved()
     app.dependency_overrides[model_relay.get_reserved] = lambda: kept
+    later = pending or model_relay.PendingCharges(kept, delays=(0.0,))
+    app.dependency_overrides[model_relay.get_pending] = lambda: later
 
     async def allowed(_base_url: str) -> None:
         return None
@@ -216,13 +220,14 @@ async def _send(
     bearer: str | None = "",
     slots: model_relay.Slots | None = None,
     reserved: model_relay.Reserved | None = None,
+    pending: model_relay.PendingCharges | None = None,
     guard: Any = None,
     upstream: httpx.AsyncClient | None = None,
     **kwargs: Any,
 ) -> httpx.Response:
     """One request to the relay; ``upstream`` is a client several requests share."""
     client = upstream or _upstream(provider.handle)
-    app = _app(store, client, slots=slots, reserved=reserved, guard=guard)
+    app = _app(store, client, slots=slots, reserved=reserved, pending=pending, guard=guard)
     headers = dict(kwargs.pop("headers", {}))
     if bearer is not None:
         headers.setdefault("Authorization", f"Bearer {bearer or _placeholder()}")
@@ -769,9 +774,9 @@ async def test_a_screenshot_in_a_request_is_not_estimated_as_megabytes_of_text()
     response = await _send(store, provider, json=body)
     assert response.status_code == 200
     [charge] = store.charges
-    # About the fixed size of one embedded file, not half a million tokens.
-    assert ESTIMATED_FILE_TOKENS <= charge["input_tokens"] < ESTIMATED_FILE_TOKENS + 50
-    assert charge["cost_microusd"] < 4_000
+    # The gateway's flat amount for an image, not half a million tokens of text.
+    assert IMAGE_TOKEN_ESTIMATE <= charge["input_tokens"] < IMAGE_TOKEN_ESTIMATE + 50
+    assert charge["cost_microusd"] < 300
 
 
 async def test_an_answer_the_provider_encoded_unasked_is_charged_by_estimate() -> None:
@@ -868,15 +873,97 @@ async def test_a_failure_after_the_provider_had_the_request_is_charged_by_estima
     assert _slots_held(slots) == 0 and reserved.held(_BUDGET) == 0
 
 
-async def test_a_cost_that_cannot_be_written_does_not_fail_the_answer(caplog) -> None:
+def _events(records: list[logging.LogRecord], event: str) -> list[logging.LogRecord]:
+    return [record for record in records if record.getMessage() == event]
+
+
+async def test_a_cost_that_could_not_be_written_is_written_later(caplog) -> None:
+    """The answer is not failed and the cost is not let go: it is counted until it lands."""
     store, provider, reserved = _Store(), _Provider(), model_relay.Reserved()
-    store.charge_fails = True
-    with caplog.at_level(logging.ERROR, logger="cloud_agent.model_relay"):
-        response = await _send(store, provider, reserved=reserved)
-    assert response.status_code == 200 and response.json() == _ANSWER
-    [record] = [r for r in caplog.records if r.getMessage() == "agent_model_relay_charge_failed"]
-    assert (record.user_id, record.model, record.cost_microusd) == ("user_1", "model-1", _COST)
+    pending = model_relay.PendingCharges(reserved, delays=(3600.0,))
+    store.write_failures = [OSError("the database is away")]
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        response = await _send(store, provider, reserved=reserved, pending=pending)
+        assert response.status_code == 200 and response.json() == _ANSWER
+        # Not written yet, and counted against the owner's budget meanwhile.
+        assert store.charges == [] and pending.count == 1
+        assert reserved.held(_BUDGET) == _COST
+        [retry] = _events(caplog.records, "agent_model_relay_charge_retry")
+        assert (retry.user_id, retry.model, retry.cost_microusd) == ("user_1", "model-1", _COST)
+
+        # A process that stops makes one last try first.
+        await pending.close()
+    assert store.charges == [_charge(_COST, prompt=1000, output=100)]
+    assert store.days == [datetime.now(UTC).date()]
+    assert reserved.held(_BUDGET) == 0 and pending.count == 0
+    [late] = _events(caplog.records, "agent_model_relay_charged_late")
+    assert late.cost_microusd == _COST
+
+
+async def test_a_charge_waiting_to_be_written_holds_back_the_owners_next_request() -> None:
+    store = _Store(budget=_COST)
+    reserved = model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(3600.0,))
+    store.write_failures = [OSError("the database is away")]
+    first = await _send(store, _Provider(), reserved=reserved, pending=pending)
+    assert first.status_code == 200 and store.spent == 0
+    # What is left of the budget is spoken for until that charge is written.
+    second = await _send(store, _Provider(), reserved=reserved, pending=pending)
+    assert second.status_code == 429
+    assert second.json()["error"]["code"] == "budget_reserved"
+    await pending.close()
+    assert store.spent == _COST
+
+
+async def test_a_charge_is_tried_again_until_it_lands(caplog) -> None:
+    store, reserved = _Store(), model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(0.0, 0.0, 0.0))
+    store.write_failures = [OSError("away"), ConnectionRefusedError("still away")]
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        await _send(store, _Provider(), reserved=reserved, pending=pending)
+        for _ in range(50):
+            if pending.count == 0:
+                break
+            await asyncio.sleep(0)
+    assert store.charges == [_charge(_COST, prompt=1000, output=100)]
+    assert len(_events(caplog.records, "agent_model_relay_charge_retry")) == 2
     assert reserved.held(_BUDGET) == 0
+
+
+async def test_a_charge_whose_tries_run_out_is_reported_with_its_amount(caplog) -> None:
+    store, reserved = _Store(), model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(0.0, 0.0))
+    store.write_failures = [OSError("away")] * 3
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        await _send(store, _Provider(), reserved=reserved, pending=pending)
+        for _ in range(50):
+            if pending.count == 0:
+                break
+            await asyncio.sleep(0)
+    assert store.charges == []
+    [lost] = _events(caplog.records, "agent_model_relay_charge_lost")
+    assert (lost.levelno, lost.user_id, lost.cost_microusd) == (logging.ERROR, "user_1", _COST)
+    # Given up, it is no longer held against the budget.
+    assert reserved.held(_BUDGET) == 0
+
+
+async def test_a_charge_whose_outcome_is_unknown_is_reported_not_written_twice(caplog) -> None:
+    store, reserved = _Store(), model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(0.0,))
+    store.write_failures = [ChargeOutcomeUnknown("connection lost after sending")]
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        response = await _send(store, _Provider(), reserved=reserved, pending=pending)
+    assert response.status_code == 200
+    assert pending.count == 0 and store.charges == [] and store.write_failures == []
+    [unknown] = _events(caplog.records, "agent_model_relay_charge_unknown")
+    assert (unknown.levelno, unknown.cost_microusd) == (logging.ERROR, _COST)
+    assert reserved.held(_BUDGET) == 0
+
+
+async def test_closing_with_nothing_waiting_returns_at_once() -> None:
+    pending = model_relay.PendingCharges(model_relay.Reserved())
+    await asyncio.wait_for(pending.close(), 1)
+    assert pending.count == 0
 
 
 async def test_a_base_url_that_stopped_resolving_publicly_is_never_dialled() -> None:
@@ -1090,6 +1177,31 @@ async def test_a_caller_that_leaves_mid_answer_closes_the_providers_stream(spec_
     assert _slots_held(slots) == 0 and reserved.held(_BUDGET) == 0
     # The answer never got as far as its usage: charged by estimate.
     assert store.charges == [_estimate(_Caller.BODY)]
+
+
+async def test_a_chat_stream_cut_off_is_charged_the_output_it_had_produced() -> None:
+    """As the gateway bills a stream its client closed: the prompt, and what was produced."""
+    store, reserved = _Store(), model_relay.Reserved()
+    produced = _event_stream({"choices": [{"delta": {"content": "x" * 400}}]})
+
+    class _Begun(_OpenStream):
+        async def __aiter__(self):
+            yield produced
+            await self.go.wait()
+
+    stream = _Begun()
+
+    async def streaming(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
+
+    async with _upstream(streaming) as upstream:
+        caller = _Caller(_app(store, upstream, reserved=reserved))
+        await asyncio.wait_for(caller.heard.wait(), 5)
+        caller.left.set()
+        await caller.ended()
+    assert stream.closed and reserved.held(_BUDGET) == 0
+    # 400 bytes of answer at four a token.
+    assert store.charges == [_estimate(_Caller.BODY, output=100)]
 
 
 async def test_an_answer_cut_short_is_charged_what_it_had_named_by_then() -> None:

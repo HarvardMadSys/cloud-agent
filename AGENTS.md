@@ -436,8 +436,10 @@ requirement, and rules 4 and 5 remain permanent service boundaries.
   connection, or the account's own amount; zero withholds it), and each model
   has prices and is open to every owner or to named accounts only. A request
   is charged when its answer ends: the tokens the answer said it used, at its
-  model's prices, or the request's text as input tokens when the answer named
-  none or was cut short. The budget is checked on every request and again
+  model's prices, with the inference gateway's formula and rounding; or, when
+  the answer named none or was cut short, an estimate of its input and of the
+  output it had produced. A cost that could not be written is kept, counted
+  against the budget, and written again. The budget is checked on every request and again
   when a turn is admitted and claimed; requests in flight reserve their
   estimate of it, and two caps limit how many are in flight. All three are
   kept per relay process. The cost is the relay's arithmetic on the

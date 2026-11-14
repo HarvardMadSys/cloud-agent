@@ -514,7 +514,12 @@ def create_model_relay_app() -> FastAPI:
         # No reaper and no maintenance loops, as for the other relays.
         async with lifespan(app, background=False), model_relay.relay_client() as client:
             app.state.model_relay_http = client
-            yield
+            try:
+                yield
+            finally:
+                # While the database is still open: a charge not written yet
+                # gets one last try before the process goes.
+                await model_relay.close_pending()
 
     app = FastAPI(
         title="Cloud Agent — model relay",

@@ -16,6 +16,7 @@ from cloud_agent.domain.operator_models import (
     effective_budget,
     model_prices,
 )
+from cloud_agent.ports.operator_models import ChargeOutcomeUnknown
 from cloud_agent.storage._sql.accounts import local_access_ended
 from cloud_agent.storage._sql.fences import RESIDENCY_CALLER_FROM, live_residency_caller_sql
 from cloud_agent.storage._sql.rows import load_json
@@ -779,39 +780,55 @@ class PostgresOperatorModelRepository:
         cache_write_tokens: int,
         output_tokens: int,
         estimated: bool,
+        day: date | None = None,
     ) -> None:
-        """Add one served request, its tokens and its cost to the owner's use today.
+        """Add one served request, its tokens and its cost to the owner's use on ``day``.
 
         One statement, so requests of one owner on one model that end together
-        queue on their own row and none is lost.
+        queue on their own row and none is lost. A failure to get a
+        connection, or the server refusing the statement, wrote nothing and
+        raises as it is; a connection lost after the statement was sent
+        raises :class:`ChargeOutcomeUnknown`.
         """
         async with self._pool.acquire() as conn:
-            await conn.execute(
-                f"""
-                INSERT INTO agent_operator_model_usage AS u
-                    (operator_connection_id, user_id, model, day, requests, cost_microusd,
-                     input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
-                     estimated_requests)
-                VALUES ($1, $2, $3, {_TODAY}, 1, $4, $5, $6, $7, $8, $9)
-                ON CONFLICT (operator_connection_id, user_id, model, day) DO UPDATE
-                SET requests = u.requests + 1,
-                    cost_microusd = u.cost_microusd + EXCLUDED.cost_microusd,
-                    input_tokens = u.input_tokens + EXCLUDED.input_tokens,
-                    cache_read_tokens = u.cache_read_tokens + EXCLUDED.cache_read_tokens,
-                    cache_write_tokens = u.cache_write_tokens + EXCLUDED.cache_write_tokens,
-                    output_tokens = u.output_tokens + EXCLUDED.output_tokens,
-                    estimated_requests = u.estimated_requests + EXCLUDED.estimated_requests
-                """,
-                connection_id,
-                user_id,
-                model,
-                cost_microusd,
-                input_tokens,
-                cache_read_tokens,
-                cache_write_tokens,
-                output_tokens,
-                1 if estimated else 0,
-            )
+            try:
+                await conn.execute(
+                    f"""
+                    INSERT INTO agent_operator_model_usage AS u
+                        (operator_connection_id, user_id, model, day, requests, cost_microusd,
+                         input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
+                         estimated_requests)
+                    VALUES ($1, $2, $3, COALESCE($10::date, {_TODAY}), 1,
+                            $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (operator_connection_id, user_id, model, day) DO UPDATE
+                    SET requests = u.requests + 1,
+                        cost_microusd = u.cost_microusd + EXCLUDED.cost_microusd,
+                        input_tokens = u.input_tokens + EXCLUDED.input_tokens,
+                        cache_read_tokens = u.cache_read_tokens + EXCLUDED.cache_read_tokens,
+                        cache_write_tokens = u.cache_write_tokens + EXCLUDED.cache_write_tokens,
+                        output_tokens = u.output_tokens + EXCLUDED.output_tokens,
+                        estimated_requests = u.estimated_requests + EXCLUDED.estimated_requests
+                    """,
+                    connection_id,
+                    user_id,
+                    model,
+                    cost_microusd,
+                    input_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                    output_tokens,
+                    1 if estimated else 0,
+                    day,
+                )
+            except (asyncpg.PostgresConnectionError, asyncpg.OperatorInterventionError) as exc:
+                # The connection broke, or the server stopped it, with the
+                # statement sent: it may have been counted.
+                raise ChargeOutcomeUnknown(str(exc)) from exc
+            except asyncpg.PostgresError:
+                # The server refused the statement: nothing was written.
+                raise
+            except Exception as exc:
+                raise ChargeOutcomeUnknown(str(exc)) from exc
 
 
 async def _user_rows(conn: Any, connection_id: str, ids: list[str]) -> list[dict[str, Any]]:

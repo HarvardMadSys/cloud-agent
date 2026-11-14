@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 
 from cloud_agent.domain.model_connections import ModelConnectionInvalid
-from cloud_agent.domain.model_usage import CHAT, MESSAGES, RESPONSES, TokenUsage
+from cloud_agent.domain.model_usage import CHAT, MESSAGES, RESPONSES, TokenUsage, UsageReader
 from cloud_agent.domain.operator_models import (
-    ESTIMATED_FILE_TOKENS,
     Allowance,
     ModelPrices,
     clean_default_model,
@@ -17,7 +17,6 @@ from cloud_agent.domain.operator_models import (
     effective_allowance,
     effective_budget,
     end_user_tag,
-    estimated_prompt_tokens,
     model_prices,
     next_reset,
     relay_route,
@@ -107,7 +106,7 @@ _PRICES = ModelPrices(input=2_800_000, output=8_800_000, cache_read=800_000)
         # Tokens written to the cache have no price of their own here: they
         # stay in the prompt, at the input price.
         (TokenUsage(prompt=1_000, cache_write=1_000), 2_800),
-        # A cost is rounded up to the next millionth of a dollar.
+        # A cost is rounded half up to the nearest millionth of a dollar.
         (TokenUsage(prompt=1), 3),
         (TokenUsage(output=1), 9),
         # A cache count larger than the prompt it is part of charges no negative input.
@@ -127,41 +126,192 @@ def test_cache_tokens_with_a_price_of_their_own_are_charged_at_it() -> None:
     assert request_cost(ModelPrices(input=1_000_000, output=0), usage) == 1_000_000
 
 
-def test_a_requests_text_is_taken_as_one_token_per_four_bytes() -> None:
-    assert estimated_prompt_tokens(None) == 0
-    assert estimated_prompt_tokens({}) == 0
-    assert estimated_prompt_tokens("abcd") == 1
-    assert estimated_prompt_tokens("abcde") == 2
-    # Keys are text the model reads too, as a tool's schema is; numbers are not counted.
-    assert estimated_prompt_tokens({"abcd": "efgh", "n": 123456789}) == 3
-    body = {
-        "model": "m",
-        "messages": [{"role": "user", "content": [{"type": "text", "text": "x" * 4000}]}],
-    }
-    assert 1000 < estimated_prompt_tokens(body) < 1020
-    # Bytes, not characters: text outside ASCII takes more of them.
-    assert estimated_prompt_tokens("\u6a21\u578b" * 2) == 3
+def test_a_cost_is_rounded_half_up_as_the_gateway_rounds_each_request() -> None:
+    # $1 per million tokens: a token is a millionth of a millionth of a dollar.
+    prices = ModelPrices(input=1, output=0)
+    assert request_cost(prices, TokenUsage(prompt=499_999)) == 0
+    assert request_cost(prices, TokenUsage(prompt=500_000)) == 1
+    assert request_cost(prices, TokenUsage(prompt=1_499_999)) == 1
+    assert request_cost(prices, TokenUsage(prompt=1_500_000)) == 2
 
 
-def test_an_embedded_file_counts_as_a_fixed_number_of_tokens_whatever_its_size() -> None:
-    megabytes = "A" * 3_000_000
-    assert estimated_prompt_tokens(megabytes) == ESTIMATED_FILE_TOKENS
-    # The shapes the three APIs embed a screenshot in.
-    for image in (
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + megabytes}},
-        {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
+def _usd(price: str) -> int:
+    """A price as the gateway's catalog writes it, in micro-dollars per million tokens."""
+    whole, _, fraction = price.partition(".")
+    return int(whole) * 1_000_000 + int((fraction + "000000")[:6])
+
+
+def _catalog(pricing: dict[str, str]) -> ModelPrices:
+    """A gateway catalog's ``pricing``, where a cache price of 0 means the input price."""
+    return ModelPrices(
+        input=_usd(pricing["prompt"]),
+        output=_usd(pricing["completion"]),
+        cache_read=_usd(pricing.get("input_cache_reads", "0")) or None,
+        cache_write=_usd(pricing.get("input_cache_writes", "0")) or None,
+    )
+
+
+#: The gateway's own cost cases (hybridInference ``tests/unit/storage/test_cost_calculation.py``):
+#: an answer's usage record, the model's catalog pricing, and what the gateway
+#: counts, as it stores it, in micro-dollars.
+_GATEWAY_CASES = [
+    pytest.param(
+        CHAT,
+        {"prompt_tokens": 1000, "completion_tokens": 500},
+        {"prompt": "0.15", "completion": "1.25"},
+        775,
+        id="basic",
+    ),
+    pytest.param(
+        CHAT,
         {
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": megabytes},
+            "prompt_tokens": 6000,
+            "completion_tokens": 500,
+            "reasoning_tokens": 200,
+            "total_tokens": 6700,
+            "cache_read_tokens": 5000,
         },
-    ):
-        assert ESTIMATED_FILE_TOKENS <= estimated_prompt_tokens(image) < ESTIMATED_FILE_TOKENS + 30
-    two = {"content": [megabytes, megabytes, {"type": "text", "text": "abcd"}]}
-    # 23 bytes of keys and text beside the two files.
-    assert estimated_prompt_tokens(two) == 2 * ESTIMATED_FILE_TOKENS + 6
-    # Long text is still text: it has whitespace in it, as source code and prose do.
-    prose = "word " * 2000
-    assert estimated_prompt_tokens(prose) == 2500
+        {"prompt": "0.28", "completion": "0.42", "input_cache_reads": "0.028"},
+        714,
+        id="cache-and-reasoning-on-top",
+    ),
+    pytest.param(
+        CHAT,
+        {
+            "prompt_tokens": 6000,
+            "completion_tokens": 700,
+            "reasoning_tokens": 200,
+            "total_tokens": 6700,
+            "cache_read_tokens": 5000,
+        },
+        {"prompt": "0.28", "completion": "0.42", "input_cache_reads": "0.028"},
+        714,
+        id="reasoning-included-is-not-billed-twice",
+    ),
+    pytest.param(
+        CHAT,
+        {"prompt_tokens": 1000, "completion_tokens": 100, "reasoning_tokens": 500},
+        {"prompt": "0.5", "completion": "2.0"},
+        1700,
+        id="reasoning-without-a-total",
+    ),
+    pytest.param(
+        CHAT,
+        {
+            "prompt_tokens": 10000,
+            "completion_tokens": 0,
+            "cache_read_tokens": 8000,
+            "cache_write_tokens": 0,
+        },
+        {
+            "prompt": "3.0",
+            "completion": "15.0",
+            "input_cache_reads": "0.30",
+            "input_cache_writes": "3.75",
+        },
+        8400,
+        id="cache-subtracted-from-prompt",
+    ),
+    pytest.param(
+        CHAT,
+        {"prompt_tokens": 100, "completion_tokens": 0, "cache_read_tokens": 500},
+        {"prompt": "3.0", "completion": "15.0", "input_cache_reads": "0.30"},
+        150,
+        id="cache-larger-than-prompt-clamps",
+    ),
+    pytest.param(
+        CHAT,
+        {
+            "prompt_tokens": 10000,
+            "completion_tokens": 0,
+            "cache_read_tokens": 8000,
+            "cache_write_tokens": 0,
+        },
+        {"prompt": "3.0", "completion": "15.0"},
+        30000,
+        id="no-cache-price-falls-back-to-prompt",
+    ),
+    pytest.param(
+        CHAT,
+        {"prompt_tokens": 1000, "completion_tokens": 500},
+        {"prompt": "0", "completion": "0"},
+        0,
+        id="free",
+    ),
+    pytest.param(
+        MESSAGES,
+        {
+            "input_tokens": 21,
+            "cache_read_input_tokens": 100,
+            "cache_creation_input_tokens": 50,
+            "output_tokens": 30,
+        },
+        {
+            "prompt": "3.0",
+            "completion": "15.0",
+            "input_cache_reads": "0.30",
+            "input_cache_writes": "3.75",
+        },
+        731,
+        id="anthropic-disjoint-input",
+    ),
+    pytest.param(
+        CHAT,
+        {
+            "prompt_tokens": 1000,
+            "prompt_cache_hit_tokens": 800,
+            "prompt_cache_miss_tokens": 200,
+            "completion_tokens": 50,
+        },
+        {"prompt": "0.27", "completion": "1.10", "input_cache_reads": "0.07"},
+        165,
+        id="deepseek-cache-hits",
+    ),
+    pytest.param(
+        CHAT,
+        {
+            "prompt_tokens": 100_050,
+            "completion_tokens": 200,
+            "total_tokens": 100_250,
+            "cache_read_tokens": 100_000,
+            "cache_write_tokens": 0,
+        },
+        {
+            "prompt": "3.0",
+            "completion": "15.0",
+            "input_cache_reads": "0.30",
+            "input_cache_writes": "3.75",
+        },
+        33150,
+        id="messages-log-shape",
+    ),
+    # The record the gateway itself answers with (``Usage.to_dict``): every
+    # name it gives the cached tokens, and reasoning beside the counts.
+    pytest.param(
+        CHAT,
+        {
+            "prompt_tokens": 6000,
+            "completion_tokens": 700,
+            "total_tokens": 6700,
+            "reasoning_tokens": 200,
+            "cache_read_tokens": 5000,
+            "cached_tokens": 5000,
+            "prompt_tokens_details": {"cached_tokens": 5000},
+        },
+        {"prompt": "0.28", "completion": "0.42", "input_cache_reads": "0.028"},
+        714,
+        id="the-gateways-own-answer",
+    ),
+]
+
+
+@pytest.mark.parametrize(("api", "usage", "pricing", "cost"), _GATEWAY_CASES)
+def test_a_request_costs_what_the_gateway_would_count(api, usage, pricing, cost) -> None:
+    reader = UsageReader(api, content_type="application/json")
+    reader.feed(json.dumps({"usage": usage}).encode())
+    used = reader.usage()
+    assert used is not None and reader.complete
+    assert request_cost(_catalog(pricing), used) == cost
 
 
 def test_counts_start_over_at_the_next_utc_midnight() -> None:

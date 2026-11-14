@@ -8,12 +8,16 @@ import pytest
 
 from cloud_agent.domain import model_usage
 from cloud_agent.domain.model_usage import (
+    AUDIO_TOKEN_ESTIMATE,
     CHAT,
+    IMAGE_TOKEN_ESTIMATE,
     MESSAGES,
     RESPONSES,
+    VIDEO_TOKEN_ESTIMATE,
     TokenUsage,
     UsageReader,
     billable_output,
+    estimated_prompt_tokens,
 )
 
 _EVENTS = "text/event-stream; charset=utf-8"
@@ -303,3 +307,135 @@ def test_reading_never_fails_the_answer_it_reads(monkeypatch) -> None:
     reader.feed(_CHAT_STREAM)
     reader.feed(_CHAT_STREAM)
     assert reader.usage() is None and not reader.complete
+
+
+# -- estimates ----------------------------------------------------------------
+
+
+def test_a_requests_text_is_taken_as_one_token_per_four_bytes() -> None:
+    assert estimated_prompt_tokens(None) == 0
+    assert estimated_prompt_tokens({}) == 0
+    assert estimated_prompt_tokens("abcd") == 1
+    assert estimated_prompt_tokens("abcde") == 2
+    # Keys are text the model reads too, as a tool's schema is; numbers are not counted.
+    assert estimated_prompt_tokens({"abcd": "efgh", "n": 123456789}) == 3
+    body = {
+        "model": "m",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "x" * 4000}]}],
+    }
+    assert 1000 < estimated_prompt_tokens(body) < 1020
+    # Bytes, not characters: text outside ASCII takes more of them.
+    assert estimated_prompt_tokens("\u6a21\u578b" * 2) == 3
+    # Long text is still text: it has whitespace in it, as source code and prose do.
+    assert estimated_prompt_tokens("word " * 2000) == 2500
+
+
+def test_media_counts_as_the_gateways_flat_amount_whatever_its_size() -> None:
+    megabytes = "A" * 3_000_000
+    # The blocks the three APIs embed an image in, a clip of audio and a video.
+    for block, flat in (
+        ({"type": "image_url", "image_url": {"url": "data:image/png;base64," + megabytes}}, 85),
+        ({"type": "input_image", "image_url": "data:image/png;base64,AAAA"}, 85),
+        (
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": megabytes},
+            },
+            85,
+        ),
+        ({"type": "input_audio", "input_audio": {"data": megabytes, "format": "wav"}}, 200),
+        ({"type": "video_url", "video_url": {"url": "https://example.com/v.mp4"}}, 1000),
+    ):
+        assert estimated_prompt_tokens(block) == flat
+    assert (IMAGE_TOKEN_ESTIMATE, AUDIO_TOKEN_ESTIMATE, VIDEO_TOKEN_ESTIMATE) == (85, 200, 1000)
+    # A file in base64 outside a media block, as a document's source is, is taken as an image.
+    assert estimated_prompt_tokens(megabytes) == IMAGE_TOKEN_ESTIMATE
+    assert estimated_prompt_tokens("data:application/pdf;base64,JVBERi0x") == IMAGE_TOKEN_ESTIMATE
+    two = {"content": [megabytes, megabytes, {"type": "text", "text": "abcd"}]}
+    # 23 bytes of keys and text beside the two files.
+    assert estimated_prompt_tokens(two) == 2 * IMAGE_TOKEN_ESTIMATE + 6
+
+
+def test_a_schema_type_that_is_not_a_media_type_is_text() -> None:
+    schema = {"type": "object", "properties": {"kind": {"type": ["string", "null"]}}}
+    assert estimated_prompt_tokens(schema) > 0
+
+
+# -- what an answer is billed for --------------------------------------------
+
+
+def test_a_cut_off_chat_stream_is_billed_its_estimated_input_and_what_it_produced() -> None:
+    stream = _sse(
+        {"choices": [{"delta": {"role": "assistant", "content": "x" * 400}}]},
+        {"choices": [{"delta": {"reasoning_content": "y" * 200}}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "function": {"name": "read", "arguments": "z" * 96}}
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    reader = _read(CHAT, stream, content_type=_EVENTS, step=31)
+
+    # 400 + 200 + 4 + 96 bytes of output, at four bytes a token.
+    assert reader.produced_tokens == 175
+    assert reader.usage() is None
+    assert reader.billed(1234) == (TokenUsage(prompt=1234, output=175), True)
+
+
+def test_a_cut_off_responses_stream_is_billed_what_its_deltas_produced() -> None:
+    stream = _sse(
+        {"type": "response.output_text.delta", "delta": "a" * 40},
+        {"type": "response.reasoning_summary_text.delta", "delta": "b" * 40},
+        {"type": "response.function_call_arguments.delta", "delta": "c" * 40},
+        # Audio arrives in base64, which is no measure of its tokens.
+        {"type": "response.audio.delta", "delta": "d" * 4000},
+    )
+
+    reader = _read(RESPONSES, stream, content_type=_EVENTS)
+
+    assert reader.produced_tokens == 30
+    assert reader.billed(10) == (TokenUsage(prompt=10, output=30), True)
+
+
+def test_a_cut_off_messages_stream_keeps_its_named_input_and_counts_what_it_produced() -> None:
+    stream = _sse(
+        _MESSAGE_START,
+        {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Edit"}},
+        {
+            "type": "content_block_delta",
+            "delta": {"type": "input_json_delta", "partial_json": "p" * 36},
+        },
+        {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "t" * 40}},
+        {
+            "type": "content_block_delta",
+            "delta": {"type": "signature_delta", "signature": "s" * 400},
+        },
+    )
+
+    reader = _read(MESSAGES, stream, content_type=_EVENTS)
+
+    # Its input as named; its output the more of the named 1 and the 4 + 36 + 40 bytes produced.
+    assert reader.billed(999) == (
+        TokenUsage(prompt=9530, cache_read=9000, cache_write=500, output=20),
+        True,
+    )
+
+
+def test_an_answer_read_to_its_end_is_billed_what_it_named() -> None:
+    reader = _read(CHAT, _CHAT_STREAM, content_type=_EVENTS)
+
+    assert reader.produced_tokens > 0
+    assert reader.billed(1) == (TokenUsage(prompt=1200, cache_read=1000, output=300), False)
+
+
+def test_a_plain_answer_cut_off_is_billed_its_estimated_input_alone() -> None:
+    reader = _read(CHAT, b'{"choices": [{"message": {"content": "Hel', content_type=_JSON)
+
+    assert reader.billed(50) == (TokenUsage(prompt=50, output=0), True)

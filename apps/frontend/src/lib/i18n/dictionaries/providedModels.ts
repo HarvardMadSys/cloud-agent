@@ -153,7 +153,7 @@ export const providedModelsEn = {
   'adminModels.usage.estimated': '{count} estimated',
   'adminModels.usage.cacheWritten': '{count} written to cache',
   'adminModels.usage.estimatedNote':
-    'Estimated: the provider’s answer named no usage, or was cut short before it could, so the request was charged an estimate of its input and nothing for its output.',
+    'Estimated: the provider’s answer named no usage, or was cut short before it could, so the request was charged an estimate of its input and of the output it had produced.',
   'adminModels.usage.truncated':
     'More rows matched than are shown. Choose a shorter range to see the rest.',
   'adminModels.card.isDefault': 'Default for new users',
@@ -321,7 +321,7 @@ export const providedModelsZhCN: Record<keyof typeof providedModelsEn, string> =
   'adminModels.usage.estimated': '其中 {count} 次按估算',
   'adminModels.usage.cacheWritten': '写入缓存 {count}',
   'adminModels.usage.estimatedNote':
-    '按估算：服务商的应答没有给出用量，或在给出之前就中断了，这些请求只按估算的输入计费，输出不计。',
+    '按估算：服务商的应答没有给出用量，或在给出之前就中断了，这些请求按估算的输入和已经生成的输出计费。',
   'adminModels.usage.truncated': '匹配的行数超过了显示的数量。请缩短日期范围查看其余部分。',
   'adminModels.card.isDefault': '新用户的默认连接',
   'adminModels.card.defaultModel': '默认模型：{model}',

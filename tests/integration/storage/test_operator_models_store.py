@@ -429,6 +429,31 @@ async def test_spending_belongs_to_its_utc_day(db, models, store) -> None:  # no
     )
 
 
+async def test_a_charge_written_later_lands_on_the_day_its_answer_ended(models, store) -> None:  # noqa: F811
+    await _enabled(models)
+    today = datetime.now(UTC).date()
+    yesterday = today - timedelta(days=1)
+    await models.record_operator_request(
+        connection_id=_ID,
+        user_id="user-1",
+        model="m1",
+        cost_microusd=700,
+        input_tokens=100,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        output_tokens=10,
+        estimated=False,
+        day=yesterday,
+    )
+    rows = await models.operator_usage(connection_id=_ID, start=yesterday, end=today, limit=10)
+    assert [(row["day"], row["cost_microusd"]) for row in rows] == [(yesterday, 700)]
+    # Yesterday's cost is not today's spending.
+    allowance = await store.model_connections.operator_allowance(
+        connection_id=_ID, user_id="user-1", model="m1"
+    )
+    assert allowance.spent_microusd == 0
+
+
 async def test_an_owner_is_shown_every_enabled_source_with_their_own_numbers(models) -> None:
     await _enabled(models, named_only=("m2",))
     await _create(models, connection_id="oconn_" + "b" * 32, name="Disabled")

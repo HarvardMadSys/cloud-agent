@@ -34,7 +34,7 @@ vi.mock('@/lib/api/adminOperatorModels', async (importOriginal) => ({
 }));
 
 const ESTIMATED =
-  'Estimated: the provider’s answer named no usage, or was cut short before it could, so the request was charged an estimate of its input and nothing for its output.';
+  'Estimated: the provider’s answer named no usage, or was cut short before it could, so the request was charged an estimate of its input and of the output it had produced.';
 
 /** One account's use of one model on one day: nothing estimated, nothing written to the cache. */
 function used(overrides: Partial<api.OperatorModelUsageRow> = {}): api.OperatorModelUsageRow {
