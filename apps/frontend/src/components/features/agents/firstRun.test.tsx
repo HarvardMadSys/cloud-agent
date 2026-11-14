@@ -12,7 +12,7 @@ import {
   type AgentJobApi,
 } from '@/lib/api/agents';
 
-import { providedSource } from '@/test/connectionConfig';
+import { providedSource, TEST_BUDGET } from '@/test/connectionConfig';
 
 import { MODEL_CONNECTIONS_CHANGED } from './composer/modelConnectionEvents';
 import { FirstRunProvider, firstRunSteps, useFirstRun } from './firstRun';
@@ -234,7 +234,7 @@ describe('FirstRunProvider', () => {
         model_connections_enabled: true,
         model_connection_required: false,
         model_connections: [],
-        provided_sources: [providedSource({ 'house-fast': [100, 0] })],
+        provided_sources: [providedSource(['house-fast'])],
       }),
     );
 
@@ -304,7 +304,7 @@ describe('firstRunSteps', () => {
   });
 
   it('puts the model step behind an owner with only a provided model', () => {
-    const provided = [providedSource({ 'house-fast': [100, 0] })];
+    const provided = [providedSource(['house-fast'])];
     expect(
       ids({ model_connections_enabled: true, model_connections: [], provided_sources: provided }),
     ).toEqual(['model (done)', 'connect', 'repository', 'task']);
@@ -320,7 +320,7 @@ describe('firstRunSteps', () => {
     expect(
       ids({
         model_connections_enabled: true,
-        provided_sources: [providedSource({ 'house-fast': [100, 100] })],
+        provided_sources: [providedSource(['house-fast'], { spent_today_microusd: TEST_BUDGET })],
       }),
     ).toEqual(['model (done)', 'connect', 'repository', 'task']);
   });
@@ -330,7 +330,7 @@ describe('firstRunSteps', () => {
       ids({
         model_connections_enabled: true,
         model_connection_required: true,
-        provided_sources: [providedSource({})],
+        provided_sources: [providedSource([])],
       }),
     ).toEqual(['model', 'connect', 'repository', 'task']);
   });

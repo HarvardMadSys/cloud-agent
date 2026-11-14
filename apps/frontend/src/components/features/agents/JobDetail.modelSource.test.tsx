@@ -246,7 +246,10 @@ describe('a conversation on a model the deployment provides', () => {
   const PROVIDED = 'oconn_0123456789abcdef0123456789abcdef';
   const RESETS = '2999-01-01T00:00:00Z';
 
-  function providing(used: number) {
+  const BUDGET = 5_000_000;
+
+  /** One provided source with $5.00 a day for its two models, of which `spent` is gone. */
+  function providing(spent: number) {
     vi.mocked(getAgentConfig).mockResolvedValue({
       ...CONFIG,
       provided_sources: [
@@ -257,10 +260,8 @@ describe('a conversation on a model the deployment provides', () => {
           default_model: 'shared',
           models: ['shared', 'house-fast'],
           model_runtimes: { shared: ['codex'], 'house-fast': ['codex'] },
-          allowances: {
-            shared: { daily_requests: 30, used_today: used },
-            'house-fast': { daily_requests: null, used_today: 0 },
-          },
+          daily_budget_microusd: BUDGET,
+          spent_today_microusd: spent,
           resets_at: RESETS,
         },
       ],
@@ -268,7 +269,7 @@ describe('a conversation on a model the deployment provides', () => {
   }
 
   it('names the provided source the turn ran on, and inherits it without naming it again', async () => {
-    providing(12);
+    providing(1_800_000);
     render(<JobDetail job={makeJob({ modelConnectionId: PROVIDED })} />);
     // `shared` is on three sources: the control says which one this chat runs on.
     await waitFor(() =>
@@ -278,8 +279,10 @@ describe('a conversation on a model the deployment provides', () => {
     );
     fireEvent.click(screen.getByLabelText('Model for this turn'));
     expect(
-      screen.getByRole('option', { name: 'shared · House models 18 left today' }),
+      screen.getByRole('option', { name: 'shared · House models $3.20 left today' }),
     ).toHaveAttribute('aria-selected', 'true');
+    // The source's other model draws on the same budget.
+    expect(screen.getByRole('option', { name: 'house-fast $3.20 left today' })).toBeVisible();
     fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
     await send('Go on');
     await waitFor(() => expect(sentBody()).toMatchObject({ prompt: 'Go on' }));
@@ -291,15 +294,15 @@ describe('a conversation on a model the deployment provides', () => {
     providing(0);
     render(<JobDetail job={makeJob()} />);
     await screen.findByLabelText('Model for this turn');
-    chooseModel('house-fast');
+    chooseModel('house-fast $5.00 left today');
     await send('Use the house model');
     await waitFor(() =>
       expect(sentBody()).toMatchObject({ model: 'house-fast', model_connection_id: PROVIDED }),
     );
   });
 
-  it('holds Send once today’s allowance is used up, and never falls back to a namesake', async () => {
-    providing(30);
+  it('holds Send once today’s budget is used up, and never falls back to a namesake', async () => {
+    providing(BUDGET);
     render(<JobDetail job={makeJob({ modelConnectionId: PROVIDED })} />);
     expect(
       await screen.findByText(/shared · House models \(used up today\), which is unavailable/),
@@ -308,11 +311,17 @@ describe('a conversation on a model the deployment provides', () => {
     expect(screen.getByRole('button', { name: /^(Send|Queue)$/ })).toBeDisabled();
     fireEvent.keyDown(screen.getByLabelText('Add a follow-up'), { key: 'Enter' });
     expect(submitThreadMessage).not.toHaveBeenCalled();
-    // The used-up model stays listed, disabled, with when it comes back.
+    // Every model of the used-up source stays listed, disabled, with when it comes back.
     fireEvent.click(screen.getByLabelText('Model for this turn'));
-    expect(screen.getByRole('option', { name: /resets at/ })).toHaveAttribute(
+    const spent = screen.getAllByRole('option', { name: /Today’s budget is used up · resets at/ });
+    expect(spent.map((option) => option.textContent?.split(' ')[0])).toEqual([
+      'shared',
+      'house-fast',
+    ]);
+    for (const option of spent) expect(option).toHaveAttribute('aria-disabled', 'true');
+    // The owner's own connections are theirs to pay for, and stay open.
+    expect(screen.getByRole('option', { name: 'shared · My provider' })).not.toHaveAttribute(
       'aria-disabled',
-      'true',
     );
   });
 });

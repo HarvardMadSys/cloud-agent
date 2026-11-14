@@ -1,5 +1,6 @@
 import type { AgentConfigApi } from '@/lib/api/agents';
 import type { Translator } from '@/lib/i18n/translate';
+import { formatUsdLeft } from '@/lib/money';
 import {
   findSource,
   isProvidedId,
@@ -14,7 +15,7 @@ import {
 // Each of the owner's connections is a separate source, and so is each
 // connection the deployment provides. The same model id may be offered by
 // several of them: `gpt-5` on two keys bills two accounts, and on a provided
-// source it spends the owner's daily allowance instead. So a choice is always
+// source it spends the owner's daily budget there instead. So a choice is always
 // the pair, and two choices are equal only when both halves are. Drafts,
 // requests and API state keep the two fields as they are; the encoded key
 // below exists only so a picker, which deals in strings, can tell two
@@ -66,9 +67,9 @@ export function storedChoice(model: unknown, connectionId: unknown): ModelChoice
  * Every model a runtime's picker lists: the provided sources' models first,
  * then each of the owner's enabled connections', where this runtime can run
  * them. A model is listed only once its own verification found a way for this
- * agent to use it. A provided model whose allowance is used up for today is
- * listed too, so its owner can see when it comes back; `offeredChoices` leaves
- * it out.
+ * agent to use it. A provided model whose source's budget is used up for today
+ * is listed too, so its owner can see when it comes back; `offeredChoices`
+ * leaves it out.
  */
 export function listedChoices(config: AgentConfigApi | null, runtime: string): ModelChoice[] {
   return [...providedSources(config), ...ownConnections(config)].flatMap((source) =>
@@ -78,7 +79,10 @@ export function listedChoices(config: AgentConfigApi | null, runtime: string): M
   );
 }
 
-/** Whether a choice is a provided model with nothing left of today's allowance. */
+/**
+ * Whether a choice is a provided model with nothing left of today's budget.
+ * The budget is its source's, so every model of that source is used up with it.
+ */
 export function isUsedUp(config: AgentConfigApi | null, choice: ModelChoice, now?: number) {
   return providedAllowance(config, choice.connectionId, choice.model, now)?.exhausted === true;
 }
@@ -95,7 +99,7 @@ export function offeredChoices(config: AgentConfigApi | null, runtime: string): 
 /**
  * Whether a choice may not run here: a loaded catalog that is being read again,
  * or one that does not offer its exact source, or offers it with nothing left
- * of today's allowance.
+ * of today's budget.
  *
  * Before any catalog has loaded nothing is known, and a turn inheriting its
  * source is left to the server, which checks that connection again on every
@@ -182,9 +186,10 @@ export interface ModelPickerProps {
 }
 
 /**
- * What a provided model adds to its option: how many requests are left today,
- * or, with none left, when the count starts over (the option is then disabled).
- * Nothing extra for an unlimited allowance or any other source.
+ * What a provided model adds to its option: what is left of today's budget
+ * on its source, or, with nothing left, when the budget starts over (the
+ * option is then disabled). The models of one source share its budget, so
+ * they all read the same. Nothing extra for any other source.
  */
 function allowanceNote(
   config: AgentConfigApi | null,
@@ -192,17 +197,18 @@ function allowanceNote(
   t: Translator,
 ): { note: string; disabled: boolean } | null {
   const allowance = providedAllowance(config, choice.connectionId, choice.model);
-  if (!allowance || allowance.remaining === null) return null;
+  if (!allowance) return null;
   if (allowance.exhausted) {
     return {
       note: t('modelSource.resets', { time: resetTime(allowance.resetsAt) }),
       disabled: true,
     };
   }
-  return { note: t('modelSource.remaining', { count: allowance.remaining }), disabled: false };
+  const amount = formatUsdLeft(allowance.remaining);
+  return { note: t('modelSource.remaining', { amount }), disabled: false };
 }
 
-/** The group headings, allowance notes and disabled options of a list of choices. */
+/** The group headings, budget notes and disabled options of a list of choices. */
 function pickerAnnotations(
   config: AgentConfigApi | null,
   listed: ModelChoice[],
@@ -238,7 +244,7 @@ function pickerAnnotations(
  * personal pick that can no longer run — so the control never shows one thing
  * while another runs. Provided models and the owner's own are grouped apart
  * when both are listed, and a provided model shows what is left of today's
- * allowance; one with nothing left stays in the list, disabled.
+ * budget; one with nothing left stays in the list, disabled.
  */
 export function modelPicker(
   config: AgentConfigApi | null,

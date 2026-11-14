@@ -111,12 +111,15 @@ export function invalidFields(cause: unknown): string[] | null {
 interface ErrorBody {
   models?: unknown;
   fields?: { field?: unknown }[];
+  budget?: unknown;
 }
 
 /**
  * `jsonOrThrow`, keeping what a refusal adds: each model's result from a
- * refused verification, and which fields an invalid request named (never
- * the values). The shared error parser keeps only the type and the message.
+ * refused verification, which fields an invalid request named (never the
+ * values), and what a provided connection that could not be enabled still
+ * lacks (the `models` without prices, and whether its `budget`). The shared
+ * error parser keeps only the type and the message.
  */
 export async function connectionJson<T>(resp: Response): Promise<T> {
   if (resp.ok) return resp.json() as Promise<T>;
@@ -139,6 +142,7 @@ export async function connectionJson<T>(resp: Response): Promise<T> {
       if (Array.isArray(error.fields)) {
         extra.fields = error.fields.map((item) => String(item?.field ?? ''));
       }
+      if (typeof error.budget === 'boolean') extra.budget = error.budget;
       cause.details = { ...(cause.details ?? {}), ...extra };
     }
     throw cause;

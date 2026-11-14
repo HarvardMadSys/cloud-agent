@@ -60,21 +60,13 @@ class ModelConnectionOption(BaseModel):
     model_efforts: dict[str, dict[str, ModelEffortOffer]] = Field(default_factory=dict)
 
 
-class ProvidedModelAllowance(BaseModel):
-    """One owner's allowance on one provided model, for the current UTC day."""
-
-    #: Requests the owner may send today; ``None`` is unlimited.
-    daily_requests: int | None = None
-    #: Requests the model relay has accepted from this owner today.
-    used_today: int = 0
-
-
 class ProvidedModelSource(BaseModel):
     """One connection the deployment provides, as the composer offers it to this owner.
 
     The same shape as an owner's own connection option, plus the owner's
-    allowances. Only the models this owner may use are listed: one whose
-    allowance is zero is absent, as if it were not provided.
+    budget for the current UTC day on its models together. Only the models
+    this owner may use are listed: one withheld from them is absent, as if it
+    were not provided.
     """
 
     id: str
@@ -86,9 +78,13 @@ class ProvidedModelSource(BaseModel):
     models: list[str]
     model_runtimes: dict[str, list[str]] = Field(default_factory=dict)
     model_efforts: dict[str, dict[str, ModelEffortOffer]] = Field(default_factory=dict)
-    #: Per listed model: this owner's allowance and today's use.
-    allowances: dict[str, ProvidedModelAllowance] = Field(default_factory=dict)
-    #: When today's counts start over: the next midnight, UTC.
+    #: What this owner may spend per UTC day on this source's models together,
+    #: in millionths of a US dollar.
+    daily_budget_microusd: int
+    #: What this owner's requests on this source have cost today, in millionths
+    #: of a US dollar: the tokens each used, at its model's prices.
+    spent_today_microusd: int = 0
+    #: When today's spending starts over: the next midnight, UTC.
     resets_at: datetime
 
 
@@ -152,8 +148,9 @@ class AgentConfigResponse(BaseModel):
         default_factory=list,
         description=(
             "Connections this deployment provides to every admitted owner, each with "
-            "this owner's daily request allowance per model. A model chosen from one "
-            "is submitted with the source's id as `model_connection_id`."
+            "this owner's daily budget on its models and what they spent of it today. "
+            "A model chosen from one is submitted with the source's id as "
+            "`model_connection_id`."
         ),
     )
     model_connections_enabled: bool = Field(

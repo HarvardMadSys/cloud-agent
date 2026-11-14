@@ -121,8 +121,9 @@ UNUSABLE_MESSAGES: dict[str, str] = {
         "model, or ask the deployment administrator."
     ),
     "allowance_exhausted": (
-        "You have used today's requests for this model on this deployment. The count "
-        "starts over at 00:00 UTC. Choose another model, or continue then."
+        "You have used today's budget for the models this deployment provides. It "
+        "starts over at 00:00 UTC. Choose a model from a connection of your own, or "
+        "continue then."
     ),
 }
 

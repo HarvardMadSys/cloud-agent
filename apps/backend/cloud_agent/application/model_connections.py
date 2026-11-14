@@ -164,7 +164,7 @@ async def resolve_turn_connection(
     for ``user_id`` is their allowance on ``model``.
 
     ``admit`` is for the moments a turn is accepted or handed to a host: there
-    a provided model whose allowance is used up for today refuses the turn. A
+    a provided model whose owner has used up today's budget refuses the turn. A
     turn already starting (its residency, a Fork) is only refused a model that
     is not offered to its owner at all.
     """

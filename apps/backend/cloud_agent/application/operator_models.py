@@ -2,7 +2,7 @@
 
 An administrator configures a *provided* connection: a provider's Base URL,
 the deployment's own key and the models it lists. Every admitted owner may run
-turns on it with no setup, within a daily request allowance per model. Turns
+turns on it with no setup, within a daily budget on its models together. Turns
 resolve it through :mod:`cloud_agent.application.model_connections`, like an
 owner's own connection; the model relay (:mod:`cloud_agent.api.model_relay`)
 is what holds the key. This module is the rest: what the composer is told, and
@@ -44,11 +44,12 @@ async def provided_sources(
 ) -> list[dict[str, Any]]:
     """Every provided connection as ``user_id``'s composer offers it.
 
-    Each enabled connection with the models this owner may use: one whose
-    allowance is zero, or has none set, is left out as if it were not
-    provided, and a connection left with no model is not listed at all. The
-    row is narrowed to those models, so the helpers that decide which agents
-    can run what answer for exactly what is offered.
+    Each enabled connection with the models this owner may use: one that has
+    no prices, or is not open to this owner, is left out as if it were not
+    provided, and a connection left with no model, or on which this owner has
+    no budget, is not listed at all. The row is narrowed to those models, so
+    the helpers that decide which agents can run what answer for exactly what
+    is offered.
     """
     sources: list[dict[str, Any]] = []
     for row in await operator_models.operator_sources_for_user(user_id=user_id):
@@ -69,13 +70,8 @@ async def provided_sources(
                 "enabled": True,
                 "model_runtimes": runtimes,
                 "model_efforts": model_efforts(narrowed),
-                "allowances": {
-                    model: {
-                        "daily_requests": allowances[model].limit,
-                        "used_today": allowances[model].used,
-                    }
-                    for model in offered
-                },
+                "daily_budget_microusd": int(row["budget_microusd"]),
+                "spent_today_microusd": int(row["spent_microusd"]),
                 "resets_at": next_reset(),
             }
         )
@@ -86,15 +82,13 @@ def provided_default(sources: list[dict[str, Any]]) -> tuple[str, str] | None:
     """``(model, connection_id)`` an owner with no history starts on, when there is one.
 
     The default connection's default model, while this owner may use it and
-    has requests left today.
+    has budget left today.
     """
     for source in sources:
         model = source.get("default_model")
         if not source.get("is_default") or not model:
             continue
-        allowance = source["allowances"][model]
-        limit = allowance["daily_requests"]
-        if limit is None or allowance["used_today"] < limit:
+        if source["spent_today_microusd"] < source["daily_budget_microusd"]:
             return str(model), str(source["id"])
     return None
 

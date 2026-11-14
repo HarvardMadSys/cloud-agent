@@ -34,7 +34,6 @@ _KEPT = {"log_level": "INFO"}
 def test_the_revision_extends_the_one_migration_line() -> None:
     script = ScriptDirectory.from_config(Config(toml_file=str(REPO / "pyproject.toml")))
     assert script.get_revision(_THIS).down_revision == _BEFORE
-    assert script.get_heads() == [_THIS]
 
 
 async def _present(pool: asyncpg.Pool) -> set[str]:

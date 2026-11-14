@@ -34,7 +34,7 @@ describe('ModelConnectionNotice', () => {
   });
 
   it('says nothing to an owner the deployment provides a model to', () => {
-    const provided = [providedSource({ 'house-fast': [100, 0] })];
+    const provided = [providedSource(['house-fast'])];
     const { container, rerender } = render(
       <ModelConnectionNotice
         config={config({ model_connection_required: false, provided_sources: provided })}
@@ -55,7 +55,7 @@ describe('ModelConnectionNotice', () => {
       <ModelConnectionNotice
         config={config({
           model_connection_required: true,
-          provided_sources: [providedSource({}, { name: 'House models' })],
+          provided_sources: [providedSource([], { name: 'House models' })],
         })}
       />,
     );

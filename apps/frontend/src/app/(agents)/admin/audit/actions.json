@@ -215,8 +215,33 @@
     "kind": "change"
   },
   {
+    "action": "agent.operator_model_connection.set_terms",
+    "category": "settings",
+    "kind": "change"
+  },
+  {
     "action": "agent.operator_model_connection.set_limit",
     "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_budget.set",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_budget.clear",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_access.set",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_access.clear",
+    "category": "accounts",
     "kind": "change"
   },
   {

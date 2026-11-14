@@ -8,16 +8,27 @@ import {
   deleteOperatorModelConnection,
   updateOperatorModelConnection,
   type OperatorModelConnection,
+  type OperatorTermsMissing,
 } from '@/lib/api/adminOperatorModels';
+import { formatUsd } from '@/lib/money';
 
 import { ProvidedModelAccounts } from './ProvidedModelAccounts';
-import { ProvidedModelLimits } from './ProvidedModelLimits';
+import { ProvidedModelTerms } from './ProvidedModelTerms';
 import { ProvidedModelUsage } from './ProvidedModelUsage';
-import { isAccessDenied, modelsWithoutLimit, providedFailure } from './providedModelsForm';
+import { isAccessDenied, missingTerms, notEnabledYet, providedFailure } from './providedModelsForm';
 
 const buttonClass = 'ui-button ui-button-secondary min-h-11';
 
 type Translate = ReturnType<typeof useT>;
+
+/** What each account may spend a day by default, or that nobody has chosen it yet. */
+function budgetFact(connection: OperatorModelConnection, t: Translate): string {
+  const budget = connection.user_daily_budget_microusd ?? null;
+  if (budget === null) return t('adminModels.card.budgetUnset');
+  const amount = formatUsd(budget, { precise: true });
+  // Zero is a choice too: only accounts given a budget of their own are offered it.
+  return t(budget === 0 ? 'adminModels.card.budgetNamed' : 'adminModels.card.budget', { amount });
+}
 
 /** The connection's settings beyond its models, one fact per line item. */
 function facts(connection: OperatorModelConnection, t: Translate): string[] {
@@ -27,6 +38,7 @@ function facts(connection: OperatorModelConnection, t: Translate): string[] {
     ...(connection.default_model
       ? [t('adminModels.card.defaultModel', { model: connection.default_model })]
       : []),
+    budgetFact(connection, t),
     t('adminModels.card.userConcurrency', { count: connection.user_concurrency }),
     ...(connection.end_user_header
       ? [t('adminModels.card.header', { header: connection.end_user_header })]
@@ -35,21 +47,43 @@ function facts(connection: OperatorModelConnection, t: Translate): string[] {
 }
 
 /**
- * Why a disabled connection cannot be enabled yet, or `''` when it can: a
- * model still has no default allowance, or model connections are switched off
- * for the whole deployment. An enabled connection can always be disabled.
+ * Why a disabled connection cannot be enabled yet, or `''` when it can: it
+ * has no daily budget, a model still has no prices (the sentence names what
+ * is missing), or model connections are switched off for the whole
+ * deployment. An enabled connection can always be disabled.
  */
 function enableBlocker(
   connection: OperatorModelConnection,
-  missing: string[],
+  missing: OperatorTermsMissing,
   featureOff: boolean,
   t: Translate,
 ): string {
   if (connection.enabled) return '';
-  if (missing.length > 0) {
-    return t('adminModels.card.enableBlocked', { models: missing.join(', ') });
-  }
-  return featureOff ? t('adminModels.card.enableFeatureOff') : '';
+  return notEnabledYet(missing, t) || (featureOff ? t('adminModels.card.enableFeatureOff') : '');
+}
+
+/**
+ * What an enabled connection does not offer after all: nothing to anyone
+ * while it has no daily budget, and to nobody a model that has no prices.
+ * Enabling is refused in that state, so this is a connection that was enabled
+ * before budgets and prices existed, or one a model was since added to.
+ */
+function IncompleteNotice({
+  connection,
+  missing,
+}: {
+  connection: OperatorModelConnection;
+  missing: OperatorTermsMissing;
+}) {
+  const t = useT();
+  const models = missing.models.join(', ');
+  if (!connection.enabled || (!missing.budget && !models)) return null;
+  return (
+    <div role="alert" className="mt-2 space-y-1 text-sm leading-6 text-status-warning">
+      {missing.budget ? <p>{t('adminModels.card.offersNothing')}</p> : null}
+      {models ? <p>{t('adminModels.card.modelsUnoffered', { models })}</p> : null}
+    </div>
+  );
 }
 
 /**
@@ -82,13 +116,14 @@ function Disclosure({ show, hide, children }: { show: string; hide: string; chil
 }
 
 /**
- * One provided connection: what it is, whether it is on, each model's
- * verification and default allowance, and, on request, the accounts that
- * differ from the defaults and the requests counted for it.
+ * One provided connection: what it is, whether it is on, what each account
+ * may spend on it a day, each model's verification and prices, and, on
+ * request, the accounts that differ from the defaults and what was used.
  *
- * It can be enabled only once every listed model has a default allowance, so
- * nothing is ever offered at a limit nobody chose. Disabling or deleting it
- * stops the agent processes running on it, for every account.
+ * It can be enabled only once it has a daily budget and every listed model
+ * has prices, so nothing is ever offered at a budget or a price nobody chose.
+ * Disabling or deleting it stops the agent processes running on it, for every
+ * account.
  */
 export function ProvidedConnectionCard({
   connection,
@@ -114,7 +149,7 @@ export function ProvidedConnectionCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirm, setConfirm] = useState<'delete' | 'disable' | null>(null);
-  const missing = modelsWithoutLimit(connection);
+  const missing = missingTerms(connection);
   // Why Enable is not offered yet, if it is not: said under the card's actions.
   const blockedBy = enableBlocker(connection, missing, featureOff, t);
 
@@ -187,6 +222,7 @@ export function ProvidedConnectionCard({
           {blockedBy}
         </p>
       ) : null}
+      <IncompleteNotice connection={connection} missing={missing} />
       {connection.key_refused_at ? (
         <p role="alert" className="mt-2 text-sm leading-6 text-status-warning">
           {t('adminModels.card.keyRefused', {
@@ -237,7 +273,7 @@ export function ProvidedConnectionCard({
         </p>
       ) : null}
       <ModelStatusList statuses={connection.model_status} />
-      <ProvidedModelLimits
+      <ProvidedModelTerms
         connection={connection}
         onChange={onChange}
         onAccessDenied={onAccessDenied}

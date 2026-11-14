@@ -78,7 +78,7 @@ export function useJobComposerSettings(job: AgentJob, inherited: InheritedModel)
   );
   // An explicitly selected source can also disappear while Settings is open.
   // Keep its identity, refuse every submit path, and never substitute a same-name model.
-  // A provided model used up for today comes back when its count starts over.
+  // A provided model used up for today comes back when its budget starts over.
   useAllowanceReset(config);
   const choiceUnavailable = isModelUnavailable(config, job.runtime, choice, refreshing);
 

@@ -149,7 +149,7 @@ def test_every_computed_action_is_known_and_declared() -> None:
     accounts = {f"agent.local_account.{name}" for name in ADMIN_ACTIONS}
     assert sorted(accounts - set(ACTIONS)) == []
     provided = _provided_model_actions()
-    assert len(provided) == 9, "admin_operator_models writes a different set of actions?"
+    assert len(provided) == 11, "admin_operator_models writes a different set of actions?"
     assert sorted(provided - set(ACTIONS)) == []
 
 
@@ -184,6 +184,11 @@ _DECLARED_AFTER_0114 = {
     "agent.operator_model_connection.set_limit",
     "agent.operator_model_user_limit.set",
     "agent.operator_model_user_limit.clear",
+    "agent.operator_model_connection.set_terms",
+    "agent.operator_model_user_budget.set",
+    "agent.operator_model_user_budget.clear",
+    "agent.operator_model_user_access.set",
+    "agent.operator_model_user_access.clear",
     "agent.local_account.provision_invite",
     "agent.local_account.provision_revoke",
 }

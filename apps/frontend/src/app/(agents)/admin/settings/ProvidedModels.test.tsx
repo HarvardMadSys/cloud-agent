@@ -9,8 +9,9 @@ import * as api from '@/lib/api/adminOperatorModels';
 
 import ProvidedModelsSettings from './ProvidedModels';
 import {
-  daily,
+  COMPLETE,
   PROVIDED_ID,
+  priced,
   providedConnection,
   providedList,
   refusal,
@@ -24,14 +25,16 @@ vi.mock('@/lib/api/adminOperatorModels', async (importOriginal) => ({
   createOperatorModelConnection: vi.fn(),
   updateOperatorModelConnection: vi.fn(),
   deleteOperatorModelConnection: vi.fn(),
-  setOperatorModelLimit: vi.fn(),
+  setOperatorModelTerms: vi.fn(),
   listOperatorModelUsers: vi.fn(),
-  setOperatorModelUserLimit: vi.fn(),
-  clearOperatorModelUserLimit: vi.fn(),
+  setOperatorModelUserBudget: vi.fn(),
+  clearOperatorModelUserBudget: vi.fn(),
+  setOperatorModelUserAccess: vi.fn(),
+  clearOperatorModelUserAccess: vi.fn(),
   getOperatorModelUsage: vi.fn(),
 }));
 
-const BOTH_SET = { 'house-fast': daily(1500), 'house-deep': daily(0) };
+const BUDGET = 'Daily budget per account (USD)';
 
 function section() {
   return screen.getByRole('region', { name: 'Models this deployment provides' });
@@ -85,7 +88,7 @@ describe('the list of provided connections', () => {
           default_model: 'house-fast',
           end_user_header: 'X-End-User',
           user_concurrency: 6,
-          limits: BOTH_SET,
+          ...COMPLETE,
         }),
         providedConnection({ id: 'oconn_ffffffffffffffffffffffffffffffff', name: 'Spare' }),
       ]),
@@ -96,18 +99,22 @@ describe('the list of provided connections', () => {
     expect(
       within(house)
         .getAllByRole('listitem')
-        .slice(0, 5)
+        .slice(0, 6)
         .map((item) => item.textContent),
     ).toEqual([
       'Enabled',
       'Default for new users',
       'Default model: house-fast',
+      'Daily budget per account: $5.00',
       'Up to 6 requests in flight per account',
       'End-user header: X-End-User',
     ]);
     // Each model's verification reads as on an owner's connection.
     expect(within(house).getAllByText('Works with Claude Code, Codex')).toHaveLength(2);
-    expect(within(await card('Spare')).getByText('Disabled')).toBeInTheDocument();
+    const spare = await card('Spare');
+    expect(within(spare).getByText('Disabled')).toBeInTheDocument();
+    // Nobody has chosen what an account may spend on it yet.
+    expect(within(spare).getByText('No daily budget chosen')).toBeInTheDocument();
     // The key is write-only: nothing on the page shows or hints at one.
     expect(section()).not.toHaveTextContent(/sk-/);
   });
@@ -140,7 +147,7 @@ describe('the list of provided connections', () => {
 
   it('says when model connections are switched off, and offers nothing the server would refuse', async () => {
     vi.mocked(api.listOperatorModelConnections).mockResolvedValue(
-      providedList([providedConnection({ limits: BOTH_SET })], { feature_enabled: false }),
+      providedList([providedConnection(COMPLETE)], { feature_enabled: false }),
     );
     render(<ProvidedModelsSettings />);
     expect(
@@ -149,7 +156,7 @@ describe('the list of provided connections', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add a provided connection' })).toBeDisabled();
-    // Every model has its allowance, and it still cannot be enabled.
+    // It has its budget and every model its prices, and it still cannot be enabled.
     const enable = within(await card()).getByRole('button', { name: 'Enable' });
     expect(enable).toBeDisabled();
     expect(enable).toHaveAccessibleDescription(
@@ -159,7 +166,7 @@ describe('the list of provided connections', () => {
 
   it('reads the server’s refusal for the feature being off as that, not as lost admin access', async () => {
     vi.mocked(api.listOperatorModelConnections).mockResolvedValue(
-      providedList([providedConnection({ limits: BOTH_SET })]),
+      providedList([providedConnection(COMPLETE)]),
     );
     // Switched off after this page was read: the server answers 403 for an enable.
     vi.mocked(api.updateOperatorModelConnection).mockRejectedValue(
@@ -229,6 +236,11 @@ describe('adding a provided connection', () => {
     expect(form).toHaveTextContent(/may bill/);
     // There is no provider list to load for a provided connection.
     expect(within(form).queryByRole('button', { name: /Load models/ })).toBeNull();
+    // The daily budget may wait: the hint says what it is, and that enabling needs one.
+    expect(within(form).getByLabelText(BUDGET)).toHaveValue('');
+    expect(within(form).getByLabelText(BUDGET)).toHaveAccessibleDescription(
+      'What each account may spend per UTC day on this connection’s models together. 0 offers the connection only to accounts given a budget of their own. The connection cannot be enabled until a budget is chosen.',
+    );
 
     fillNew();
     expect(optionNames(within(form).getByLabelText('Default model'))).toEqual([
@@ -261,12 +273,70 @@ describe('adding a provided connection', () => {
       user_concurrency: 6,
     });
 
+    // Left blank, the daily budget is not sent at all.
+    expect(vi.mocked(api.createOperatorModelConnection).mock.calls[0][0]).not.toHaveProperty(
+      'user_daily_budget_microusd',
+    );
+
     save.resolve(providedConnection({ default_model: 'house-deep', user_concurrency: 6 }));
     const saved = await card();
     expect(within(saved).getByText('Disabled')).toBeInTheDocument();
     expect(screen.queryByRole('form')).not.toBeInTheDocument();
     expect(api.updateOperatorModelConnection).not.toHaveBeenCalled();
     expect(section()).not.toHaveTextContent('sk-deployment-key');
+  });
+
+  it('sends a daily budget typed in dollars as micro-dollars', async () => {
+    vi.mocked(api.createOperatorModelConnection).mockResolvedValue(
+      providedConnection({ user_daily_budget_microusd: 2_800_000 }),
+    );
+    render(<ProvidedModelsSettings />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a provided connection' }));
+    fillNew();
+    type(BUDGET, ' 2.8 ');
+    fireEvent.click(screen.getByRole('button', { name: 'Verify and save' }));
+
+    expect(await within(await card()).findByText('Daily budget per account: $2.80')).toBeVisible();
+    expect(api.createOperatorModelConnection).toHaveBeenCalledExactlyOnceWith({
+      name: 'House models',
+      base_url: 'https://api.example.com/v1',
+      api_key: 'sk-deployment-key',
+      models: ['house-fast', 'house-deep'],
+      default_model: null,
+      end_user_header: null,
+      user_concurrency: 4,
+      user_daily_budget_microusd: 2_800_000,
+    });
+  });
+
+  it('will not send a daily budget that is not an amount of dollars', async () => {
+    render(<ProvidedModelsSettings />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a provided connection' }));
+    fillNew();
+    for (const amount of ['-5', 'plenty', '1.1234567', '1000000.01']) {
+      type(BUDGET, amount);
+      fireEvent.click(screen.getByRole('button', { name: 'Verify and save' }));
+      expect(screen.getByLabelText(BUDGET)).toBeInvalid();
+      expect(screen.getByLabelText(BUDGET)).toHaveAccessibleDescription(
+        /^Enter an amount in US dollars from 0 to \$1,000,000\.00, with at most six decimal places\./,
+      );
+    }
+    expect(api.createOperatorModelConnection).not.toHaveBeenCalled();
+    // Zero is an amount: it offers the connection only to accounts given their own budget.
+    vi.mocked(api.createOperatorModelConnection).mockResolvedValue(
+      providedConnection({ user_daily_budget_microusd: 0 }),
+    );
+    type(BUDGET, '0');
+    expect(screen.getByLabelText(BUDGET)).toBeValid();
+    fireEvent.click(screen.getByRole('button', { name: 'Verify and save' }));
+    expect(
+      await within(await card()).findByText(
+        'Daily budget per account: $0.00 (only accounts given their own)',
+      ),
+    ).toBeVisible();
+    expect(vi.mocked(api.createOperatorModelConnection).mock.calls[0][0]).toMatchObject({
+      user_daily_budget_microusd: 0,
+    });
   });
 
   it('makes it the default for new users with an edit, once it exists', async () => {
@@ -316,6 +386,7 @@ describe('adding a provided connection', () => {
     type('Base URL', 'http://api.example.com/v1');
     type(/^End-user header/, 'X End: User');
     type('Requests in flight per account', '0');
+    type(BUDGET, 'five');
     fireEvent.click(screen.getByRole('button', { name: 'Verify and save' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -327,6 +398,9 @@ describe('adding a provided connection', () => {
     expect(screen.getByLabelText(/^End-user header/)).toBeInvalid();
     expect(screen.getByLabelText('Requests in flight per account')).toHaveAccessibleDescription(
       /Enter a whole number from 1 to 64/,
+    );
+    expect(screen.getByLabelText(BUDGET)).toHaveAccessibleDescription(
+      /Enter an amount in US dollars/,
     );
     expect(api.createOperatorModelConnection).not.toHaveBeenCalled();
   });
@@ -364,7 +438,9 @@ describe('adding a provided connection', () => {
   it('marks the fields the server named, and says a taken name or a timeout plainly', async () => {
     vi.mocked(api.createOperatorModelConnection)
       .mockRejectedValueOnce(
-        refusal('invalid_model_connection', 'Check the fields.', 422, { fields: ['base_url'] }),
+        refusal('invalid_model_connection', 'Check the fields.', 422, {
+          fields: ['base_url', 'user_daily_budget_microusd'],
+        }),
       )
       .mockRejectedValueOnce(refusal('operator_model_connection_name_taken', 'Taken.', 409))
       .mockRejectedValueOnce(refusal('TIMEOUT_ERROR', 'HTTP 504', 504))
@@ -377,6 +453,7 @@ describe('adding a provided connection', () => {
     submit();
     expect(await screen.findByRole('alert')).toHaveTextContent('Check the highlighted fields');
     expect(screen.getByLabelText('Base URL')).toBeInvalid();
+    expect(screen.getByLabelText(BUDGET)).toBeInvalid();
     submit();
     expect(
       await screen.findByText('Another provided connection already has this name.'),
@@ -395,7 +472,7 @@ describe('editing a provided connection', () => {
   const saved = providedConnection({
     default_model: 'house-fast',
     end_user_header: 'X-End-User',
-    limits: BOTH_SET,
+    ...COMPLETE,
   });
   beforeEach(() => {
     vi.mocked(api.listOperatorModelConnections).mockResolvedValue(providedList([saved]));
@@ -416,6 +493,7 @@ describe('editing a provided connection', () => {
       'placeholder',
       'Leave blank to keep the saved key',
     );
+    expect(within(form).getByLabelText(BUDGET)).toHaveValue('5.00');
     // A rename calls no provider: it saves at once.
     type('Name', 'Renamed');
     fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
@@ -450,6 +528,60 @@ describe('editing a provided connection', () => {
       }),
     );
     expect(await within(await card()).findByText('Default for new users')).toBeInTheDocument();
+  });
+
+  it('changes the daily budget without calling the provider, and sends it in micro-dollars', async () => {
+    vi.mocked(api.updateOperatorModelConnection).mockResolvedValue({
+      ...saved,
+      user_daily_budget_microusd: 12_500_000,
+    });
+    const form = await openEditor();
+    type(BUDGET, '12.50');
+    fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(api.updateOperatorModelConnection).toHaveBeenCalledExactlyOnceWith(PROVIDED_ID, {
+        user_daily_budget_microusd: 12_500_000,
+      }),
+    );
+    expect(await within(await card()).findByText('Daily budget per account: $12.50')).toBeVisible();
+  });
+
+  it('will not take away a daily budget that was chosen', async () => {
+    const form = await openEditor();
+    type(BUDGET, '');
+    fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
+    expect(await within(form).findByRole('alert')).toHaveTextContent(
+      'Check the highlighted fields, then try again.',
+    );
+    expect(within(form).getByLabelText(BUDGET)).toBeInvalid();
+    expect(api.updateOperatorModelConnection).not.toHaveBeenCalled();
+  });
+
+  it('chooses the daily budget of a connection that has none yet, or leaves it for later', async () => {
+    const none = providedConnection();
+    vi.mocked(api.listOperatorModelConnections).mockResolvedValue(providedList([none]));
+    vi.mocked(api.updateOperatorModelConnection)
+      .mockResolvedValueOnce({ ...none, name: 'Renamed' })
+      .mockResolvedValueOnce({ ...none, name: 'Renamed', user_daily_budget_microusd: 0 });
+    const form = await openEditor();
+    expect(within(form).getByLabelText(BUDGET)).toHaveValue('');
+    // Still none: a rename goes through, and the budget is not sent.
+    type('Name', 'Renamed');
+    fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
+    const renamed = await card('Renamed');
+    expect(api.updateOperatorModelConnection).toHaveBeenLastCalledWith(PROVIDED_ID, {
+      name: 'Renamed',
+    });
+
+    fireEvent.click(within(renamed).getByRole('button', { name: 'Edit' }));
+    type(BUDGET, '0');
+    const again = screen.getByRole('form', { name: 'Edit provided connection' });
+    fireEvent.click(within(again).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(api.updateOperatorModelConnection).toHaveBeenLastCalledWith(PROVIDED_ID, {
+        user_daily_budget_microusd: 0,
+      }),
+    );
   });
 
   it('drops a default model that was removed from the list', async () => {
@@ -498,23 +630,55 @@ describe('editing a provided connection', () => {
 });
 
 describe('enabling, disabling and deleting', () => {
-  it('cannot be enabled until every model has a default allowance, and says which lack one', async () => {
-    vi.mocked(api.listOperatorModelConnections).mockResolvedValue(
-      providedList([providedConnection({ limits: { 'house-fast': daily(1500) } })]),
-    );
+  /** The Enable button of a card that lacks something, which must not be offered. */
+  async function blockedEnable(connection: api.OperatorModelConnection) {
+    cleanup();
+    vi.mocked(api.listOperatorModelConnections).mockResolvedValue(providedList([connection]));
     render(<ProvidedModelsSettings />);
-    const house = await card();
-    const enable = within(house).getByRole('button', { name: 'Enable' });
+    const enable = within(await card()).getByRole('button', { name: 'Enable' });
     expect(enable).toBeDisabled();
-    expect(enable).toHaveAccessibleDescription(
-      'It cannot be enabled until every model has a default allowance. Still without one: house-deep.',
-    );
     fireEvent.click(enable);
     expect(api.updateOperatorModelConnection).not.toHaveBeenCalled();
+    return enable;
+  }
+
+  it('cannot be enabled until it has a daily budget and every model has prices, and says what is missing', async () => {
+    const onePriced = { 'house-fast': priced() };
+    // A model without prices: named.
+    expect(
+      await blockedEnable(providedConnection({ ...COMPLETE, terms: onePriced })),
+    ).toHaveAccessibleDescription(
+      'It cannot be enabled until every model has prices. Still without prices: house-deep.',
+    );
+    // No daily budget: said, with where to choose one.
+    expect(
+      await blockedEnable(providedConnection({ ...COMPLETE, user_daily_budget_microusd: null })),
+    ).toHaveAccessibleDescription(
+      'It cannot be enabled until a daily budget per account is chosen. Edit the connection to choose one.',
+    );
+    // Neither, as a connection is when it has just been added.
+    expect(await blockedEnable(providedConnection())).toHaveAccessibleDescription(
+      'It cannot be enabled until a daily budget per account is chosen and every model has prices. Edit the connection to choose the budget. Still without prices: house-fast, house-deep.',
+    );
+    // A budget of zero and a price of zero are choices: nothing is missing.
+    const free = priced({ input_price: 0, output_price: 0 });
+    vi.mocked(api.listOperatorModelConnections).mockResolvedValue(
+      providedList([
+        providedConnection({
+          user_daily_budget_microusd: 0,
+          terms: { 'house-fast': free, 'house-deep': free },
+        }),
+      ]),
+    );
+    cleanup();
+    render(<ProvidedModelsSettings />);
+    const house = await card();
+    expect(within(house).getByRole('button', { name: 'Enable' })).toBeEnabled();
+    expect(within(house).queryByText(/cannot be enabled/)).not.toBeInTheDocument();
   });
 
-  it('is enabled at once when every model has one', async () => {
-    const ready = providedConnection({ limits: BOTH_SET });
+  it('is enabled at once when it has a budget and every model has prices', async () => {
+    const ready = providedConnection(COMPLETE);
     vi.mocked(api.listOperatorModelConnections).mockResolvedValue(providedList([ready]));
     const change = pending<api.OperatorModelConnection>();
     vi.mocked(api.updateOperatorModelConnection).mockReturnValue(change.promise);
@@ -533,24 +697,106 @@ describe('enabling, disabling and deleting', () => {
     expect(within(house).queryByText('Working…')).not.toBeInTheDocument();
   });
 
-  it('says what the server said when it still refuses to enable', async () => {
+  it('names what the server said is missing when it still refuses to enable', async () => {
     vi.mocked(api.listOperatorModelConnections).mockResolvedValue(
-      providedList([providedConnection({ limits: BOTH_SET })]),
+      providedList([providedConnection(COMPLETE)]),
     );
-    vi.mocked(api.updateOperatorModelConnection).mockRejectedValue(
-      refusal('operator_model_limits_missing', 'Limits are missing.', 409),
-    );
+    // A model was added since this page was read: the server names what is missing, and
+    // the card says it in its own words, never the server's.
+    const refused = (details?: Record<string, unknown>) =>
+      refusal(
+        'operator_model_terms_missing',
+        'Before enabling, set prices for house-new.',
+        409,
+        details,
+      );
+    vi.mocked(api.updateOperatorModelConnection)
+      .mockRejectedValueOnce(refused({ budget: false, models: ['house-new'] }))
+      .mockRejectedValueOnce(refused({ budget: true, models: [] }))
+      .mockRejectedValueOnce(refused({ budget: true, models: ['house-new', 'house-newer'] }))
+      // A refusal that names it only in its sentence: the page's general one is said.
+      .mockRejectedValueOnce(refused());
     render(<ProvidedModelsSettings />);
     const house = await card();
-    fireEvent.click(within(house).getByRole('button', { name: 'Enable' }));
-    expect(await within(house).findByRole('alert')).toHaveTextContent(
-      'Not enabled: every model needs a default allowance first.',
+    const refusedWith = async (sentence: string) => {
+      fireEvent.click(within(house).getByRole('button', { name: 'Enable' }));
+      expect(await within(house).findByText(sentence)).toHaveAttribute('role', 'alert');
+      expect(house).not.toHaveTextContent('Before enabling');
+    };
+    await refusedWith(
+      'It cannot be enabled until every model has prices. Still without prices: house-new.',
     );
+    await refusedWith(
+      'It cannot be enabled until a daily budget per account is chosen. Edit the connection to choose one.',
+    );
+    await refusedWith(
+      'It cannot be enabled until a daily budget per account is chosen and every model has prices. Edit the connection to choose the budget. Still without prices: house-new, house-newer.',
+    );
+    await refusedWith(
+      'Not enabled: the connection needs a daily budget per account and prices for every model first.',
+    );
+    expect(api.updateOperatorModelConnection).toHaveBeenCalledTimes(4);
     expect(within(house).getByText('Disabled')).toBeInTheDocument();
   });
 
+  it('warns that an enabled connection with no daily budget offers nothing', async () => {
+    // What a connection enabled before budgets existed is after the upgrade.
+    vi.mocked(api.listOperatorModelConnections).mockResolvedValue(
+      providedList([providedConnection({ enabled: true })]),
+    );
+    render(<ProvidedModelsSettings />);
+    const house = await card();
+    const warning = within(house).getByRole('alert');
+    expect(warning).toHaveTextContent(
+      'This connection is enabled but offers nothing to anyone: no daily budget per account has been chosen. Edit the connection to choose one.',
+    );
+    expect(warning).toHaveTextContent(
+      'This connection is enabled, but a model without prices is offered to nobody. Still without prices: house-fast, house-deep.',
+    );
+    // It is on, so there is nothing to enable: it can be edited, or disabled.
+    expect(within(house).getByRole('button', { name: 'Disable' })).toBeEnabled();
+    expect(within(house).queryByText(/cannot be enabled/)).not.toBeInTheDocument();
+  });
+
+  it('warns which models an enabled connection offers to nobody for want of prices', async () => {
+    vi.mocked(api.listOperatorModelConnections).mockResolvedValue(
+      providedList([
+        providedConnection({ enabled: true, ...COMPLETE, terms: { 'house-fast': priced() } }),
+      ]),
+    );
+    vi.mocked(api.setOperatorModelTerms).mockResolvedValue(
+      providedConnection({ enabled: true, ...COMPLETE }),
+    );
+    render(<ProvidedModelsSettings />);
+    const house = await card();
+    expect(within(house).getByRole('alert')).toHaveTextContent(
+      'This connection is enabled, but a model without prices is offered to nobody. Still without prices: house-deep.',
+    );
+    expect(within(house).getByRole('alert')).not.toHaveTextContent(/offers nothing to anyone/);
+
+    // Once the model has prices the warning goes.
+    const row = within(house).getByRole('listitem', { name: 'house-deep' });
+    fireEvent.change(within(row).getByLabelText('Input price'), { target: { value: '2.80' } });
+    fireEvent.change(within(row).getByLabelText('Output price'), { target: { value: '11.20' } });
+    fireEvent.click(within(row).getByRole('button', { name: 'Save the prices for house-deep' }));
+    await waitFor(() => expect(within(house).queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it('has no such warning on an enabled connection that is complete, or on a disabled one', async () => {
+    vi.mocked(api.listOperatorModelConnections).mockResolvedValue(
+      providedList([
+        providedConnection({ enabled: true, ...COMPLETE }),
+        providedConnection({ id: 'oconn_ffffffffffffffffffffffffffffffff', name: 'Spare' }),
+      ]),
+    );
+    render(<ProvidedModelsSettings />);
+    expect(within(await card()).queryByRole('alert')).not.toBeInTheDocument();
+    // Disabled and incomplete is the ordinary state of a new connection: it says so by Enable.
+    expect(within(await card('Spare')).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('asks before disabling, because it stops work for every account', async () => {
-    const on = providedConnection({ enabled: true, limits: BOTH_SET });
+    const on = providedConnection({ enabled: true, ...COMPLETE });
     vi.mocked(api.listOperatorModelConnections).mockResolvedValue(providedList([on]));
     vi.mocked(api.updateOperatorModelConnection).mockResolvedValue({ ...on, enabled: false });
     render(<ProvidedModelsSettings />);

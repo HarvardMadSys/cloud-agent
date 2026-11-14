@@ -74,8 +74,15 @@ class _Connections:
         raise AssertionError("no key of a provided connection is kept for scanning")
 
 
-def _connections(row: dict[str, Any] | None = None, *, limit: int | None = 100, used: int = 0):
-    return _Connections(_row() if row is None else row, Allowance(limit=limit, used=used))
+def _connections(
+    row: dict[str, Any] | None = None,
+    *,
+    offered: bool = True,
+    budget: int = 5_000_000,
+    spent: int = 0,
+):
+    allowance = Allowance(offered=offered, budget_microusd=budget, spent_microusd=spent)
+    return _Connections(_row() if row is None else row, allowance)
 
 
 async def _resolve(connections, **changes: Any):
@@ -89,7 +96,7 @@ async def _resolve(connections, **changes: Any):
     return await resolve_turn_connection(connections, **turn)
 
 
-async def test_any_admitted_owner_runs_on_it_within_their_own_allowance() -> None:
+async def test_any_admitted_owner_runs_on_it_within_their_own_budget() -> None:
     connections = _connections()
     row, plan = await _resolve(connections, user_id="somebody-else")
     assert row["id"] == PROVIDED and plan.client_protocol == "responses"
@@ -120,12 +127,12 @@ async def test_what_the_deployment_stopped_providing_reads_as_that(row, reason) 
 async def test_a_model_withheld_from_the_owner_is_refused_everywhere() -> None:
     for admit in (False, True):
         with pytest.raises(ModelConnectionUnusable) as refused:
-            await _resolve(_connections(limit=0), admit=admit)
+            await _resolve(_connections(offered=False), admit=admit)
         assert refused.value.reason == "allowance_none"
 
 
-async def test_a_used_up_allowance_refuses_a_new_turn_but_not_one_already_starting() -> None:
-    spent = _connections(limit=5, used=5)
+async def test_a_used_up_budget_refuses_a_new_turn_but_not_one_already_starting() -> None:
+    spent = _connections(budget=5_000_000, spent=5_000_000)
     with pytest.raises(ModelConnectionUnusable) as refused:
         await _resolve(spent, admit=True)
     assert refused.value.reason == "allowance_exhausted"
@@ -135,14 +142,14 @@ async def test_a_used_up_allowance_refuses_a_new_turn_but_not_one_already_starti
     assert row["id"] == PROVIDED
 
 
-async def test_unlimited_never_runs_out() -> None:
-    await _resolve(_connections(limit=None, used=10**6), admit=True)
+async def test_a_budget_with_something_left_admits_a_new_turn() -> None:
+    await _resolve(_connections(budget=5_000_000, spent=4_999_999), admit=True)
 
 
-async def test_admission_refuses_a_spent_allowance_before_anything_is_queued() -> None:
+async def test_admission_refuses_a_spent_budget_before_anything_is_queued() -> None:
     with pytest.raises(Refused) as refused:
         await require_connection_source(
-            _connections(limit=1, used=1),
+            _connections(budget=1, spent=1),
             user_id="owner",
             connection_id=PROVIDED,
             runtime="codex",
@@ -226,9 +233,9 @@ async def test_a_host_without_the_relay_gets_the_claim_back() -> None:
     store.attempt_commands.transition.assert_not_awaited()
 
 
-async def test_a_spent_allowance_ends_the_turn_at_its_claim() -> None:
-    """Where a goal round, which is not admitted through the API, meets the allowance."""
-    store = _claim_store(_connections(limit=3, used=3))
+async def test_a_spent_budget_ends_the_turn_at_its_claim() -> None:
+    """Where a goal round, which is not admitted through the API, meets the budget."""
+    store = _claim_store(_connections(budget=3, spent=3))
     with pytest.raises(Refused) as refused:
         await claim_model_connection(
             store, _job(), [*HOST_MODEL_CONNECTION_CAPABILITIES, MODEL_RELAY_CAPABILITY]

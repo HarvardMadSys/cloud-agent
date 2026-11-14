@@ -40,7 +40,7 @@ interface DraftedPick {
  * Both values carry their source (see `modelSource`). A model on a source
  * that cannot run here — another agent was chosen, the connection was
  * disabled or no longer lists it, or a provided model has nothing left of
- * today's allowance — stays on screen marked so and holds Run. It never gives
+ * today's budget — stays on screen marked so and holds Run. It never gives
  * way to the resolved model: that would bill another account.
  */
 export function useComposerModel(drafted: DraftedPick | null, runtime: string) {
@@ -63,7 +63,7 @@ export function useComposerModel(drafted: DraftedPick | null, runtime: string) {
   const listed = useMemo(() => listedChoices(config, runtime), [config, runtime]);
   // What can run now: a provided model used up for today is listed, not offered.
   // Worked out on every draw, as the picker's own options are: it depends on
-  // the clock, and a list kept from before the day's count started over would
+  // the clock, and a list kept from before the day's budget started over would
   // hold Run for a model the picker shows as back.
   useAllowanceReset(config);
   const offered = listed.filter((option) => !isUsedUp(config, option));

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -17,7 +18,9 @@ from cloud_agent.api import model_relay
 from cloud_agent.api.deps import get_storage
 from cloud_agent.application.model_connection_stream import CheckStop
 from cloud_agent.application.model_connections import operator_connection_cipher
-from cloud_agent.domain.operator_models import Allowance, end_user_tag
+from cloud_agent.domain.model_usage import IMAGE_TOKEN_ESTIMATE, estimated_prompt_tokens
+from cloud_agent.domain.operator_models import Allowance, ModelPrices, end_user_tag
+from cloud_agent.ports.operator_models import ChargeOutcomeUnknown
 from cloud_agent.tokens import (
     mint_residency_github_token,
     mint_residency_mcp_token,
@@ -29,7 +32,14 @@ pytestmark = pytest.mark.asyncio
 _KEY = "sk-deployment-key-0123456789"
 _ROOT = "model-relay-settings-root-key"
 _CONNECTION = "oconn_" + "c" * 32
-_TODAY = date(2026, 11, 12)
+#: $2 in, $10 out and $0.50 for cached input, per million tokens.
+_PRICES = ModelPrices(input=2_000_000, output=10_000_000, cache_read=500_000)
+#: What the provider says a request used unless a test scripts another answer,
+#: and what that costs at ``_PRICES``, in millionths of a dollar.
+_USAGE = {"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100}
+_ANSWER = {"id": "answer", "usage": _USAGE}
+_COST = 3000
+_BUDGET = ("budget", _CONNECTION, "user_1")
 
 
 @pytest.fixture(autouse=True)
@@ -41,10 +51,22 @@ def _secrets(monkeypatch):
 class _Store:
     """A running turn of ``athr_1`` (residency 2) by ``user_1`` on one provided connection."""
 
-    def __init__(self, *, running: bool = True, limit: int | None = 100, used: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        running: bool = True,
+        budget: int = 5_000_000,
+        spent: int = 0,
+        offered: bool = True,
+        prices: ModelPrices | None = _PRICES,
+    ) -> None:
         self.running = running
-        self.limit, self.used = limit, used
-        self.refunds = 0
+        self.budget, self.spent, self.offered, self.prices = budget, spent, offered, prices
+        self.charges: list[dict[str, Any]] = []
+        #: The day each charge was written for.
+        self.days: list[Any] = []
+        #: What the next writes raise, one each, before they succeed.
+        self.write_failures: list[BaseException] = []
         self.key_refused: list[bool] = []
         self.global_concurrency: int | None = None
         self.bound_revision: int | None = 3
@@ -68,7 +90,10 @@ class _Store:
         if not self.running or (thread_id, residency_generation) != ("athr_1", 2):
             return None
         connection = None if self.on_other_connection else self.connection
-        offered = connection is not None and model in connection["models"]
+        listed = connection is not None and model in connection["models"]
+        allowance = Allowance(
+            offered=self.offered, budget_microusd=self.budget, spent_microusd=self.spent
+        )
         return {
             "job_id": "ajob_1",
             "attempt_id": 1,
@@ -77,26 +102,43 @@ class _Store:
             "model_connection_id": _CONNECTION if connection else "mconn_" + "0" * 32,
             "bound_revision": self.bound_revision if connection else None,
             "connection": connection,
-            "allowance": Allowance(limit=self.limit, used=self.used) if offered else None,
+            "allowance": allowance if listed else None,
+            "prices": self.prices if listed else None,
             "global_concurrency": self.global_concurrency,
         }
 
-    async def count_operator_request(self, *, connection_id, user_id, model):
+    async def record_operator_request(self, *, connection_id, user_id, day, **charge):
         assert (connection_id, user_id) == (_CONNECTION, "user_1")
-        if self.limit == 0:
-            return {"outcome": "not_offered", "day": None}
-        if self.limit is not None and self.used >= self.limit:
-            return {"outcome": "exhausted", "day": None}
-        self.used += 1
-        return {"outcome": "counted", "day": _TODAY}
-
-    async def refund_operator_request(self, *, connection_id, user_id, model, day):
-        assert day == _TODAY
-        self.used -= 1
-        self.refunds += 1
+        if self.write_failures:
+            raise self.write_failures.pop(0)
+        self.days.append(day)
+        self.charges.append(charge)
+        self.spent += charge["cost_microusd"]
 
     async def mark_operator_key_refused(self, *, connection_id, refused):
         self.key_refused.append(refused)
+
+
+def _charge(
+    cost: int, *, prompt: int, output: int, cached: int = 0, written: int = 0, estimated=False
+) -> dict[str, Any]:
+    """One recorded request on ``model-1``."""
+    return {
+        "model": "model-1",
+        "cost_microusd": cost,
+        "input_tokens": prompt,
+        "cache_read_tokens": cached,
+        "cache_write_tokens": written,
+        "output_tokens": output,
+        "estimated": estimated,
+    }
+
+
+def _estimate(body: bytes, *, output: int = 0) -> dict[str, Any]:
+    """What a request with this body is charged when its answer named no usage."""
+    tokens = estimated_prompt_tokens(json.loads(body))
+    cost = (tokens * _PRICES.input + output * _PRICES.output + 500_000) // 1_000_000
+    return _charge(cost, prompt=tokens, output=output, estimated=True)
 
 
 class _Provider:
@@ -113,7 +155,7 @@ class _Provider:
         self.requests: list[httpx.Request] = []
         self.bodies: list[bytes] = []
         self.status, self.fail = status, fail
-        self.body = body if body is not None else {"id": "answer"}
+        self.body = body if body is not None else _ANSWER
         self.headers = headers or {}
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
@@ -147,6 +189,8 @@ def _app(
     upstream: httpx.AsyncClient,
     *,
     slots: model_relay.Slots | None = None,
+    reserved: model_relay.Reserved | None = None,
+    pending: model_relay.PendingCharges | None = None,
     guard: Any = None,
 ) -> FastAPI:
     app = FastAPI()
@@ -155,6 +199,10 @@ def _app(
     app.dependency_overrides[model_relay.get_relay_client] = lambda: upstream
     held = slots or model_relay.Slots()
     app.dependency_overrides[model_relay.get_slots] = lambda: held
+    kept = reserved or model_relay.Reserved()
+    app.dependency_overrides[model_relay.get_reserved] = lambda: kept
+    later = pending or model_relay.PendingCharges(kept, delays=(0.0,))
+    app.dependency_overrides[model_relay.get_pending] = lambda: later
 
     async def allowed(_base_url: str) -> None:
         return None
@@ -171,13 +219,15 @@ async def _send(
     *,
     bearer: str | None = "",
     slots: model_relay.Slots | None = None,
+    reserved: model_relay.Reserved | None = None,
+    pending: model_relay.PendingCharges | None = None,
     guard: Any = None,
     upstream: httpx.AsyncClient | None = None,
     **kwargs: Any,
 ) -> httpx.Response:
     """One request to the relay; ``upstream`` is a client several requests share."""
     client = upstream or _upstream(provider.handle)
-    app = _app(store, client, slots=slots, guard=guard)
+    app = _app(store, client, slots=slots, reserved=reserved, pending=pending, guard=guard)
     headers = dict(kwargs.pop("headers", {}))
     if bearer is not None:
         headers.setdefault("Authorization", f"Bearer {bearer or _placeholder()}")
@@ -199,8 +249,13 @@ class _Caller:
     finds out when its next send fails.
     """
 
-    def __init__(self, app: FastAPI, *, spec_version: str = "2.3") -> None:
-        body = json.dumps({"model": "model-1", "messages": []}).encode()
+    #: The request every caller sends.
+    BODY = json.dumps({"model": "model-1", "messages": []}).encode()
+
+    def __init__(
+        self, app: FastAPI, *, spec_version: str = "2.3", path: str = "/v1/chat/completions"
+    ) -> None:
+        body = self.BODY
         self._unread = [{"type": "http.request", "body": body, "more_body": False}]
         self._tells = spec_version == "2.3"
         self.left = asyncio.Event()
@@ -212,8 +267,8 @@ class _Caller:
             "http_version": "1.1",
             "method": "POST",
             "scheme": "http",
-            "path": "/v1/chat/completions",
-            "raw_path": b"/v1/chat/completions",
+            "path": path,
+            "raw_path": path.encode(),
             "query_string": b"",
             "root_path": "",
             "server": ("relay", 80),
@@ -285,7 +340,7 @@ async def test_a_running_turns_request_goes_out_with_the_deployments_key() -> No
     store, provider = _Store(), _Provider()
     response = await _send(store, provider)
 
-    assert response.status_code == 200 and response.json() == {"id": "answer"}
+    assert response.status_code == 200 and response.json() == _ANSWER
     assert response.headers["x-request-id"] == "req_1"
     [sent] = provider.requests
     assert str(sent.url) == "https://provider.example/v1/chat/completions"
@@ -293,7 +348,8 @@ async def test_a_running_turns_request_goes_out_with_the_deployments_key() -> No
     assert "x-api-key" not in sent.headers
     # The body is the CLI's own, byte for byte.
     assert json.loads(provider.bodies[0])["messages"] == [{"role": "user", "content": "hi"}]
-    assert store.used == 1 and store.refunds == 0
+    # Charged what the answer said it used, at the model's prices.
+    assert store.charges == [_charge(_COST, prompt=1000, output=100)]
     # Neither the key nor the placeholder comes back.
     assert _KEY not in response.text and "amd." not in response.text
 
@@ -319,7 +375,6 @@ async def test_only_the_headers_an_agent_needs_seen_go_on_to_the_provider() -> N
     store, provider = _Store(), _Provider()
     kept = {
         "Accept": "text/event-stream",
-        "Accept-Encoding": "gzip",
         "Content-Type": "application/json",
         "User-Agent": "agent-cli/1.2",
         "Anthropic-Version": "2023-06-01",
@@ -349,18 +404,20 @@ async def test_only_the_headers_an_agent_needs_seen_go_on_to_the_provider() -> N
         assert sent.headers[name] == value
     for name in dropped:
         assert name not in sent.headers
-    # Nothing else goes out than those, the key and what the relay's own
-    # connection to the provider says of itself.
+    # Nothing else goes out than those, the key, the relay's own answer to
+    # which encodings it takes, and what its connection says of itself.
     assert set(sent.headers) == {name.lower() for name in kept} | {
         "authorization",
+        "accept-encoding",
         "host",
         "content-length",
         "connection",
     }
 
 
-async def test_a_client_that_names_no_encoding_is_answered_unencoded() -> None:
-    """The answer goes back as the provider encoded it, so it may not choose one unasked."""
+@pytest.mark.parametrize("accepted", ["gzip, br, zstd", "identity", None])
+async def test_the_provider_is_asked_for_no_encoding_whatever_the_client_takes(accepted) -> None:
+    """The answer is read for its usage on the way back, so it has to arrive unencoded."""
     store, provider = _Store(), _Provider()
     seen: list[httpx.Request] = []
 
@@ -368,23 +425,26 @@ async def test_a_client_that_names_no_encoding_is_answered_unencoded() -> None:
         seen.append(request)
         return await provider.handle(request)
 
-    # Sent by hand: a test client adds an Accept-Encoding of its own.
     upstream = _upstream(handle)
-    caller = _Caller(_app(store, upstream))
     try:
-        await caller.ended()
+        if accepted is None:
+            # Sent by hand: a test client adds an Accept-Encoding of its own.
+            await _Caller(_app(store, upstream)).ended()
+        else:
+            await _send(store, provider, upstream=upstream, headers={"Accept-Encoding": accepted})
     finally:
         await upstream.aclose()
     [sent] = seen
     assert sent.headers["accept-encoding"] == "identity"
 
 
-async def test_listing_models_and_counting_tokens_are_not_counted() -> None:
-    store, provider = _Store(limit=1, used=1), _Provider()
+async def test_listing_models_and_counting_tokens_cost_nothing() -> None:
+    # Served even to an owner whose budget is used up, and never charged.
+    store, provider = _Store(budget=1000, spent=1000), _Provider()
     listed = await _send(store, provider, "GET", "/v1/models")
     counted = await _send(store, provider, path="/v1/messages/count_tokens")
     assert (listed.status_code, counted.status_code) == (200, 200)
-    assert store.used == 1
+    assert store.charges == []
     assert [str(request.url) for request in provider.requests] == [
         "https://provider.example/v1/models",
         "https://provider.example/v1/messages/count_tokens",
@@ -408,8 +468,8 @@ async def test_the_provider_answers_and_errors_are_relayed_as_they_are() -> None
     response = await _send(store, provider)
     assert response.status_code == 400
     assert response.json() == {"error": {"message": "context_length_exceeded"}}
-    # The provider served it, so it counts.
-    assert store.used == 1 and store.refunds == 0
+    # An error is not an answer the owner pays for.
+    assert store.charges == []
 
 
 async def test_a_cookie_one_answer_sets_goes_out_with_no_later_request() -> None:
@@ -435,7 +495,7 @@ async def test_anything_but_a_placeholder_is_refused_and_never_passed_on(credent
     response = await _send(store, provider, bearer=credential)
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "invalid_credential"
-    assert provider.requests == [] and store.used == 0
+    assert provider.requests == [] and store.charges == []
 
 
 async def test_no_credential_is_refused() -> None:
@@ -487,7 +547,7 @@ async def test_a_connection_changed_under_a_running_process_stops_serving_it(cha
     response = await _send(store, provider)
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "provided_unavailable"
-    assert provider.requests == [] and store.used == 0
+    assert provider.requests == [] and store.charges == []
 
 
 async def test_a_residency_never_bound_to_the_connection_is_refused() -> None:
@@ -519,7 +579,7 @@ async def test_only_the_listed_paths_are_forwarded(method, path) -> None:
     response = await _send(store, provider, method, path)
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"
-    assert provider.requests == [] and store.used == 0
+    assert provider.requests == [] and store.charges == []
 
 
 async def test_the_destination_is_the_connections_whatever_the_request_says() -> None:
@@ -535,10 +595,14 @@ async def test_a_model_the_connection_does_not_list_is_refused(model) -> None:
     response = await _send(store, provider, json={"model": model, "messages": []})
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "model_not_allowed"
-    assert provider.requests == [] and store.used == 0
+    assert provider.requests == [] and store.charges == []
 
 
-@pytest.mark.parametrize("body", [b"not json", b"[]", b'{"messages": []}', b'{"model": 7}'])
+@pytest.mark.parametrize(
+    "body",
+    [b"not json", b"[]", b'{"messages": []}', b'{"model": 7}', b"[" * 50_000 + b"]" * 50_000],
+    ids=["not-json", "a-list", "no-model", "model-not-text", "nested-too-deep"],
+)
 async def test_an_inference_request_must_name_its_model(body) -> None:
     store, provider = _Store(), _Provider()
     response = await _send(
@@ -556,37 +620,41 @@ async def test_a_body_too_large_is_refused_before_it_is_read(monkeypatch) -> Non
     assert response.status_code == 413 and provider.requests == []
 
 
-# -- allowances ------------------------------------------------------------------
+# -- who it is offered to, and budgets --------------------------------------------
 
 
-async def test_a_model_withheld_from_the_owner_is_refused() -> None:
-    store, provider = _Store(limit=0), _Provider()
+@pytest.mark.parametrize(
+    "store", [{"offered": False}, {"prices": None}], ids=["withheld", "no-prices"]
+)
+async def test_a_model_not_offered_to_the_owner_is_refused(store) -> None:
+    store, provider = _Store(**store), _Provider()
     response = await _send(store, provider)
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "model_not_allowed"
-    assert provider.requests == []
+    assert provider.requests == [] and store.charges == []
 
 
-async def test_a_spent_allowance_is_a_403_a_client_does_not_retry() -> None:
-    store, provider = _Store(limit=2, used=2), _Provider()
+async def test_a_spent_budget_is_a_403_a_client_does_not_retry() -> None:
+    store, provider = _Store(budget=2_000_000, spent=2_000_000), _Provider()
     response = await _send(store, provider)
     assert response.status_code == 403
     error = response.json()["error"]
     assert error["code"] == "allowance_exhausted" and "00:00 UTC" in error["message"]
     assert "retry-after" not in response.headers
-    assert provider.requests == [] and store.used == 2
+    assert provider.requests == [] and store.charges == []
 
 
-async def test_the_last_request_of_the_day_is_served_and_the_next_is_not() -> None:
-    store, provider = _Store(limit=1), _Provider()
+async def test_the_request_that_uses_the_budget_up_is_served_and_the_next_is_not() -> None:
+    # One answer costs exactly what is left.
+    store, provider = _Store(budget=_COST), _Provider()
     assert (await _send(store, provider)).status_code == 200
     assert (await _send(store, provider)).status_code == 403
-    assert len(provider.requests) == 1 and store.used == 1
+    assert len(provider.requests) == 1 and store.spent == _COST
 
 
 async def test_a_refusal_is_shaped_for_the_api_it_was_sent_to() -> None:
     provider = _Provider()
-    anthropic = await _send(_Store(limit=1, used=1), provider, path="/v1/messages")
+    anthropic = await _send(_Store(budget=1, spent=1), provider, path="/v1/messages")
     assert anthropic.status_code == 403
     assert anthropic.json() == {
         "type": "error",
@@ -596,79 +664,367 @@ async def test_a_refusal_is_shaped_for_the_api_it_was_sent_to() -> None:
             "code": "allowance_exhausted",
         },
     }
-    openai = await _send(_Store(limit=1, used=1), provider)
+    openai = await _send(_Store(budget=1, spent=1), provider)
     assert set(openai.json()["error"]) == {"message", "type", "param", "code"}
 
 
-@pytest.mark.parametrize("status", [429, 500, 502, 503, 529])
-async def test_a_request_the_provider_did_not_serve_is_taken_back(status) -> None:
-    store, provider = _Store(), _Provider(status, {"error": "busy"})
+# -- what a request is charged ---------------------------------------------------
+
+
+def _event_stream(*events: dict | str) -> bytes:
+    return "".join(
+        f"data: {event if isinstance(event, str) else json.dumps(event)}\n\n" for event in events
+    ).encode()
+
+
+def _streaming(body: bytes, content_type: str = "text/event-stream"):
+    async def handle(request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        return httpx.Response(
+            200, headers={"content-type": content_type}, stream=httpx.ByteStream(body)
+        )
+
+    return handle
+
+
+async def test_a_streamed_chat_answer_is_charged_by_its_last_chunk() -> None:
+    store = _Store()
+    stream = _event_stream(
+        {"choices": [{"delta": {"content": "Hi"}}]},
+        {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 100_000,
+                "completion_tokens": 2_000,
+                "total_tokens": 102_000,
+                "prompt_tokens_details": {"cached_tokens": 60_000},
+            },
+        },
+        "[DONE]",
+    )
+    async with _upstream(_streaming(stream)) as upstream:
+        response = await _send(store, _Provider(), upstream=upstream)
+
+    # The stream reaches the CLI as the provider sent it.
+    assert response.content == stream
+    # 40k tokens at $2, 60k cached at $0.50 and 2k out at $10, per million.
+    assert store.charges == [_charge(130_000, prompt=100_000, cached=60_000, output=2_000)]
+
+
+async def test_a_messages_answer_is_charged_with_its_cache_counts_added_in() -> None:
+    store = _Store()
+    stream = _event_stream(
+        {
+            "type": "message_start",
+            "message": {
+                "usage": {
+                    "input_tokens": 500,
+                    "cache_read_input_tokens": 9_000,
+                    "cache_creation_input_tokens": 500,
+                    "output_tokens": 1,
+                }
+            },
+        },
+        {"type": "message_delta", "delta": {}, "usage": {"output_tokens": 300}},
+        {"type": "message_stop"},
+    )
+    async with _upstream(_streaming(stream)) as upstream:
+        await _send(
+            store,
+            _Provider(),
+            path="/v1/messages",
+            bearer=None,
+            headers={"x-api-key": _placeholder()},
+            upstream=upstream,
+        )
+
+    # Written tokens have no price of their own here, so they are plain input:
+    # 1,000 at $2, 9,000 read at $0.50, 300 out at $10.
+    assert store.charges == [_charge(9_500, prompt=10_000, cached=9_000, written=500, output=300)]
+
+
+async def test_a_responses_answer_is_charged_by_the_event_that_ends_it() -> None:
+    store = _Store()
+    usage = {"input_tokens": 4_000, "output_tokens": 600, "total_tokens": 4_600}
+    stream = _event_stream(
+        {"type": "response.output_text.delta", "delta": "Hi"},
+        {"type": "response.completed", "response": {"id": "resp_1", "usage": usage}},
+    )
+    async with _upstream(_streaming(stream)) as upstream:
+        await _send(store, _Provider(), path="/v1/responses", upstream=upstream)
+
+    assert store.charges == [_charge(14_000, prompt=4_000, output=600)]
+
+
+async def test_an_answer_that_names_no_usage_is_charged_by_the_size_of_its_request() -> None:
+    store, provider = _Store(), _Provider(body={"id": "answer"})
+    body = json.dumps({"model": "model-1", "messages": [{"content": "x" * 4000}]}).encode()
+    response = await _send(
+        store, provider, content=body, headers={"content-type": "application/json"}
+    )
+    assert response.status_code == 200
+    assert store.charges == [_estimate(body)]
+    assert store.charges[0]["input_tokens"] > 1000
+
+
+async def test_a_screenshot_in_a_request_is_not_estimated_as_megabytes_of_text() -> None:
+    store, provider = _Store(budget=50_000_000), _Provider(body={"id": "answer"})
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 2_000_000}}
+    body = {"model": "model-1", "messages": [{"role": "user", "content": [image]}]}
+    response = await _send(store, provider, json=body)
+    assert response.status_code == 200
+    [charge] = store.charges
+    # The gateway's flat amount for an image, not half a million tokens of text.
+    assert IMAGE_TOKEN_ESTIMATE <= charge["input_tokens"] < IMAGE_TOKEN_ESTIMATE + 50
+    assert charge["cost_microusd"] < 300
+
+
+async def test_an_answer_the_provider_encoded_unasked_is_charged_by_estimate() -> None:
+    store = _Store()
+    encoded = gzip.compress(json.dumps(_ANSWER).encode())
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json", "content-encoding": "gzip"},
+            stream=httpx.ByteStream(encoded),
+        )
+
+    async with _upstream(handle) as upstream:
+        response = await _send(store, _Provider(), upstream=upstream)
+
+    # Passed on as it came, for the CLI to decode.
+    assert response.json() == _ANSWER
+    [charge] = store.charges
+    assert charge["estimated"] and charge["output_tokens"] == 0
+
+
+@pytest.mark.parametrize("status", [302, 307, 400, 404, 422, 429, 500, 502, 503, 529])
+async def test_an_answer_that_is_an_error_costs_nothing(status) -> None:
+    store, provider = _Store(), _Provider(status, {"error": "busy", "usage": _USAGE})
     response = await _send(store, provider)
     # Relayed as it is: the CLI decides its own retry from it.
-    assert response.status_code == status and response.json() == {"error": "busy"}
-    assert store.used == 0 and store.refunds == 1
+    assert response.status_code == status and response.json()["error"] == "busy"
+    assert store.charges == []
 
 
-async def test_an_unreachable_provider_is_a_502_and_is_taken_back() -> None:
+async def test_an_unreachable_provider_is_a_502_and_costs_nothing() -> None:
     store, provider = _Store(), _Provider(fail=True)
     response = await _send(store, provider)
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "provider_unreachable"
-    assert store.used == 0 and store.refunds == 1
+    assert store.charges == []
 
 
 @pytest.mark.parametrize(
     "error", [httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError]
 )
-async def test_a_provider_that_never_answers_is_a_502_and_is_taken_back(error) -> None:
-    store, slots = _Store(), model_relay.Slots()
+async def test_a_provider_that_never_answers_is_a_502_and_costs_nothing(error) -> None:
+    store, slots, reserved = _Store(), model_relay.Slots(), model_relay.Reserved()
 
     async def handle(request: httpx.Request) -> httpx.Response:
         raise error("no answer", request=request)
 
     upstream = _upstream(handle)
     try:
-        response = await _send(store, _Provider(), slots=slots, upstream=upstream)
+        response = await _send(
+            store, _Provider(), slots=slots, reserved=reserved, upstream=upstream
+        )
     finally:
         await upstream.aclose()
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "provider_unreachable"
-    assert store.used == 0 and store.refunds == 1
-    assert _slots_held(slots) == 0
+    assert store.charges == []
+    assert _slots_held(slots) == 0 and reserved.held(_BUDGET) == 0
 
 
-async def test_a_failure_of_the_relays_own_before_sending_is_taken_back() -> None:
-    """The owner is not out a request the provider never saw."""
-    store, provider, slots = _Store(), _Provider(), model_relay.Slots()
+async def test_a_failure_of_the_relays_own_before_sending_costs_nothing() -> None:
+    """The owner does not pay for a request the provider never saw."""
+    store, provider = _Store(), _Provider()
+    slots, reserved = model_relay.Slots(), model_relay.Reserved()
 
     async def broken(_base_url: str) -> None:
         raise RuntimeError("the guard itself failed")
 
     with pytest.raises(RuntimeError, match="the guard itself failed"):
-        await _send(store, provider, slots=slots, guard=broken)
+        await _send(store, provider, slots=slots, reserved=reserved, guard=broken)
     assert provider.requests == []
-    assert store.used == 0 and store.refunds == 1
-    assert _slots_held(slots) == 0
+    assert store.charges == []
+    assert _slots_held(slots) == 0 and reserved.held(_BUDGET) == 0
 
 
-async def test_a_failure_after_the_provider_had_the_request_stays_counted() -> None:
-    """The provider may have served and billed it; only the slots come back."""
-    store, slots = _Store(), model_relay.Slots()
-    had: list[httpx.Request] = []
+async def test_a_failure_after_the_provider_had_the_request_is_charged_by_estimate() -> None:
+    """The provider may have served and billed it, and its answer was never read."""
+    store, slots, reserved = _Store(), model_relay.Slots(), model_relay.Reserved()
+    had: list[bytes] = []
 
     async def handle(request: httpx.Request) -> httpx.Response:
-        had.append(request)
+        had.append(await request.aread())
         raise RuntimeError("lost after sending")
 
     upstream = _upstream(handle)
     try:
         with pytest.raises(RuntimeError, match="lost after sending"):
-            await _send(store, _Provider(), slots=slots, upstream=upstream)
+            await _send(store, _Provider(), slots=slots, reserved=reserved, upstream=upstream)
     finally:
         await upstream.aclose()
-    assert len(had) == 1
-    assert store.used == 1 and store.refunds == 0
-    assert _slots_held(slots) == 0
+    assert store.charges == [_estimate(had[0])]
+    assert _slots_held(slots) == 0 and reserved.held(_BUDGET) == 0
+
+
+def _events(records: list[logging.LogRecord], event: str) -> list[logging.LogRecord]:
+    return [record for record in records if record.getMessage() == event]
+
+
+async def test_a_written_cost_counts_for_checks_whose_read_began_before_it_landed(
+    monkeypatch,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(model_relay.time, "monotonic", lambda: clock[0])
+    reserved = model_relay.Reserved()
+    reserved.landed(_BUDGET, 700)
+    clock[0] = 101.0
+    reserved.landed(_BUDGET, 300)
+    reserved.landed(("budget", _CONNECTION, "someone-else"), 999)
+    # A read that began before both landed misses both; one in between, the second.
+    assert reserved.landed_since(_BUDGET, 99.0) == 1000
+    assert reserved.landed_since(_BUDGET, 100.5) == 300
+    assert reserved.landed_since(_BUDGET, 101.5) == 0
+    # Kept only as long as a read could take.
+    clock[0] = 100.0 + model_relay.LANDED_WINDOW_SECONDS + 0.5
+    assert reserved.landed_since(_BUDGET, 0.0) == 300
+    clock[0] = 101.0 + model_relay.LANDED_WINDOW_SECONDS + 0.5
+    assert reserved.landed_since(_BUDGET, 0.0) == 0
+
+
+async def test_a_cost_that_lands_while_the_budget_is_read_is_not_missed() -> None:
+    """Another request's cost is written after this one read the spending, and its hold freed."""
+    store, reserved = _Store(budget=_COST), model_relay.Reserved()
+    resolve = store.resolve_model_relay_caller
+
+    async def read_then_another_lands(**lookup):
+        caller = await resolve(**lookup)  # spent: nothing yet
+        reserved.landed(_BUDGET, _COST)  # the other request's cost, written just now
+        return caller
+
+    store.resolve_model_relay_caller = read_then_another_lands  # type: ignore[method-assign]
+    response = await _send(store, _Provider(), reserved=reserved)
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "budget_reserved"
+
+
+async def test_a_cost_that_landed_before_the_read_is_not_counted_twice() -> None:
+    store, reserved = _Store(budget=_COST + 1_000, spent=_COST), model_relay.Reserved()
+    # Written, and so in the spending the request reads, before it begins.
+    reserved.landed(_BUDGET, _COST)
+    response = await _send(store, _Provider(), reserved=reserved)
+    assert response.status_code == 200
+
+
+async def test_a_cost_that_could_not_be_written_is_written_later(caplog) -> None:
+    """The answer is not failed and the cost is not let go: it is counted until it lands."""
+    store, provider, reserved = _Store(), _Provider(), model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(3600.0,))
+    store.write_failures = [OSError("the database is away")]
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        response = await _send(store, provider, reserved=reserved, pending=pending)
+        assert response.status_code == 200 and response.json() == _ANSWER
+        # Not written yet, and counted against the owner's budget meanwhile.
+        assert store.charges == [] and pending.count == 1
+        assert reserved.held(_BUDGET) == _COST
+        [retry] = _events(caplog.records, "agent_model_relay_charge_retry")
+        assert (retry.user_id, retry.model, retry.cost_microusd) == ("user_1", "model-1", _COST)
+
+        # A process that stops makes one last try first.
+        await pending.close()
+    assert store.charges == [_charge(_COST, prompt=1000, output=100)]
+    assert store.days == [datetime.now(UTC).date()]
+    assert reserved.held(_BUDGET) == 0 and pending.count == 0
+    [late] = _events(caplog.records, "agent_model_relay_charged_late")
+    assert late.cost_microusd == _COST
+
+
+async def test_a_charge_waiting_to_be_written_holds_back_the_owners_next_request() -> None:
+    store = _Store(budget=_COST)
+    reserved = model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(3600.0,))
+    store.write_failures = [OSError("the database is away")]
+    first = await _send(store, _Provider(), reserved=reserved, pending=pending)
+    assert first.status_code == 200 and store.spent == 0
+    # What is left of the budget is spoken for until that charge is written.
+    second = await _send(store, _Provider(), reserved=reserved, pending=pending)
+    assert second.status_code == 429
+    assert second.json()["error"]["code"] == "budget_reserved"
+    await pending.close()
+    assert store.spent == _COST
+
+
+async def test_a_charge_is_tried_again_until_it_lands(caplog) -> None:
+    store, reserved = _Store(), model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(0.0, 0.0, 0.0))
+    store.write_failures = [OSError("away"), ConnectionRefusedError("still away")]
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        await _send(store, _Provider(), reserved=reserved, pending=pending)
+        for _ in range(50):
+            if pending.count == 0:
+                break
+            await asyncio.sleep(0)
+    assert store.charges == [_charge(_COST, prompt=1000, output=100)]
+    assert len(_events(caplog.records, "agent_model_relay_charge_retry")) == 2
+    assert reserved.held(_BUDGET) == 0
+
+
+async def test_a_charge_is_tried_until_it_lands_however_many_tries_that_takes(caplog) -> None:
+    store, reserved = _Store(), model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(0.0,))
+    store.write_failures = [OSError("away")] * 12
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        await _send(store, _Provider(), reserved=reserved, pending=pending)
+        for _ in range(200):
+            if pending.count == 0:
+                break
+            await asyncio.sleep(0)
+    assert store.charges == [_charge(_COST, prompt=1000, output=100)]
+    assert len(_events(caplog.records, "agent_model_relay_charge_retry")) == 12
+    assert _events(caplog.records, "agent_model_relay_charge_lost") == []
+    assert reserved.held(_BUDGET) == 0
+
+
+async def test_a_charge_still_unwritten_when_the_process_stops_is_reported(caplog) -> None:
+    store, reserved = _Store(), model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(0.0,))
+    store.write_failures = [OSError("away")] * 10_000
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        await _send(store, _Provider(), reserved=reserved, pending=pending)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        # Still trying, and still counted against the owner's budget.
+        assert pending.count == 1 and reserved.held(_BUDGET) == _COST
+        await pending.close()
+    assert store.charges == []
+    [lost] = _events(caplog.records, "agent_model_relay_charge_lost")
+    assert (lost.levelno, lost.user_id, lost.cost_microusd) == (logging.ERROR, "user_1", _COST)
+    assert pending.count == 0 and reserved.held(_BUDGET) == 0
+
+
+async def test_a_charge_whose_outcome_is_unknown_is_reported_not_written_twice(caplog) -> None:
+    store, reserved = _Store(), model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(0.0,))
+    store.write_failures = [ChargeOutcomeUnknown("connection lost after sending")]
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        response = await _send(store, _Provider(), reserved=reserved, pending=pending)
+    assert response.status_code == 200
+    assert pending.count == 0 and store.charges == [] and store.write_failures == []
+    [unknown] = _events(caplog.records, "agent_model_relay_charge_unknown")
+    assert (unknown.levelno, unknown.cost_microusd) == (logging.ERROR, _COST)
+    assert reserved.held(_BUDGET) == 0
+
+
+async def test_closing_with_nothing_waiting_returns_at_once() -> None:
+    pending = model_relay.PendingCharges(model_relay.Reserved())
+    await asyncio.wait_for(pending.close(), 1)
+    assert pending.count == 0
 
 
 async def test_a_base_url_that_stopped_resolving_publicly_is_never_dialled() -> None:
@@ -679,7 +1035,7 @@ async def test_a_base_url_that_stopped_resolving_publicly_is_never_dialled() -> 
     response = await _send(store, provider, guard=blocked)
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "provider_unreachable"
-    assert provider.requests == [] and store.used == 0
+    assert provider.requests == [] and store.charges == []
 
 
 async def test_the_provider_refusing_the_deployments_key_is_not_the_clis_401() -> None:
@@ -690,7 +1046,7 @@ async def test_the_provider_refusing_the_deployments_key_is_not_the_clis_401() -
     # Nothing the provider said about the key is passed on.
     assert _KEY not in response.text
     assert store.key_refused == [True]
-    assert store.used == 0 and store.refunds == 1
+    assert store.charges == []
 
 
 async def test_a_key_that_works_again_clears_the_warning() -> None:
@@ -714,7 +1070,7 @@ async def test_an_owner_at_their_concurrency_cap_is_asked_to_retry() -> None:
     assert response.status_code == 429
     assert response.headers["retry-after"] == "1"
     assert response.json()["error"]["code"] == "concurrency_limited"
-    assert provider.requests == [] and store.used == 0
+    assert provider.requests == [] and store.charges == []
     # The refused request took nothing.
     assert slots.held(user) == 1
 
@@ -731,21 +1087,90 @@ async def test_a_model_at_its_deployment_wide_cap_is_asked_to_retry() -> None:
     assert other.status_code == 200
 
 
+async def test_a_request_in_flight_holds_its_estimate_of_the_budget_until_it_ends() -> None:
+    body = _Caller.BODY
+    estimate = _estimate(body)["cost_microusd"]
+    assert estimate > 0
+    store, reserved = _Store(), model_relay.Reserved()
+    reached, answer = asyncio.Event(), asyncio.Event()
+
+    async def slow(request: httpx.Request) -> httpx.Response:
+        reached.set()
+        await answer.wait()
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            stream=httpx.ByteStream(json.dumps(_ANSWER).encode()),
+        )
+
+    async with _upstream(slow) as upstream:
+        caller = _Caller(_app(store, upstream, reserved=reserved))
+        await asyncio.wait_for(reached.wait(), 5)
+        assert reserved.held(_BUDGET) == estimate and store.charges == []
+
+        answer.set()
+        assert await caller.ended() is None
+    # Its real cost has replaced what it held.
+    assert reserved.held(_BUDGET) == 0
+    assert store.charges == [_charge(_COST, prompt=1000, output=100)]
+
+
+async def test_a_request_holds_no_more_than_the_budget_has_left() -> None:
+    body = _Caller.BODY
+    estimate = _estimate(body)["cost_microusd"]
+    store, reserved = _Store(budget=estimate + 5, spent=10), model_relay.Reserved()
+    reached = asyncio.Event()
+
+    async def silent(request: httpx.Request) -> httpx.Response:
+        reached.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    async with _upstream(silent) as upstream:
+        caller = _Caller(_app(store, upstream, reserved=reserved))
+        await asyncio.wait_for(reached.wait(), 5)
+        assert reserved.held(_BUDGET) == estimate - 5
+        caller.left.set()
+        await caller.ended()
+    assert reserved.held(_BUDGET) == 0
+
+
+async def test_a_budget_spoken_for_by_requests_in_flight_asks_the_next_to_retry() -> None:
+    """Not used up, so not the 403 that ends a turn: what is in flight may cost less."""
+    store, provider, reserved = _Store(budget=1000, spent=400), _Provider(), model_relay.Reserved()
+    reserved.hold(_BUDGET, 600)
+    slots = model_relay.Slots()
+
+    response = await _send(store, provider, slots=slots, reserved=reserved)
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "2"
+    assert response.json()["error"]["code"] == "budget_reserved"
+    assert provider.requests == [] and store.charges == []
+    # The refused request took nothing and held nothing.
+    assert _slots_held(slots) == 0 and reserved.held(_BUDGET) == 600
+
+    # Once what was in flight has ended, the same request is served.
+    reserved.free(_BUDGET, 600)
+    assert (await _send(store, provider, slots=slots, reserved=reserved)).status_code == 200
+
+
 @pytest.mark.parametrize(
     "provider",
     [_Provider(), _Provider(500), _Provider(401), _Provider(fail=True)],
     ids=["served", "provider-error", "key-refused", "unreachable"],
 )
-async def test_every_ending_gives_its_slots_back(provider) -> None:
-    store, slots = _Store(), model_relay.Slots()
-    await _send(store, provider, slots=slots)
+async def test_every_ending_gives_its_slots_and_its_reservation_back(provider) -> None:
+    store, slots, reserved = _Store(), model_relay.Slots(), model_relay.Reserved()
+    await _send(store, provider, slots=slots, reserved=reserved)
     assert slots.held(("user", _CONNECTION, "user_1")) == 0
     assert slots.held(("model", _CONNECTION, "model-1")) == 0
+    assert reserved.held(_BUDGET) == 0
 
 
 async def test_a_caller_that_leaves_before_the_answer_ends_its_request() -> None:
     """A stopped turn's request is not waited on, at the provider or in the caps."""
-    store, slots = _Store(), model_relay.Slots()
+    store, slots, reserved = _Store(), model_relay.Slots(), model_relay.Reserved()
     reached, abandoned = asyncio.Event(), asyncio.Event()
 
     async def silent(request: httpx.Request) -> httpx.Response:
@@ -758,16 +1183,16 @@ async def test_a_caller_that_leaves_before_the_answer_ends_its_request() -> None
         raise AssertionError("unreachable")
 
     async with _upstream(silent) as upstream:
-        caller = _Caller(_app(store, upstream, slots=slots))
+        caller = _Caller(_app(store, upstream, slots=slots, reserved=reserved))
         await asyncio.wait_for(reached.wait(), 5)
         assert _slots_held(slots) == 2 and not caller.call.done()
 
         caller.left.set()
         assert await caller.ended() is None
     assert abandoned.is_set()
-    assert _slots_held(slots) == 0
-    # The provider had the request, so it stays counted.
-    assert store.used == 1 and store.refunds == 0
+    assert _slots_held(slots) == 0 and reserved.held(_BUDGET) == 0
+    # The provider had the request and may bill for it: charged by estimate.
+    assert store.charges == [_estimate(_Caller.BODY)]
 
 
 async def test_a_caller_that_stays_is_answered_however_long_the_provider_takes() -> None:
@@ -791,14 +1216,16 @@ async def test_a_caller_that_stays_is_answered_however_long_the_provider_takes()
 
 @pytest.mark.parametrize("spec_version", ["2.3", "2.4"])
 async def test_a_caller_that_leaves_mid_answer_closes_the_providers_stream(spec_version) -> None:
-    store, slots = _Store(), model_relay.Slots()
+    store, slots, reserved = _Store(), model_relay.Slots(), model_relay.Reserved()
     stream = _OpenStream(then=b"data: more\n\n")
 
     async def streaming(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
 
     async with _upstream(streaming) as upstream:
-        caller = _Caller(_app(store, upstream, slots=slots), spec_version=spec_version)
+        caller = _Caller(
+            _app(store, upstream, slots=slots, reserved=reserved), spec_version=spec_version
+        )
         await asyncio.wait_for(caller.heard.wait(), 5)
         assert _slots_held(slots) == 2 and not stream.closed
 
@@ -808,41 +1235,81 @@ async def test_a_caller_that_leaves_mid_answer_closes_the_providers_stream(spec_
             stream.go.set()
         await caller.ended()
     assert stream.closed
-    assert _slots_held(slots) == 0
+    assert _slots_held(slots) == 0 and reserved.held(_BUDGET) == 0
+    # The answer never got as far as its usage: charged by estimate.
+    assert store.charges == [_estimate(_Caller.BODY)]
+
+
+async def test_a_chat_stream_cut_off_is_charged_the_output_it_had_produced() -> None:
+    """As the gateway bills a stream its client closed: the prompt, and what was produced."""
+    store, reserved = _Store(), model_relay.Reserved()
+    produced = _event_stream({"choices": [{"delta": {"content": "x" * 400}}]})
+
+    class _Begun(_OpenStream):
+        async def __aiter__(self):
+            yield produced
+            await self.go.wait()
+
+    stream = _Begun()
+
+    async def streaming(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
+
+    async with _upstream(streaming) as upstream:
+        caller = _Caller(_app(store, upstream, reserved=reserved))
+        await asyncio.wait_for(caller.heard.wait(), 5)
+        caller.left.set()
+        await caller.ended()
+    assert stream.closed and reserved.held(_BUDGET) == 0
+    # 400 bytes of answer at four a token.
+    assert store.charges == [_estimate(_Caller.BODY, output=100)]
+
+
+async def test_an_answer_cut_short_is_charged_what_it_had_named_by_then() -> None:
+    """A Messages stream names its input on the first event; a Stop does not lose that."""
+    store, reserved = _Store(), model_relay.Reserved()
+    first = _event_stream(
+        {
+            "type": "message_start",
+            "message": {"usage": {"input_tokens": 200, "cache_read_input_tokens": 8_000}},
+        }
+    )
+
+    class _Begun(_OpenStream):
+        async def __aiter__(self):
+            yield first
+            await self.go.wait()
+
+    stream = _Begun()
+
+    async def streaming(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
+
+    async with _upstream(streaming) as upstream:
+        caller = _Caller(_app(store, upstream, reserved=reserved), path="/v1/messages")
+        await asyncio.wait_for(caller.heard.wait(), 5)
+        caller.left.set()
+        await caller.ended()
+    assert stream.closed and reserved.held(_BUDGET) == 0
+    # 200 plain at $2 and 8,000 read at $0.50; no output had been named yet.
+    assert store.charges == [_charge(4_400, prompt=8_200, cached=8_000, output=0, estimated=True)]
 
 
 async def test_an_answer_the_provider_breaks_off_is_closed_and_gives_its_slots_back() -> None:
-    store, slots = _Store(), model_relay.Slots()
+    store, slots, reserved = _Store(), model_relay.Slots(), model_relay.Reserved()
     stream = _OpenStream(then=httpx.ReadError("connection reset"))
 
     async def streaming(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, stream=stream)
 
     async with _upstream(streaming) as upstream:
-        caller = _Caller(_app(store, upstream, slots=slots))
+        caller = _Caller(_app(store, upstream, slots=slots, reserved=reserved))
         await asyncio.wait_for(caller.heard.wait(), 5)
         stream.go.set()
         assert isinstance(await caller.ended(), httpx.ReadError)
     assert stream.closed
-    assert _slots_held(slots) == 0
-
-
-async def test_a_spent_allowance_found_at_the_count_gives_its_slots_back() -> None:
-    """Two requests pass the first read together; the count lets only one through."""
-    store, provider, slots = _Store(limit=1), _Provider(), model_relay.Slots()
-    real = store.resolve_model_relay_caller
-
-    async def stale(**kwargs):
-        caller = await real(**kwargs)
-        caller["allowance"] = Allowance(limit=1, used=0)
-        return caller
-
-    store.resolve_model_relay_caller = stale  # type: ignore[method-assign]
-    store.used = 1
-    response = await _send(store, provider, slots=slots)
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "allowance_exhausted"
-    assert slots.held(("user", _CONNECTION, "user_1")) == 0 and provider.requests == []
+    assert _slots_held(slots) == 0 and reserved.held(_BUDGET) == 0
+    assert store.charges == [_estimate(_Caller.BODY)]
 
 
 # -- what is recorded ------------------------------------------------------------
@@ -862,9 +1329,18 @@ async def test_a_request_is_logged_by_who_and_what_never_by_content(caplog) -> N
         "model-1",
         200,
     )
-    logged = json.dumps({k: str(v) for k, v in record.__dict__.items()})
-    for never in (secret_prompt, _KEY, _placeholder()):
-        assert never not in logged
+    [charged] = [r for r in caplog.records if r.getMessage() == "agent_model_relay_charged"]
+    assert (charged.job_id, charged.user_id, charged.model) == ("ajob_1", "user_1", "model-1")
+    assert (charged.cost_microusd, charged.input_tokens, charged.output_tokens) == (
+        _COST,
+        1000,
+        100,
+    )
+    assert charged.estimated is False
+    for logged_record in (record, charged):
+        logged = json.dumps({k: str(v) for k, v in logged_record.__dict__.items()})
+        for never in (secret_prompt, _KEY, _placeholder()):
+            assert never not in logged
 
 
 async def test_without_a_database_the_relay_refuses() -> None:

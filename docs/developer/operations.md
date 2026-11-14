@@ -4450,33 +4450,66 @@ host's `model-tunnel` (at the connection's own path) and holds a residency
 placeholder (`amd.`) as its API key. The tunnel ends at the control plane's
 model relay, a listener of its own (`create_model_relay_app`, port 8002). On
 every request the relay resolves the placeholder to the running turn it
-speaks for, checks the turn runs on that connection and its owner may send
-the model another request today, and forwards the request to the connection's
-Base URL with the deployment's key. It forwards only the inference and
-model-listing paths an agent CLI calls, for the models the connection lists.
+speaks for, checks the turn runs on that connection and its owner has budget
+left today, forwards the request to the connection's Base URL with the
+deployment's key, and charges the owner what the answer says it used. It
+forwards only the inference and model-listing paths an agent CLI calls, for
+the models the connection lists.
 Stop, a finished turn, a rotated residency and a removed host take effect on
 the next request; nothing has to be revoked at the provider.
 
-**Allowances.** Each model has a default: how many requests each owner may
-send it per UTC day. Empty is unlimited; `0` offers the model only to accounts
-given a number of their own, which an administrator sets per account and
-model on the same page. A model with no default is offered to nobody, and a
-connection cannot be enabled until every model has one. A request is one
-inference call the relay let through, so one turn spends many. A request the
-provider did not serve (unreachable, `429`, `5xx`) is not counted. When an
-allowance is used up the relay answers `403`, the turn ends with the agent's
-own error, and new turns on that model are refused until 00:00 UTC. Two more
-caps limit requests in flight: per owner (4 by default) and, optionally, per
-model across everyone. Both are kept in the relay process, so they apply per
-replica of it.
+**Budgets.** Each connection has a default daily budget: what each owner may
+spend per UTC day on its models together, in US dollars. `0` offers the
+connection only to accounts given a budget of their own, which an
+administrator sets per account on the same page. A connection with no budget
+chosen offers nothing and cannot be enabled. When a budget is used up the
+relay answers `403`, the turn ends with the agent's own error, and new turns
+on that connection's models are refused until 00:00 UTC.
 
-**What it is not.** There is no token or dollar accounting here: a request
-may be small or large. Give the deployment's key a budget and a model list at
-the provider; an owner who sends many large requests can exhaust that budget
-for everyone before running out of requests. A connection may name an
-**end-user header**: the relay then sends, with every request, an opaque tag
-for the owner's account (a keyed digest, not the account id or email), which
-a provider that supports it can attribute or limit by.
+**Prices.** Each model has an input price and an output price in US dollars
+per million tokens and, where the provider prices them apart, a price for
+tokens read from its prompt cache and one for tokens written to it. Without
+a cache price those tokens are charged at the input price. Enter the prices
+the provider charges for the deployment's key; a model may be free (`0`). A
+model with no prices is offered to nobody, and a connection cannot be enabled
+until every model has them. A model may also be marked for named accounts
+only; an administrator then offers it per account, and can withhold any model
+from one account the same way.
+
+**What a request is charged.** When an answer ends, the relay reads the usage
+record the provider put in it (the three inference APIs each carry one, in a
+stream on its last events) and adds the tokens at the model's prices to what
+the owner spent today. The cost is computed as the inference gateway
+computes it, step for step, rounded half up to a millionth of a dollar per
+request, and a test holds the two to the same micro-dollar. Output tokens include reasoning. An answer that named no
+usage, was cut short before it could (Stop, a dropped connection) or arrived
+in a content encoding the relay did not ask for is charged by estimate, as
+the gateway bills a stream its client closed: the request's text as input,
+and the text the answer had produced as output, at one token per four bytes;
+an image, an audio clip or a video in the request counts as 85, 200 or 1,000
+tokens whatever its size. The usage table counts those requests separately. A request the provider did not serve (unreachable, or answered
+with an error) costs nothing, and neither do listing models and counting
+tokens.
+
+**Requests in flight.** A cost is known only when an answer ends, so each
+request reserves its estimate of the owner's budget while it runs, and a
+request that finds the rest of the budget reserved is answered `429` and
+retried by the agent. A cost written while another request was reading what
+the owner spent counts for that request too, so none slips between the read
+and the reservations. Two more caps limit requests in flight: per owner (4 by
+default) and, optionally, per model across everyone. All of this is kept in
+the relay process, so it applies per replica of it, and an owner can pass a
+budget by about what their requests in flight cost.
+
+**What it is not.** This is an allowance, not a bill. The cost is the relay's
+arithmetic on the prices you entered and the tokens the provider reported; it
+can differ from what the provider charges, for example when the provider
+prices by time of day or routes a model to endpoints with different prices.
+Give the deployment's key a budget and a model list at the provider as well:
+that remains the limit on what the deployment spends. A connection may name
+an **end-user header**: the relay then sends, with every request, an opaque
+tag for the owner's account (a keyed digest, not the account id or email),
+which a provider that supports it can attribute or limit by.
 
 To turn it on:
 
@@ -4501,7 +4534,8 @@ To turn it on:
    ([rolling deployment order](#rolling-deployment-order)).
 4. In **Admin → Settings → Models**, add the connection. The save verifies
    every model with the key, as an owner's save does, and stores nothing if
-   one fails. Set each model's default allowance, then enable it.
+   one fails. Choose the daily budget per account and set each model's
+   prices, then enable it.
 
 Things to know when operating it:
 
@@ -4509,11 +4543,23 @@ Things to know when operating it:
   uses the new one. A new Base URL, disabling and deleting close every member
   process on the connection, as for an owner's connection.
 - **The relay is on the path.** Requests and answers of provided models pass
-  through the control plane; nothing of them is stored or logged (one line
-  per request: job, account id, model, status, duration). Restarting the
-  `model-relay` service, which a control-plane release does, cuts answers in
-  flight; agent CLIs retry. Turns on owners' own connections do not pass
-  through it.
+  through the control plane; nothing of them is stored or logged. A request
+  leaves one line (job, account id, model, status, duration) and, when it is
+  charged, a second (`agent_model_relay_charged`: its tokens, its cost and
+  whether that was an estimate). Restarting the `model-relay` service, which a
+  control-plane release does, cuts answers in flight; agent CLIs retry, and
+  each answer that was cut is charged by estimate. Turns on owners' own
+  connections do not pass through it.
+- **A cost that could not be written.** If the database is away when an
+  answer ends, the answer is still relayed and its cost is kept: it counts
+  against the owner's budget and is written again after 1, 2, 5, 10, 30, 60
+  and 120 seconds and then every 5 minutes until it lands
+  (`agent_model_relay_charge_retry`, then `agent_model_relay_charged_late`).
+  A relay process that stops tries each cost it still keeps once more, and
+  logs `agent_model_relay_charge_lost` with the amount for any that still
+  fails. A write whose connection broke after the statement was sent may
+  have landed and is not written again: `agent_model_relay_charge_unknown`,
+  with the amount.
 - **A refused key.** If the provider answers `401` to the deployment's key,
   the relay answers `502` to the agent, logs
   `agent_model_relay_key_refused` and the admin page shows since when. It
@@ -4524,10 +4570,12 @@ Things to know when operating it:
   refuses its turns with that reason.
 - **`AGENT_MODEL_CONNECTIONS_ENABLED`** switches provided models off together
   with owners' connections.
-- **Rolling back.** Downgrading `0116` refuses while a provided connection
-  exists or any turn or waiting message names one. The previous release reads
-  such a turn's source as a connection it cannot find and refuses its next
-  message.
+- **Rolling back.** Downgrading `0120` drops prices, budgets and recorded
+  costs; a release from before it limits requests per model instead, and
+  offers a model priced since then to nobody until it is given a request
+  limit. Downgrading `0118` refuses while a provided connection exists or any
+  turn or waiting message names one. The release before that reads such a
+  turn's source as a connection it cannot find and refuses its next message.
 - **Claude Code and the first-party host.** Claude Code decides some features
   from the host name it is pointed at. Through the relay it sees the relay's
   name, so a provided connection to its vendor's own API behaves as any

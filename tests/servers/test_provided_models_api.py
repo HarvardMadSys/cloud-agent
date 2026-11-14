@@ -1,4 +1,4 @@
-"""Provided models, as an owner meets them: offered with no setup, run within an allowance."""
+"""Provided models, as an owner meets them: offered with no setup, run within a daily budget."""
 
 from __future__ import annotations
 
@@ -42,13 +42,24 @@ def _provided_row(**changes: Any) -> dict[str, Any]:
 
 
 class _Store(FakeStorage):
-    """The jobs fake, with one provided connection and this owner's allowances on it."""
+    """The jobs fake, with one provided connection and this owner's budget on it.
+
+    $5 a day, $2 of it spent, and ``kimi-x`` withheld from this owner.
+    """
 
     def __init__(self, *, own_connection: bool = True) -> None:
         super().__init__()
         self.provided: dict[str, Any] | None = _provided_row()
-        self.allowances = {"glm-5.1": Allowance(limit=100, used=40), "kimi-x": Allowance(limit=0)}
+        self.budget, self.spent = 5_000_000, 2_000_000
+        self.withheld = {"kimi-x"}
         self.own_connection = own_connection
+
+    def _allowance(self, model: str) -> Allowance:
+        return Allowance(
+            offered=model not in self.withheld and self.budget > 0,
+            budget_microusd=self.budget,
+            spent_microusd=self.spent,
+        )
 
     async def list_model_connections(self, *, user_id):
         return [connection_row(user_id)] if self.own_connection else []
@@ -56,13 +67,20 @@ class _Store(FakeStorage):
     async def operator_sources_for_user(self, *, user_id):
         if self.provided is None or not self.provided["enabled"]:
             return []
-        return [{**self.provided, "allowances": dict(self.allowances)}]
+        return [
+            {
+                **self.provided,
+                "allowances": {model: self._allowance(model) for model in self.provided["models"]},
+                "budget_microusd": self.budget,
+                "spent_microusd": self.spent,
+            }
+        ]
 
     async def operator_connection(self, *, connection_id):
         return self.provided if connection_id == PROVIDED else None
 
     async def operator_allowance(self, *, connection_id, user_id, model):
-        return self.allowances.get(model, Allowance(limit=0))
+        return self._allowance(model)
 
 
 async def _config(store: _Store) -> dict[str, Any]:
@@ -103,7 +121,12 @@ async def test_an_owner_with_no_connection_of_their_own_can_start_at_once() -> N
     # A model withheld from this owner is not listed at all.
     assert source["models"] == ["glm-5.1"]
     assert list(source["model_runtimes"]) == ["glm-5.1"]
-    assert source["allowances"] == {"glm-5.1": {"daily_requests": 100, "used_today": 40}}
+    # One budget for the source's models together, and what was spent of it today.
+    assert (source["daily_budget_microusd"], source["spent_today_microusd"]) == (
+        5_000_000,
+        2_000_000,
+    )
+    assert "allowances" not in source
     assert datetime.fromisoformat(source["resets_at"]) > datetime.now(UTC)
     # Nothing of the connection's endpoint or key is described to an owner.
     assert "base_url" not in source and "api_key" not in str(config)
@@ -144,13 +167,14 @@ async def test_a_new_task_starts_where_the_last_one_ran_whichever_kind_that_was(
     )
 
 
-async def test_a_spent_default_is_not_preselected() -> None:
+async def test_a_default_on_a_spent_budget_is_not_preselected() -> None:
     store = _Store(own_connection=False)
-    store.allowances["glm-5.1"] = Allowance(limit=100, used=100)
+    store.spent = store.budget
     config = await _config(store)
     assert config["default_model"] is None
     # Still listed, with its numbers, so the composer can say when it starts over.
-    assert config["provided_sources"][0]["allowances"]["glm-5.1"]["used_today"] == 100
+    [source] = config["provided_sources"]
+    assert source["spent_today_microusd"] == source["daily_budget_microusd"] == 5_000_000
 
 
 async def test_nothing_is_offered_while_connections_are_switched_off(monkeypatch) -> None:
@@ -160,9 +184,11 @@ async def test_nothing_is_offered_while_connections_are_switched_off(monkeypatch
     assert config["model_connection_required"] is True
 
 
-async def test_a_disabled_or_fully_withheld_source_is_not_listed() -> None:
+@pytest.mark.parametrize("change", [{"withheld": {"glm-5.1", "kimi-x"}}, {"budget": 0}])
+async def test_a_source_with_nothing_for_this_owner_is_not_listed(change) -> None:
     store = _Store(own_connection=False)
-    store.allowances = {"glm-5.1": Allowance(limit=0), "kimi-x": Allowance(limit=0)}
+    for name, value in change.items():
+        setattr(store, name, value)
     config = await _config(store)
     assert config["provided_sources"] == [] and config["model_connection_required"] is True
 
@@ -178,8 +204,9 @@ async def test_a_task_runs_on_a_provided_model_by_naming_its_source() -> None:
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
-        ({"allowance": Allowance(limit=100, used=100)}, "allowance_exhausted"),
-        ({"allowance": Allowance(limit=0)}, "allowance_none"),
+        ({"spent": 5_000_000}, "allowance_exhausted"),
+        ({"withheld": {"glm-5.1"}}, "allowance_none"),
+        ({"budget": 0}, "allowance_none"),
         ({"provided": {"enabled": False}}, "provided_unavailable"),
         ({"provided": {"models": ["kimi-x"]}}, "provided_model_unavailable"),
         ({"provided": None}, "provided_unavailable"),
@@ -187,8 +214,9 @@ async def test_a_task_runs_on_a_provided_model_by_naming_its_source() -> None:
 )
 async def test_a_task_the_source_cannot_run_is_refused_with_the_reason(change, reason) -> None:
     store = _Store()
-    if "allowance" in change:
-        store.allowances["glm-5.1"] = change["allowance"]
+    if "provided" not in change:
+        for name, value in change.items():
+            setattr(store, name, value)
     elif change["provided"] is None:
         store.provided = None
     else:
@@ -210,11 +238,16 @@ async def test_another_owners_source_id_shape_is_still_validated() -> None:
 
 async def test_sources_are_narrowed_to_what_this_owner_may_use() -> None:
     store = _Store()
-    store.allowances["kimi-x"] = Allowance(limit=None, used=7)
+    store.withheld = set()
     [source] = await provided_sources(store, user_id=_OWNER)
     assert source["models"] == ["glm-5.1", "kimi-x"]
-    assert source["allowances"]["kimi-x"] == {"daily_requests": None, "used_today": 7}
+    assert (source["daily_budget_microusd"], source["spent_today_microusd"]) == (
+        5_000_000,
+        2_000_000,
+    )
     assert provided_default([source]) == ("glm-5.1", PROVIDED)
+    # A budget used up to the last millionth starts nothing either.
+    assert provided_default([{**source, "spent_today_microusd": 5_000_000}]) is None
     # Not the default connection, or a default model this owner cannot run: no start.
     assert provided_default([{**source, "is_default": False}]) is None
     assert provided_default([{**source, "default_model": None}]) is None

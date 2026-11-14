@@ -457,9 +457,14 @@ describe('local account model onboarding', () => {
 
 describe('models the deployment provides', () => {
   const PROVIDED = 'oconn_0123456789abcdef0123456789abcdef';
+  const SPENT = 'oconn_fedcba9876543210fedcba9876543210';
   const RESETS = '2999-01-01T00:00:00Z';
 
-  /** One provided source for Codex; `shared` is also on the owner's own connection. */
+  /**
+   * Two provided sources for Codex. The first has $3.20 left of today's $5.00;
+   * `shared` is also on the owner's own connection. The second has spent all
+   * of its budget for today.
+   */
   function provided(overrides: Partial<AgentConfigApi> = {}): AgentConfigApi {
     return config({
       default_model: 'house-fast',
@@ -470,20 +475,24 @@ describe('models the deployment provides', () => {
           name: 'House models',
           is_default: true,
           default_model: 'house-fast',
-          models: ['house-fast', 'shared', 'house-spent'],
-          model_runtimes: {
-            'house-fast': ['codex'],
-            shared: ['codex'],
-            'house-spent': ['codex'],
-          },
+          models: ['house-fast', 'shared'],
+          model_runtimes: { 'house-fast': ['codex'], shared: ['codex'] },
           model_efforts: {
             'house-fast': { codex: { status: 'supported', levels: ['low', 'high'] } },
           },
-          allowances: {
-            'house-fast': { daily_requests: 100, used_today: 58 },
-            shared: { daily_requests: null, used_today: 7 },
-            'house-spent': { daily_requests: 20, used_today: 20 },
-          },
+          daily_budget_microusd: 5_000_000,
+          spent_today_microusd: 1_800_000,
+          resets_at: RESETS,
+        },
+        {
+          id: SPENT,
+          name: 'Spent house',
+          is_default: false,
+          default_model: null,
+          models: ['house-spent', 'house-idle'],
+          model_runtimes: { 'house-spent': ['codex'], 'house-idle': ['codex'] },
+          daily_budget_microusd: 2_000_000,
+          spent_today_microusd: 2_000_000,
           resets_at: RESETS,
         },
       ],
@@ -495,8 +504,9 @@ describe('models the deployment provides', () => {
     hour: 'numeric',
     minute: '2-digit',
   });
+  const usedUp = `Today’s budget is used up · resets at ${reset}`;
 
-  it('groups them apart from the owner’s connections, with what is left today', async () => {
+  it('groups them apart from the owner’s connections, with what is left of today’s budget', async () => {
     vi.mocked(getAgentConfig).mockResolvedValue(provided());
     render(<TaskComposer />);
     await chooseRepository();
@@ -508,10 +518,12 @@ describe('models the deployment provides', () => {
         .getAllByRole('option')
         .map((option) => option.textContent),
     ).toEqual([
-      'house-fast 42 left today',
+      // One budget for a source's models together: both say what is left of it.
+      'house-fast $3.20 left today',
       // Listed by the owner's connection too, so each says where it runs.
-      'shared · House models',
-      `house-spent (used up today) No requests left today · resets at ${reset}`,
+      'shared · House models $3.20 left today',
+      `house-spent (used up today) ${usedUp}`,
+      `house-idle (used up today) ${usedUp}`,
     ]);
     const own = screen.getByRole('group', { name: 'Your connections' });
     expect(
@@ -519,11 +531,14 @@ describe('models the deployment provides', () => {
         .getAllByRole('option')
         .map((option) => option.textContent),
     ).toEqual(['shared · My provider', 'mine']);
-    // Used up for today: shown, with when it comes back, and not selectable.
-    const spent = within(house).getByRole('option', { name: /house-spent/ });
-    expect(spent).toHaveAttribute('aria-disabled', 'true');
-    fireEvent.click(spent);
-    expect(screen.getByRole('dialog', { name: 'Model' })).toBeInTheDocument();
+    // Used up for today: every model of that source is shown, with when it comes back,
+    // and none can be selected.
+    for (const name of [/house-spent/, /house-idle/]) {
+      const spent = within(house).getByRole('option', { name });
+      expect(spent).toHaveAttribute('aria-disabled', 'true');
+      fireEvent.click(spent);
+      expect(screen.getByRole('dialog', { name: 'Model' })).toBeInTheDocument();
+    }
   });
 
   it('runs an owner with no connection of their own on a provided model, with no setup', async () => {
@@ -551,16 +566,16 @@ describe('models the deployment provides', () => {
     });
   });
 
-  it('holds Run on a provided model with nothing left, and says when it resets', async () => {
+  it('holds Run on a provided model whose budget is used up, and says when it resets', async () => {
     vi.mocked(getAgentConfig).mockResolvedValue(
-      provided({ default_model: 'house-spent', default_model_connection_id: PROVIDED }),
+      provided({ default_model: 'house-spent', default_model_connection_id: SPENT }),
     );
     render(<TaskComposer />);
     await chooseRepository();
     choose('Agent', 'Codex');
     expect(
       await screen.findByText(
-        `house-spent has no requests left today on this deployment. The allowance resets at ${reset}. Choose another model to continue.`,
+        `Today’s budget for house-spent on this deployment is used up. It resets at ${reset}. Choose a model that is still available to continue.`,
       ),
     ).toBeVisible();
     expect(screen.getByLabelText('Model')).toHaveAccessibleDescription(
@@ -570,7 +585,7 @@ describe('models the deployment provides', () => {
     expect(screen.getByRole('button', { name: /^Run/ })).toBeDisabled();
     // Another model, provided or not, lets it run; nothing was switched for the owner.
     choose('Model', /^house-fast/);
-    expect(screen.queryByText(/has no requests left today/)).toBeNull();
+    expect(screen.queryByText(/on this deployment is used up/)).toBeNull();
     await waitFor(() => expect(screen.getByRole('button', { name: /^Run/ })).toBeEnabled());
   });
 });
