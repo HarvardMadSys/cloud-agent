@@ -418,6 +418,70 @@ def test_builder_configuration_is_disposable_for_prs_and_persistent_for_pushes(
         assert outputs["BUILDER"] == "ci-trusted-runner"
 
 
+@pytest.mark.parametrize("job", ["artifacts", "mcp"])
+def test_a_persistent_builder_caps_its_cache_and_is_recreated_when_the_cap_changes(
+    tmp_path: Path, job: str
+) -> None:
+    """buildkitd keeps up to 100GB per builder by default; one per runner filled a disk."""
+    script = next(
+        step["run"]
+        for step in _document()["jobs"][job]["steps"]
+        if step.get("name") == "Reuse this runner's builder, or make one"
+    ).replace("${{ matrix.artifact.name }}", "sandbox")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "docker-calls"
+    docker = bin_dir / "docker"
+    # Records each call; `buildx inspect` fails until a builder has been created.
+    docker.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> {shlex.quote(str(calls))}\n'
+        f'if [ "$1 $2" = "buildx create" ]; then touch {shlex.quote(str(tmp_path / "made"))}; fi\n'
+        f'if [ "$1 $2" = "buildx inspect" ] && [ ! -e {shlex.quote(str(tmp_path / "made"))} ]; '
+        "then exit 1; fi\n"
+        "exit 0\n"
+    )
+    docker.chmod(0o755)
+    runner_workspace = tmp_path / "persistent-runner" / "work"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "GITHUB_EVENT_NAME": "push",
+        "GITHUB_REPOSITORY": "HarvardMadSys/cloud-agent",
+        "GITHUB_RUN_ID": "123",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_ENV": str(tmp_path / "github-env"),
+        "RUNNER_TEMP": str(tmp_path / "job-temp"),
+        "RUNNER_WORKSPACE": str(runner_workspace),
+        "RUNNER_NAME": "trusted-runner",
+    }
+    config = runner_workspace.parent / "buildx" / "trusted-runner" / "buildkitd.toml"
+
+    def run() -> list[str]:
+        calls.write_text("")
+        subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, check=True)
+        return calls.read_text().splitlines()
+
+    first = run()
+    assert 'maxUsedSpace = "20GB"' in config.read_text()
+    create = next(call for call in first if call.startswith("buildx create"))
+    assert f"--buildkitd-config {config}" in create
+
+    # The same cap again: the warm builder is kept.
+    assert not [call for call in run() if call.startswith("buildx rm")]
+
+    # A builder made under another cap is dropped, so the new one takes effect.
+    config.write_text(config.read_text().replace("20GB", "100GB"))
+    assert "buildx rm ci-trusted-runner" in run()
+    assert 'maxUsedSpace = "20GB"' in config.read_text()
+
+
+def test_the_test_database_leaves_no_volume_on_a_persistent_runner() -> None:
+    """postgres declares its data directory a volume; the runner removes services without it."""
+    service = _document()["jobs"]["test-db"]["services"]["postgres"]
+    assert "--tmpfs /var/lib/postgresql/data" in service["options"]
+
+
 def test_pull_request_builder_is_always_removed_after_the_artifact_job() -> None:
     """Whatever happened, on any persistent runner. A hosted VM is deleted with it."""
     steps = _document()["jobs"]["artifacts"]["steps"]

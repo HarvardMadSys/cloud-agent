@@ -589,11 +589,17 @@ jobs:
         # 10.3s to healthy at `10s`, 2.5s at `1s` — the server is ready in
         # about two. `pg_isready` is a connect-and-exit, so probing it every
         # second costs nothing worth counting.
+        #
+        # The data directory on tmpfs. postgres:15 declares it a volume, and
+        # the runner removes a service container without its volumes, so on a
+        # persistent runner every job left a database volume behind: 30 to 150
+        # a day on spark2. A mount at that path means no volume is made.
         options: >-
           --health-cmd pg_isready
           --health-interval 1s
           --health-timeout 5s
           --health-retries 15
+          --tmpfs /var/lib/postgresql/data
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -1214,9 +1220,28 @@ jobs:
                 2>/dev/null || true
             )
           fi
+          # A cap on the builder's cache. Left to its defaults buildkitd keeps up
+          # to 100GB per builder, and a persistent pool keeps one builder per
+          # runner: on spark2, 21 of them held 2TB of a 3.6TB disk (2026-11-14).
+          # buildkitd reads this when the builder is created, so a builder made
+          # under a different config is recreated, dropping its cache once.
+          buildkitd_config="${buildx_config}/buildkitd.toml"
+          printf '%s\n' \
+            '[worker.oci]' \
+            '  gc = true' \
+            '  reservedSpace = "2GB"' \
+            '  maxUsedSpace = "20GB"' \
+            '  minFreeSpace = "15%"' > "${buildkitd_config}.next"
+          if cmp -s "${buildkitd_config}.next" "${buildkitd_config}"; then
+            rm -f "${buildkitd_config}.next"
+          else
+            mv "${buildkitd_config}.next" "${buildkitd_config}"
+            docker buildx rm "${builder}" >/dev/null 2>&1 || true
+          fi
           if ! docker buildx inspect "${builder}" --bootstrap >/dev/null 2>&1; then
             docker buildx rm "${builder}" >/dev/null 2>&1 || true
-            docker buildx create --name "${builder}" --driver docker-container --use >/dev/null
+            docker buildx create --name "${builder}" --driver docker-container \
+              --buildkitd-config "${buildkitd_config}" --use >/dev/null
             docker buildx inspect "${builder}" --bootstrap >/dev/null
           fi
           docker buildx use "${builder}" >/dev/null
@@ -1506,9 +1531,28 @@ jobs:
                 2>/dev/null || true
             )
           fi
+          # A cap on the builder's cache. Left to its defaults buildkitd keeps up
+          # to 100GB per builder, and a persistent pool keeps one builder per
+          # runner: on spark2, 21 of them held 2TB of a 3.6TB disk (2026-11-14).
+          # buildkitd reads this when the builder is created, so a builder made
+          # under a different config is recreated, dropping its cache once.
+          buildkitd_config="${buildx_config}/buildkitd.toml"
+          printf '%s\n' \
+            '[worker.oci]' \
+            '  gc = true' \
+            '  reservedSpace = "2GB"' \
+            '  maxUsedSpace = "20GB"' \
+            '  minFreeSpace = "15%"' > "${buildkitd_config}.next"
+          if cmp -s "${buildkitd_config}.next" "${buildkitd_config}"; then
+            rm -f "${buildkitd_config}.next"
+          else
+            mv "${buildkitd_config}.next" "${buildkitd_config}"
+            docker buildx rm "${builder}" >/dev/null 2>&1 || true
+          fi
           if ! docker buildx inspect "${builder}" --bootstrap >/dev/null 2>&1; then
             docker buildx rm "${builder}" >/dev/null 2>&1 || true
-            docker buildx create --name "${builder}" --driver docker-container --use >/dev/null
+            docker buildx create --name "${builder}" --driver docker-container \
+              --buildkitd-config "${buildkitd_config}" --use >/dev/null
             docker buildx inspect "${builder}" --bootstrap >/dev/null
           fi
           docker buildx use "${builder}" >/dev/null
