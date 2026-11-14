@@ -67,7 +67,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.cookiejar import CookieJar, DefaultCookiePolicy
@@ -154,6 +154,9 @@ MAX_BODY_BYTES = 32 * 1024 * 1024
 #: Logged for a request whose caller left before the provider answered. Nobody
 #: reads the response.
 _CALLER_LEFT = 499
+#: How long a written cost stays in :class:`Reserved` for the checks whose
+#: read began before it landed: far longer than any read takes.
+LANDED_WINDOW_SECONDS = 300.0
 #: How long a request waits before retrying when the rest of its owner's
 #: budget is reserved by requests still in flight.
 _RESERVED_RETRY_AFTER = 2
@@ -222,11 +225,36 @@ class Reserved:
     estimate of the owner's budget here, so requests running together cannot
     each be admitted against the same remainder. Like :class:`Slots`, not
     shared between relay processes.
+
+    **A cost written lately** is kept here too, with when it landed
+    (:meth:`landed`). A request reads what its owner spent from the database,
+    then checks what is held here; a cost written in between, its hold given
+    back, would be in neither. So a check also counts every cost that landed
+    after its read began (:meth:`landed_since`), as the gateway's spend ledger
+    counts a write for a while after it lands. One that landed before the read
+    is in the read, and is not counted twice.
     """
 
     def __init__(self) -> None:
         """Start with nothing reserved."""
         self._held: Counter[tuple[str, ...]] = Counter()
+        self._landed: deque[tuple[float, tuple[str, ...], int]] = deque()
+
+    def landed(self, key: tuple[str, ...], amount: int) -> None:
+        """Note that ``amount`` micro-dollars under ``key`` were just written."""
+        now = time.monotonic()
+        if amount > 0:
+            self._landed.append((now, key, amount))
+        self._forget(now)
+
+    def landed_since(self, key: tuple[str, ...], since: float) -> int:
+        """Micro-dollars under ``key`` written at or after ``since`` (``time.monotonic``)."""
+        self._forget(time.monotonic())
+        return sum(amount for when, held, amount in self._landed if held == key and when >= since)
+
+    def _forget(self, now: float) -> None:
+        while self._landed and now - self._landed[0][0] > LANDED_WINDOW_SECONDS:
+            self._landed.popleft()
 
     def hold(self, key: tuple[str, ...], amount: int) -> None:
         """Reserve ``amount`` micro-dollars under ``key``."""
@@ -315,6 +343,8 @@ class _Admitted:
     reserved: Reserved
     pending: PendingCharges
     caller: dict[str, Any]
+    #: When the read of what the owner spent began (``time.monotonic``).
+    read_at: float = 0.0
     #: The path's route; ``None`` until the caller's connection is known.
     route: RelayRoute | None = None
     model: str | None = None
@@ -383,6 +413,9 @@ class _Admitted:
             )
             self.pending.keep(self.store, charge)
             return
+        # Before its hold is given back, so that the cost counts somewhere at
+        # every moment for a check that read the database before it landed.
+        self.reserved.landed(charge.budget_key, charge.cost_microusd)
         report("agent_model_relay_charged", charge)
 
     async def charge_estimate(self) -> None:
@@ -510,7 +543,11 @@ def _admit_inference(admitted: _Admitted, model: str | None, document: Any) -> N
         )
     admitted.keys, admitted.model, admitted.prices = keys, model, prices
     budget_key = ("budget", connection_id, user_id)
-    room = allowance.remaining_microusd - admitted.reserved.held(budget_key)
+    room = (
+        allowance.remaining_microusd
+        - admitted.reserved.held(budget_key)
+        - admitted.reserved.landed_since(budget_key, admitted.read_at)
+    )
     if room <= 0:
         # Not used up: what is left is spoken for by requests that have not
         # ended. Their real cost is usually less, so this one may fit then.
@@ -621,6 +658,9 @@ async def _admit(
     body = await _bounded_body(request) if request.method == "POST" else b""
     document = _decoded(body) if body else None
     model = _named_model(document)
+    # What the owner spent is read below; a cost that lands after this
+    # moment may be missing from it (``Reserved.landed_since``).
+    read_at = time.monotonic()
     caller = await store.operator_models.resolve_model_relay_caller(
         thread_id=residency["thread_id"],
         residency_generation=residency["residency_generation"],
@@ -631,7 +671,12 @@ async def _admit(
             401, "invalid_credential", "This chat has no running turn, so it cannot reach a model."
         )
     admitted = _Admitted(
-        store=store, slots=slots, reserved=reserved, pending=pending, caller=caller
+        store=store,
+        slots=slots,
+        reserved=reserved,
+        pending=pending,
+        caller=caller,
+        read_at=read_at,
     )
     connection = _live_connection(caller)
     route = relay_route(str(connection["base_url"]), request.method, raw_path)

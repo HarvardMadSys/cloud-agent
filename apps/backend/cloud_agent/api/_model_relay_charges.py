@@ -6,8 +6,9 @@ let the owner spend it again and leave the deployment paying for it. As the
 gateway keeps a cost it has not written yet (hybridInference's
 ``serving.spend_ledger``), the relay keeps it here: it stays counted against
 the owner's budget (:class:`~cloud_agent.api.model_relay.Reserved`) and is
-written again, a little later each time, until the write lands or the tries
-run out. Then it is reported with its amount.
+written again, a little later each time and then every few minutes, until the
+write lands. One that has not landed when the process stops is reported with
+its amount.
 
 Only a write that certainly did not land is tried again. One whose outcome is
 unknown (the connection broke after the statement was sent) may have been
@@ -28,7 +29,7 @@ from cloud_agent.logging_utils import get_logger
 from cloud_agent.ports.operator_models import ChargeOutcomeUnknown
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
     from datetime import date
 
     from cloud_agent.domain.model_usage import TokenUsage
@@ -36,9 +37,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("cloud_agent.model_relay")
 
-#: How long to wait before each further try, in seconds: about eleven minutes
-#: in all, longer than a database restart takes.
-RETRY_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 180.0, 240.0)
+#: How long to wait before each further try, in seconds; the last is repeated
+#: until the write lands, as the gateway's ledger keeps trying.
+RETRY_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0)
 
 
 class _ChargeStorage(Protocol):
@@ -107,9 +108,12 @@ class PendingCharges:
     """Charges not written yet: counted against their owners' budgets until they are."""
 
     def __init__(self, reserved: Any, *, delays: Sequence[float] = RETRY_DELAYS) -> None:
-        """Count kept charges in ``reserved``; wait ``delays`` before each further try."""
+        """Count kept charges in ``reserved``; wait ``delays`` before each further try.
+
+        After the last of ``delays``, it is waited again before every try.
+        """
         self._reserved = reserved
-        self._delays = tuple(delays)
+        self._delays = tuple(delays) or (0.0,)
         self._tasks: set[asyncio.Task[None]] = set()
         self._closing = False
 
@@ -145,9 +149,14 @@ class PendingCharges:
         finally:
             self._closing = False
 
+    def _waits(self) -> Iterator[float]:
+        yield from self._delays
+        while True:
+            yield self._delays[-1]
+
     async def _write_later(self, store: _ChargeStorage, charge: Charge) -> None:
         try:
-            for delay in self._delays:
+            for delay in self._waits():
                 try:
                     await asyncio.sleep(delay)
                 except asyncio.CancelledError:
@@ -159,7 +168,6 @@ class PendingCharges:
                     return
                 if await self._try(store, charge):
                     return
-            report("agent_model_relay_charge_lost", charge, error=True)
         except asyncio.CancelledError:
             report("agent_model_relay_charge_lost", charge, error=True)
             raise
@@ -180,6 +188,7 @@ class PendingCharges:
                 exc_info=True,
             )
             return False
+        self._reserved.landed(charge.budget_key, charge.cost_microusd)
         report("agent_model_relay_charged_late", charge)
         return True
 

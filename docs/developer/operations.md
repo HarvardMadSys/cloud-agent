@@ -4479,9 +4479,9 @@ from one account the same way.
 **What a request is charged.** When an answer ends, the relay reads the usage
 record the provider put in it (the three inference APIs each carry one, in a
 stream on its last events) and adds the tokens at the model's prices to what
-the owner spent today. The formula and its rounding (half up to a millionth
-of a dollar per request) are the inference gateway's own, and so are the cases
-it is tested with. Output tokens include reasoning. An answer that named no
+the owner spent today. The cost is computed as the inference gateway
+computes it, step for step, rounded half up to a millionth of a dollar per
+request, and a test holds the two to the same micro-dollar. Output tokens include reasoning. An answer that named no
 usage, was cut short before it could (Stop, a dropped connection) or arrived
 in a content encoding the relay did not ask for is charged by estimate, as
 the gateway bills a stream its client closed: the request's text as input,
@@ -4494,9 +4494,11 @@ tokens.
 **Requests in flight.** A cost is known only when an answer ends, so each
 request reserves its estimate of the owner's budget while it runs, and a
 request that finds the rest of the budget reserved is answered `429` and
-retried by the agent. Two more caps limit requests in flight: per owner (4 by
-default) and, optionally, per model across everyone. All three are kept in
-the relay process, so they apply per replica of it, and an owner can pass a
+retried by the agent. A cost written while another request was reading what
+the owner spent counts for that request too, so none slips between the read
+and the reservations. Two more caps limit requests in flight: per owner (4 by
+default) and, optionally, per model across everyone. All of this is kept in
+the relay process, so it applies per replica of it, and an owner can pass a
 budget by about what their requests in flight cost.
 
 **What it is not.** This is an allowance, not a bill. The cost is the relay's
@@ -4550,13 +4552,14 @@ Things to know when operating it:
   connections do not pass through it.
 - **A cost that could not be written.** If the database is away when an
   answer ends, the answer is still relayed and its cost is kept: it counts
-  against the owner's budget and is written again after 1, 2, 5, 10, 30, 60,
-  120, 180 and 240 seconds (`agent_model_relay_charge_retry`, then
-  `agent_model_relay_charged_late`). If none of those lands, the relay logs
-  `agent_model_relay_charge_lost` with the amount. A write whose connection
-  broke after the statement was sent may have landed and is not written
-  again: `agent_model_relay_charge_unknown`, with the amount. A relay process
-  that stops tries each cost it still keeps once more first.
+  against the owner's budget and is written again after 1, 2, 5, 10, 30, 60
+  and 120 seconds and then every 5 minutes until it lands
+  (`agent_model_relay_charge_retry`, then `agent_model_relay_charged_late`).
+  A relay process that stops tries each cost it still keeps once more, and
+  logs `agent_model_relay_charge_lost` with the amount for any that still
+  fails. A write whose connection broke after the statement was sent may
+  have landed and is not written again: `agent_model_relay_charge_unknown`,
+  with the amount.
 - **A refused key.** If the provider answers `401` to the deployment's key,
   the relay answers `502` to the agent, logs
   `agent_model_relay_key_refused` and the admin page shows since when. It

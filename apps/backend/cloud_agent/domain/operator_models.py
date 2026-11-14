@@ -32,6 +32,7 @@ import hmac
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -52,11 +53,12 @@ END_USER_TAG_CHARS = 24
 DEFAULT_USER_CONCURRENCY = 4
 
 #: Money is kept in whole millionths of a US dollar, and a price in those per
-#: million tokens, so that a cost is integer arithmetic: 2_800_000 is $2.80
-#: per million tokens, and a request's cost is rounded half up to the nearest
-#: millionth, as the gateway's cost counters round each request.
+#: million tokens: 2_800_000 is $2.80 per million tokens. A request's cost is
+#: rounded half up to the nearest millionth, as the gateway's cost counters
+#: round each request.
 MICROUSD_PER_USD = 1_000_000
 TOKENS_PER_PRICE = 1_000_000
+_MICRO = Decimal("0.000001")
 
 _HEADER_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,62}")
 #: Headers the relay writes, strips or passes on from the client; an owner tag
@@ -120,28 +122,38 @@ def _price(value: Any) -> int | None:
 
 
 def request_cost(prices: ModelPrices, usage: TokenUsage) -> int:
-    """What a request cost, in micro-dollars, rounded half up.
+    """What a request cost, in micro-dollars: what the gateway records for it.
 
     ``usage.prompt`` counts every input token. Tokens read from or written to
     the provider's cache are taken out of it and charged at their own price
     only where the model has one; otherwise they stay in it, at the input
-    price. The gateway's formula (``serving.storage.utils.calculate_cost``)
-    and its rounding (``serving.spend_ledger.counted_amount``), in integers:
-    the tests carry its own cases.
+    price.
+
+    Computed as the gateway computes it, step for step: in floating-point
+    dollars (``serving.storage.utils.calculate_cost``), then rounded half up
+    to a millionth (``serving.spend_ledger.counted_amount``). A price kept in
+    micro-dollars divides to the same float the gateway parses from its
+    catalog's text, so the two agree to the micro-dollar, even where the
+    exact cost is half of one and the float lands a hair below it.
+    ``tests/unit/test_cost_matches_gateway.py`` holds them to that.
     """
-    plain = usage.prompt
-    read_price, write_price = prices.cache_read or 0, prices.cache_write or 0
-    if read_price:
+    input_price = prices.input / MICROUSD_PER_USD
+    output_price = prices.output / MICROUSD_PER_USD
+    read_price = (prices.cache_read or 0) / MICROUSD_PER_USD
+    write_price = (prices.cache_write or 0) / MICROUSD_PER_USD
+    plain = float(usage.prompt)
+    if read_price > 0:
         plain -= usage.cache_read
-    if write_price:
+    if write_price > 0:
         plain -= usage.cache_write
-    total = (
-        max(plain, 0) * prices.input
-        + usage.output * prices.output
-        + usage.cache_read * read_price
-        + usage.cache_write * write_price
+    plain = max(plain, 0.0)
+    cost = (
+        (plain * input_price / TOKENS_PER_PRICE)
+        + (usage.output * output_price / TOKENS_PER_PRICE)
+        + (usage.cache_read * read_price / TOKENS_PER_PRICE)
+        + (usage.cache_write * write_price / TOKENS_PER_PRICE)
     )
-    return (total + TOKENS_PER_PRICE // 2) // TOKENS_PER_PRICE
+    return int(Decimal(cost).quantize(_MICRO, rounding=ROUND_HALF_UP) * MICROUSD_PER_USD)
 
 
 @dataclass(frozen=True)

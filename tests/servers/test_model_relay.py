@@ -877,6 +877,51 @@ def _events(records: list[logging.LogRecord], event: str) -> list[logging.LogRec
     return [record for record in records if record.getMessage() == event]
 
 
+async def test_a_written_cost_counts_for_checks_whose_read_began_before_it_landed(
+    monkeypatch,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(model_relay.time, "monotonic", lambda: clock[0])
+    reserved = model_relay.Reserved()
+    reserved.landed(_BUDGET, 700)
+    clock[0] = 101.0
+    reserved.landed(_BUDGET, 300)
+    reserved.landed(("budget", _CONNECTION, "someone-else"), 999)
+    # A read that began before both landed misses both; one in between, the second.
+    assert reserved.landed_since(_BUDGET, 99.0) == 1000
+    assert reserved.landed_since(_BUDGET, 100.5) == 300
+    assert reserved.landed_since(_BUDGET, 101.5) == 0
+    # Kept only as long as a read could take.
+    clock[0] = 100.0 + model_relay.LANDED_WINDOW_SECONDS + 0.5
+    assert reserved.landed_since(_BUDGET, 0.0) == 300
+    clock[0] = 101.0 + model_relay.LANDED_WINDOW_SECONDS + 0.5
+    assert reserved.landed_since(_BUDGET, 0.0) == 0
+
+
+async def test_a_cost_that_lands_while_the_budget_is_read_is_not_missed() -> None:
+    """Another request's cost is written after this one read the spending, and its hold freed."""
+    store, reserved = _Store(budget=_COST), model_relay.Reserved()
+    resolve = store.resolve_model_relay_caller
+
+    async def read_then_another_lands(**lookup):
+        caller = await resolve(**lookup)  # spent: nothing yet
+        reserved.landed(_BUDGET, _COST)  # the other request's cost, written just now
+        return caller
+
+    store.resolve_model_relay_caller = read_then_another_lands  # type: ignore[method-assign]
+    response = await _send(store, _Provider(), reserved=reserved)
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "budget_reserved"
+
+
+async def test_a_cost_that_landed_before_the_read_is_not_counted_twice() -> None:
+    store, reserved = _Store(budget=_COST + 1_000, spent=_COST), model_relay.Reserved()
+    # Written, and so in the spending the request reads, before it begins.
+    reserved.landed(_BUDGET, _COST)
+    response = await _send(store, _Provider(), reserved=reserved)
+    assert response.status_code == 200
+
+
 async def test_a_cost_that_could_not_be_written_is_written_later(caplog) -> None:
     """The answer is not failed and the cost is not let go: it is counted until it lands."""
     store, provider, reserved = _Store(), _Provider(), model_relay.Reserved()
@@ -930,21 +975,37 @@ async def test_a_charge_is_tried_again_until_it_lands(caplog) -> None:
     assert reserved.held(_BUDGET) == 0
 
 
-async def test_a_charge_whose_tries_run_out_is_reported_with_its_amount(caplog) -> None:
+async def test_a_charge_is_tried_until_it_lands_however_many_tries_that_takes(caplog) -> None:
     store, reserved = _Store(), model_relay.Reserved()
-    pending = model_relay.PendingCharges(reserved, delays=(0.0, 0.0))
-    store.write_failures = [OSError("away")] * 3
+    pending = model_relay.PendingCharges(reserved, delays=(0.0,))
+    store.write_failures = [OSError("away")] * 12
     with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
         await _send(store, _Provider(), reserved=reserved, pending=pending)
-        for _ in range(50):
+        for _ in range(200):
             if pending.count == 0:
                 break
             await asyncio.sleep(0)
+    assert store.charges == [_charge(_COST, prompt=1000, output=100)]
+    assert len(_events(caplog.records, "agent_model_relay_charge_retry")) == 12
+    assert _events(caplog.records, "agent_model_relay_charge_lost") == []
+    assert reserved.held(_BUDGET) == 0
+
+
+async def test_a_charge_still_unwritten_when_the_process_stops_is_reported(caplog) -> None:
+    store, reserved = _Store(), model_relay.Reserved()
+    pending = model_relay.PendingCharges(reserved, delays=(0.0,))
+    store.write_failures = [OSError("away")] * 10_000
+    with caplog.at_level(logging.INFO, logger="cloud_agent.model_relay"):
+        await _send(store, _Provider(), reserved=reserved, pending=pending)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        # Still trying, and still counted against the owner's budget.
+        assert pending.count == 1 and reserved.held(_BUDGET) == _COST
+        await pending.close()
     assert store.charges == []
     [lost] = _events(caplog.records, "agent_model_relay_charge_lost")
     assert (lost.levelno, lost.user_id, lost.cost_microusd) == (logging.ERROR, "user_1", _COST)
-    # Given up, it is no longer held against the budget.
-    assert reserved.held(_BUDGET) == 0
+    assert pending.count == 0 and reserved.held(_BUDGET) == 0
 
 
 async def test_a_charge_whose_outcome_is_unknown_is_reported_not_written_twice(caplog) -> None:

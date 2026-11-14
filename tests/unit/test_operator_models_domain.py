@@ -127,12 +127,12 @@ def test_cache_tokens_with_a_price_of_their_own_are_charged_at_it() -> None:
 
 
 def test_a_cost_is_rounded_half_up_as_the_gateway_rounds_each_request() -> None:
-    # $1 per million tokens: a token is a millionth of a millionth of a dollar.
+    # A millionth of a dollar per million tokens: a token is a millionth of a micro-dollar.
     prices = ModelPrices(input=1, output=0)
     assert request_cost(prices, TokenUsage(prompt=499_999)) == 0
-    assert request_cost(prices, TokenUsage(prompt=500_000)) == 1
+    assert request_cost(prices, TokenUsage(prompt=500_001)) == 1
     assert request_cost(prices, TokenUsage(prompt=1_499_999)) == 1
-    assert request_cost(prices, TokenUsage(prompt=1_500_000)) == 2
+    assert request_cost(prices, TokenUsage(prompt=1_500_001)) == 2
 
 
 def _usd(price: str) -> int:
