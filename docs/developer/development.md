@@ -290,6 +290,12 @@ Every test process runs with CI's umask of `022` and without an inherited
 `CODEX_VERSION` (see `tests/conftest.py`), so your shell's settings do not
 change the result of `make check`.
 
+Outside the `external` and `dbtest` tiers, a host name that no resolver
+answers fails at once without a DNS lookup, as it does on CI. Such a name is
+one under `.test`, `.invalid` or `.example`, or a single label other than
+`localhost`. A slow local resolver therefore cannot stretch `make check`. Use
+such a name for a host a test only pretends to reach.
+
 For a frontend change, run these checks from the repository root:
 
 ```bash
