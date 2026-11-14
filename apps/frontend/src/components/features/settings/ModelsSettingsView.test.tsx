@@ -79,10 +79,9 @@ afterEach(() => {
 describe('the models a deployment provides, in Settings', () => {
   it('lists each by name and nothing else', async () => {
     providing(
-      providedSource({
-        'house-fast': [1500, 1458],
-        'house-open': [null, 2300],
-        'house-spent': [20, 20],
+      providedSource(['house-fast', 'house-open', 'house-spent'], {
+        daily_budget_microusd: 5_000_000,
+        spent_today_microusd: 1_800_000,
       }),
     );
     render(<ModelsSettingsView />);
@@ -93,8 +92,8 @@ describe('the models a deployment provides, in Settings', () => {
         .getAllByRole('listitem')
         .map((item) => item.textContent),
     ).toEqual(['house-fast', 'house-open', 'house-spent']);
-    // Allowances, today's use and the reset belong to the model picker.
-    expect(card).not.toHaveTextContent(/1,500|1,458|42|2,300|Unlimited|20/);
+    // The budget, what was spent of it today and the reset belong to the model picker.
+    expect(card).not.toHaveTextContent(/\$|5\.00|1\.80|3\.20|left today|budget|resets/i);
     expect(within(card).queryByRole('table')).not.toBeInTheDocument();
     // One source needs no name, and the list no heading.
     expect(within(card).queryByText('House models')).not.toBeInTheDocument();
@@ -104,7 +103,7 @@ describe('the models a deployment provides, in Settings', () => {
   });
 
   it('has nothing to edit', async () => {
-    providing(providedSource({ 'house-fast': [100, 1] }));
+    providing(providedSource(['house-fast']));
     render(<ModelsSettingsView />);
     const card = await provided();
     for (const role of ['button', 'textbox', 'combobox', 'checkbox', 'switch', 'link']) {
@@ -115,12 +114,13 @@ describe('the models a deployment provides, in Settings', () => {
   it('names the sources when there are several, and leaves out one that offers no model', async () => {
     const second = { id: 'oconn_ffffffffffffffffffffffffffffffff', is_default: false };
     providing(
-      providedSource({ 'shared-name': [100, 1] }),
-      providedSource({ 'shared-name': [5, 0] }, { ...second, name: 'Second house' }),
-      providedSource(
-        {},
-        { ...second, id: 'oconn_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', name: 'Empty' },
-      ),
+      providedSource(['shared-name']),
+      providedSource(['shared-name'], { ...second, name: 'Second house' }),
+      providedSource([], {
+        ...second,
+        id: 'oconn_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        name: 'Empty',
+      }),
     );
     render(<ModelsSettingsView />);
 
@@ -142,7 +142,7 @@ describe('the models a deployment provides, in Settings', () => {
 
 describe('the owner’s own connections, beneath provided models', () => {
   it('start folded, and open and close from their heading', async () => {
-    providing(providedSource({ 'house-fast': [100, 1] }));
+    providing(providedSource(['house-fast']));
     render(<ModelsSettingsView />);
 
     const section = await connections();
@@ -169,7 +169,7 @@ describe('the owner’s own connections, beneath provided models', () => {
   });
 
   it('keep a half-filled form through a fold, and read the list once', async () => {
-    providing(providedSource({ 'house-fast': [100, 1] }));
+    providing(providedSource(['house-fast']));
     render(<ModelsSettingsView />);
     const section = await connections();
     const heading = fold(section)!;
@@ -193,7 +193,7 @@ describe('the owner’s own connections, beneath provided models', () => {
   });
 
   it('arrive open from a link to them', async () => {
-    providing(providedSource({ 'house-fast': [100, 1] }));
+    providing(providedSource(['house-fast']));
     window.location.hash = '#settings-connections';
     render(<ModelsSettingsView />);
 
@@ -203,7 +203,7 @@ describe('the owner’s own connections, beneath provided models', () => {
   });
 
   it('open from such a link followed on the page itself', async () => {
-    providing(providedSource({ 'house-fast': [100, 1] }));
+    providing(providedSource(['house-fast']));
     render(
       <>
         <ModelConnectionsLink>Set up a connection</ModelConnectionsLink>
@@ -230,7 +230,7 @@ describe('the owner’s own connections, beneath provided models', () => {
   });
 
   it('open when the address comes to name them', async () => {
-    providing(providedSource({ 'house-fast': [100, 1] }));
+    providing(providedSource(['house-fast']));
     render(<ModelsSettingsView />);
     const section = await connections();
     expect(fold(section)).toHaveAttribute('aria-expanded', 'false');
@@ -240,7 +240,7 @@ describe('the owner’s own connections, beneath provided models', () => {
   });
 
   it('come after the provided models', async () => {
-    providing(providedSource({ 'house-fast': [100, 1] }));
+    providing(providedSource(['house-fast']));
     render(<ModelsSettingsView />);
     const [first, second] = [await provided(), await connections()];
     expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -273,7 +273,7 @@ describe('where nothing is provided', () => {
   });
 
   it('is the same where every source offers this account no model', async () => {
-    providing(providedSource({}));
+    providing(providedSource([]));
     await unfolded();
   });
 
@@ -281,7 +281,7 @@ describe('where nothing is provided', () => {
     vi.mocked(getAgentConfig).mockResolvedValue(
       config({
         model_connections_enabled: false,
-        provided_sources: [providedSource({ 'house-fast': [100, 1] })],
+        provided_sources: [providedSource(['house-fast'])],
       }),
     );
     await unfolded();
@@ -304,7 +304,7 @@ describe('until it is known what is provided', () => {
     expect(screen.queryByRole('region')).not.toBeInTheDocument();
     expect(listModelConnections).not.toHaveBeenCalled();
 
-    answer(config({ provided_sources: [providedSource({ 'house-fast': [100, 1] })] }));
+    answer(config({ provided_sources: [providedSource(['house-fast'])] }));
     expect(fold(await connections())).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
@@ -325,7 +325,7 @@ describe('until it is known what is provided', () => {
 
     // The answer still counts when it comes, and folds nothing under the reader.
     fireEvent.click(within(section).getByRole('button', { name: 'Add connection' }));
-    answer(config({ provided_sources: [providedSource({ 'house-fast': [100, 1] })] }));
+    answer(config({ provided_sources: [providedSource(['house-fast'])] }));
     await act(() => vi.advanceTimersByTimeAsync(0));
 
     expect(screen.getByRole('region', { name: 'Available models' })).toHaveTextContent(

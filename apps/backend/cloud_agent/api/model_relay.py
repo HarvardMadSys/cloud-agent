@@ -5,9 +5,9 @@ member's CLI on one is told its provider is this relay (the connection's own
 path on the host's model tunnel) and holds a residency's ``amd.`` placeholder
 (:func:`cloud_agent.tokens.mint_residency_model_token`) as its API key, which
 no provider accepts. On every request this relay resolves the placeholder to
-the running turn it speaks for, checks the turn's owner may send this model
-another request today, and forwards the request to the connection's own
-endpoint with the deployment's key.
+the running turn it speaks for, checks the turn's owner has budget left today,
+forwards the request to the connection's own endpoint with the deployment's
+key, and charges the owner what the answer says it used.
 
 **The placeholder is fenced like the other relays' credentials.** It buys
 something only while its residency is the chat's hot one and is serving a
@@ -27,21 +27,34 @@ passed on: an owner's own key never comes this way. Of a request's headers
 only a short list goes on (``_FORWARDED_HEADERS``): a sandbox borrows the
 deployment's key, not what a header can make that key do.
 
-**Allowances are counted here, outside the sandbox.** One statement decides
-and counts a request (``count_request``); a request the provider never served
-(unreachable, 5xx, 429, or one that failed here before it was sent) is taken
-back. Two caps on requests in flight, per owner and per model, are kept in
-this process: a deployment that runs several relay processes has each count
-its own.
+**A request is charged here, outside the sandbox, for what it used.** Each
+owner has a budget per UTC day on a connection's models together. The answer
+to an inference request names the tokens it used (``domain.model_usage``);
+when it ends, those tokens at the model's prices are added to what the owner
+spent today (``record_operator_request``). An answer that named no usage, or
+was cut short before it could, is charged by estimate: the request's text
+taken as input tokens, at the input price
+(``domain.operator_models.estimated_prompt_tokens``). A request the provider
+did not serve (unreachable, or answered with an error) costs nothing.
+
+**What is in flight is held back.** A cost is known only when an answer ends,
+so each admitted request reserves its estimate of the owner's budget until
+then (:class:`Reserved`), and a request that finds the rest of the budget
+reserved is asked to retry. Two caps on requests in flight, per owner and per
+model, are kept the same way (:class:`Slots`). All of this is per process: a
+deployment that runs several relay processes has each count its own, and an
+owner can pass a budget by about what their requests in flight cost.
 
 **Nothing of a request or an answer is stored or logged.** A request body is
 read once to find the model it names and forwarded unchanged; an answer is
-streamed back as it arrives, the provider's errors included. The client every
-request is forwarded with keeps no cookie from one answer to the next.
+streamed back as it arrives, the provider's errors included, and read only
+for its usage record. The provider is asked for no content encoding, so that
+record can be read. The client every request is forwarded with keeps no
+cookie from one answer to the next.
 
 **A caller that leaves ends its request.** A stopped turn's CLI closes its
 connection; from then on the provider is no longer waited for, and the
-request's slots are free, whether or not an answer had begun.
+request's slots and reservation are free, whether or not an answer had begun.
 
 See ``docs/agents/specs/2026-11-12-platform-model-relay.zh-CN.md``.
 """
@@ -66,10 +79,13 @@ from cloud_agent.application.model_connection_stream import CheckStop
 from cloud_agent.application.model_connections import operator_connection_cipher
 from cloud_agent.crypto.credential_cipher import CredentialCipherError
 from cloud_agent.crypto.domain_cipher import settings_root_key
+from cloud_agent.domain.model_usage import TokenUsage, UsageReader
 from cloud_agent.domain.operator_models import (
     end_user_tag,
+    estimated_prompt_tokens,
     is_messages_path,
     relay_route,
+    request_cost,
 )
 from cloud_agent.logging_utils import get_logger
 from cloud_agent.mcp.transports import pinned_transport
@@ -77,11 +93,11 @@ from cloud_agent.tokens import InvalidAgentToken, parse_residency_model_token
 from cloud_agent_shared.shared_protocol import is_residency_model_credential
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Coroutine
-    from datetime import date
+    from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 
     from starlette.types import Receive, Scope, Send
 
+    from cloud_agent.domain.operator_models import ModelPrices, RelayRoute
     from cloud_agent.ports import OperatorModelRepository
 
 logger = get_logger("cloud_agent.model_relay")
@@ -104,15 +120,15 @@ _HOP_HEADERS = frozenset(
     }
 )
 #: The only headers of a client's request that go on to the provider, beside
-#: the key and the owner tag the relay writes itself. A provider reads some
-#: headers as instructions about the key: which organization or project to
-#: bill, which application a call is attributed to, where it claims to come
-#: from. A sandbox is lent the key's use, not that authority, so a header is
-#: forwarded only when an agent CLI needs the provider to see it.
+#: the key, the owner tag and the content encoding the relay writes itself. A
+#: provider reads some headers as instructions about the key: which
+#: organization or project to bill, which application a call is attributed to,
+#: where it claims to come from. A sandbox is lent the key's use, not that
+#: authority, so a header is forwarded only when an agent CLI needs the
+#: provider to see it.
 _FORWARDED_HEADERS = frozenset(
     {
         "accept",
-        "accept-encoding",
         "content-type",
         "user-agent",
         "anthropic-version",
@@ -125,12 +141,12 @@ _UPSTREAM_TIMEOUT = httpx.Timeout(connect=15.0, read=600.0, write=600.0, pool=15
 #: The largest request body read and forwarded. A model request carries the
 #: whole conversation, images included; a provider refuses far smaller ones.
 MAX_BODY_BYTES = 32 * 1024 * 1024
-#: Upstream answers after which a counted request is taken back: the provider
-#: did not serve it, and the CLI will send it again.
-_REFUNDED_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
 #: Logged for a request whose caller left before the provider answered. Nobody
 #: reads the response.
 _CALLER_LEFT = 499
+#: How long a request waits before retrying when the rest of its owner's
+#: budget is reserved by requests still in flight.
+_RESERVED_RETRY_AFTER = 2
 
 #: The Anthropic error type a refusal of each status is answered as.
 _ANTHROPIC_TYPES = {
@@ -189,13 +205,51 @@ class Slots:
         return self._held[key]
 
 
+class Reserved:
+    """What requests in flight may yet cost, per owner and connection, in this process.
+
+    A request's cost is known when its answer ends. Until then it holds its
+    estimate of the owner's budget here, so requests running together cannot
+    each be admitted against the same remainder. Like :class:`Slots`, not
+    shared between relay processes.
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing reserved."""
+        self._held: Counter[tuple[str, ...]] = Counter()
+
+    def hold(self, key: tuple[str, ...], amount: int) -> None:
+        """Reserve ``amount`` micro-dollars under ``key``."""
+        if amount > 0:
+            self._held[key] += amount
+
+    def free(self, key: tuple[str, ...], amount: int) -> None:
+        """Give back what :meth:`hold` reserved."""
+        if amount <= 0:
+            return
+        self._held[key] -= amount
+        if self._held[key] <= 0:
+            del self._held[key]
+
+    def held(self, key: tuple[str, ...]) -> int:
+        """Micro-dollars reserved under ``key``."""
+        return self._held[key]
+
+
 #: This process's slots. A test replaces it through :func:`get_slots`.
 _SLOTS = Slots()
+#: This process's reservations. A test replaces it through :func:`get_reserved`.
+_RESERVED = Reserved()
 
 
 def get_slots() -> Slots:
     """Dependency: the process's in-flight counters."""
     return _SLOTS
+
+
+def get_reserved() -> Reserved:
+    """Dependency: the process's budget reservations."""
+    return _RESERVED
 
 
 def get_relay_client(request: Request) -> httpx.AsyncClient | None:
@@ -231,15 +285,24 @@ def relay_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.Asy
 
 @dataclass
 class _Admitted:
-    """One request this relay will forward, and what to undo if the provider does not serve it."""
+    """One request this relay will forward: what it holds while in flight, and whom it charges."""
 
     store: _RelayStorage
     slots: Slots
+    reserved: Reserved
     caller: dict[str, Any]
+    #: The path's route; ``None`` until the caller's connection is known.
+    route: RelayRoute | None = None
     model: str | None = None
+    prices: ModelPrices | None = None
     keys: list[tuple[tuple[str, ...], int | None]] = field(default_factory=list)
-    counted_day: date | None = None
+    #: The request's text as input tokens: what is charged, at the input
+    #: price, when the answer names no usage.
+    estimated_tokens: int = 0
+    #: What is held of the owner's budget while the request is in flight.
+    hold: tuple[tuple[str, ...], int] | None = None
     released: bool = False
+    charged: bool = False
     #: Whether the request was handed to the provider, which may then have
     #: served it whatever happened here afterwards.
     sent: bool = False
@@ -251,31 +314,71 @@ class _Admitted:
         return connection
 
     def release(self) -> None:
-        """Give the in-flight slots back, once."""
-        if not self.released:
-            self.released = True
-            self.slots.give(self.keys)
-
-    async def refund(self) -> None:
-        """Take the counted request back, once: the provider did not serve it."""
-        day, self.counted_day = self.counted_day, None
-        if day is None or self.model is None:
+        """Give the in-flight slots and the reserved budget back, once."""
+        if self.released:
             return
+        self.released = True
+        self.slots.give(self.keys)
+        if self.hold is not None:
+            self.reserved.free(*self.hold)
+
+    async def charge(self, usage: TokenUsage | None, *, complete: bool = False) -> None:
+        """Add what the request cost to its owner's use today, once.
+
+        ``usage`` is what the answer said it used, ``None`` when it named
+        nothing; ``complete`` is whether the answer was read to its end. A
+        request that is not an inference call is never charged.
+        """
+        if self.charged or self.model is None or self.prices is None:
+            return
+        self.charged = True
+        used = usage if usage is not None else TokenUsage(prompt=self.estimated_tokens)
+        estimated = usage is None or not complete
+        cost = request_cost(self.prices, used)
+        connection_id, user_id = str(self.connection["id"]), str(self.caller["user_id"])
         try:
-            await self.store.operator_models.refund_operator_request(
-                connection_id=str(self.connection["id"]),
-                user_id=str(self.caller["user_id"]),
+            await self.store.operator_models.record_operator_request(
+                connection_id=connection_id,
+                user_id=user_id,
                 model=self.model,
-                day=day,
+                cost_microusd=cost,
+                input_tokens=used.prompt,
+                cache_read_tokens=used.cache_read,
+                cache_write_tokens=used.cache_write,
+                output_tokens=used.output,
+                estimated=estimated,
             )
         except Exception:
-            # An allowance one request short is the owner's loss, not a reason
-            # to fail the answer being relayed.
-            logger.warning(
-                "agent_model_relay_refund_failed",
-                extra={"event": "agent_model_relay_refund_failed"},
+            # The answer was relayed; a cost that could not be written is the
+            # deployment's loss, and is reported rather than failing the turn.
+            logger.error(
+                "agent_model_relay_charge_failed",
+                extra={
+                    "event": "agent_model_relay_charge_failed",
+                    "connection_id": connection_id,
+                    "user_id": user_id,
+                    "model": self.model,
+                    "cost_microusd": cost,
+                },
                 exc_info=True,
             )
+            return
+        logger.info(
+            "agent_model_relay_charged",
+            extra={
+                "event": "agent_model_relay_charged",
+                "job_id": self.caller.get("job_id"),
+                "connection_id": connection_id,
+                "user_id": user_id,
+                "model": self.model,
+                "cost_microusd": cost,
+                "input_tokens": used.prompt,
+                "cache_read_tokens": used.cache_read,
+                "cache_write_tokens": used.cache_write,
+                "output_tokens": used.output,
+                "estimated": estimated,
+            },
+        )
 
 
 def _refusal(raw_path: str, refused: _Refused) -> Response:
@@ -329,12 +432,16 @@ async def _bounded_body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-def _named_model(body: bytes) -> str | None:
-    """The top-level ``model`` of a JSON request body; ``None`` when it names none."""
+def _decoded(body: bytes) -> Any:
+    """A request body as JSON; ``None`` when it is not, or is nested too deep to read."""
     try:
-        document = json.loads(body)
-    except ValueError:
+        return json.loads(body)
+    except (ValueError, RecursionError):
         return None
+
+
+def _named_model(document: Any) -> str | None:
+    """The top-level ``model`` of a decoded request body; ``None`` when it names none."""
     model = document.get("model") if isinstance(document, dict) else None
     return model if isinstance(model, str) and model else None
 
@@ -358,18 +465,28 @@ def _live_connection(caller: dict[str, Any]) -> dict[str, Any]:
     return connection
 
 
-async def _admit_inference(admitted: _Admitted, model: str | None) -> None:
-    """Check the model, take the in-flight slots and count the request, or refuse."""
+def _admit_inference(admitted: _Admitted, model: str | None, document: Any) -> None:
+    """Check the model and the owner's budget, take the in-flight slots and reserve, or refuse."""
     connection, caller = admitted.connection, admitted.caller
     if model is None:
         raise _Refused(400, "invalid_request", "The request body must be JSON naming a model.")
-    allowance = caller.get("allowance")
-    if model not in connection["models"] or allowance is None or not allowance.offered:
+    allowance, prices = caller.get("allowance"), caller.get("prices")
+    if (
+        model not in connection["models"]
+        or allowance is None
+        or not allowance.offered
+        or prices is None
+    ):
         raise _Refused(
             403, "model_not_allowed", "This deployment does not provide that model to this task."
         )
     if allowance.exhausted:
-        raise _exhausted()
+        raise _Refused(
+            403,
+            "allowance_exhausted",
+            "Today's budget for the models this deployment provides is used up. "
+            "It starts over at 00:00 UTC.",
+        )
     connection_id, user_id = str(connection["id"]), str(caller["user_id"])
     keys: list[tuple[tuple[str, ...], int | None]] = [
         (("user", connection_id, user_id), int(connection["user_concurrency"])),
@@ -382,31 +499,23 @@ async def _admit_inference(admitted: _Admitted, model: str | None) -> None:
             "Too many requests to this model are in progress. Retry shortly.",
             retry_after=1,
         )
-    admitted.keys, admitted.model = keys, model
-    try:
-        counted = await admitted.store.operator_models.count_operator_request(
-            connection_id=connection_id, user_id=user_id, model=model
-        )
-    except BaseException:
+    admitted.keys, admitted.model, admitted.prices = keys, model, prices
+    budget_key = ("budget", connection_id, user_id)
+    room = allowance.remaining_microusd - admitted.reserved.held(budget_key)
+    if room <= 0:
+        # Not used up: what is left is spoken for by requests that have not
+        # ended. Their real cost is usually less, so this one may fit then.
         admitted.release()
-        raise
-    if counted["outcome"] != "counted":
-        admitted.release()
-        if counted["outcome"] == "exhausted":
-            raise _exhausted()
         raise _Refused(
-            403, "model_not_allowed", "This deployment does not provide that model to this task."
+            429,
+            "budget_reserved",
+            "Requests in progress may use the rest of today's budget. Retry shortly.",
+            retry_after=_RESERVED_RETRY_AFTER,
         )
-    admitted.counted_day = counted["day"]
-
-
-def _exhausted() -> _Refused:
-    return _Refused(
-        403,
-        "allowance_exhausted",
-        "Today's requests for this model on this deployment are used up. "
-        "The count starts over at 00:00 UTC.",
-    )
+    admitted.estimated_tokens = estimated_prompt_tokens(document)
+    estimate = request_cost(prices, TokenUsage(prompt=admitted.estimated_tokens))
+    admitted.hold = (budget_key, min(estimate, room))
+    admitted.reserved.hold(*admitted.hold)
 
 
 def _upstream_headers(
@@ -419,9 +528,9 @@ def _upstream_headers(
         for name, value in request.headers.items()
         if name.lower() in _FORWARDED_HEADERS and name.lower() != tag_header
     }
-    # The answer is streamed back as the provider encoded it, so the provider
-    # may use only an encoding the client asked for.
-    headers.setdefault("accept-encoding", "identity")
+    # The answer is streamed back as the provider sent it and read for its
+    # usage record on the way, so the provider is asked not to encode it.
+    headers["accept-encoding"] = "identity"
     if style == "x-api-key":
         headers["x-api-key"] = api_key
     else:
@@ -446,6 +555,7 @@ async def relay(
     store: _RelayStorage | None = Depends(get_storage),
     http: httpx.AsyncClient | None = Depends(get_relay_client),
     slots: Slots = Depends(get_slots),
+    reserved: Reserved = Depends(get_reserved),
     guard: Callable[[str], Awaitable[None]] = Depends(get_endpoint_guard),
 ) -> Response:
     """Forward one model request with the deployment's key, or refuse it."""
@@ -454,28 +564,34 @@ async def relay(
     started = time.monotonic()
     admitted: _Admitted | None = None
     try:
-        admitted, style, body = await _admit(request, store, slots, raw_path)
+        admitted, style, body = await _admit(request, store, slots, reserved, raw_path)
         response = await _forward(request, http, guard, admitted, style, body, raw_path)
     except _Refused as refused:
         if admitted is not None:
             admitted.release()
-            await admitted.refund()
         _log(admitted, request, raw_path, refused.status, started, refused.code)
         return _refusal(raw_path, refused)
     except BaseException:
         if admitted is not None:
-            admitted.release()
-            if not admitted.sent:
-                # Nothing reached the provider: the owner is not out a request
-                # for a failure of the relay's own.
-                await admitted.refund()
+            try:
+                if admitted.sent:
+                    # The provider had the request and may have served it,
+                    # whatever failed here afterwards: it is charged by
+                    # estimate. One that never left costs its owner nothing.
+                    await admitted.charge(None)
+            finally:
+                admitted.release()
         raise
     _log(admitted, request, raw_path, response.status_code, started, None)
     return response
 
 
 async def _admit(
-    request: Request, store: _RelayStorage | None, slots: Slots, raw_path: str
+    request: Request,
+    store: _RelayStorage | None,
+    slots: Slots,
+    reserved: Reserved,
+    raw_path: str,
 ) -> tuple[_Admitted, str, bytes]:
     """Resolve the placeholder to its turn and settle whether this request may go on."""
     presented = _presented(request)
@@ -492,7 +608,8 @@ async def _admit(
     if store is None:
         raise _Refused(503, "relay_unavailable", "The model relay has no database configured.")
     body = await _bounded_body(request) if request.method == "POST" else b""
-    model = _named_model(body) if body else None
+    document = _decoded(body) if body else None
+    model = _named_model(document)
     caller = await store.operator_models.resolve_model_relay_caller(
         thread_id=residency["thread_id"],
         residency_generation=residency["residency_generation"],
@@ -502,26 +619,27 @@ async def _admit(
         raise _Refused(
             401, "invalid_credential", "This chat has no running turn, so it cannot reach a model."
         )
-    admitted = _Admitted(store=store, slots=slots, caller=caller)
+    admitted = _Admitted(store=store, slots=slots, reserved=reserved, caller=caller)
     connection = _live_connection(caller)
     route = relay_route(str(connection["base_url"]), request.method, raw_path)
     if route is None:
         raise _Refused(404, "not_found", "This relay does not forward that path.")
+    admitted.route = route
     if route.inference:
-        await _admit_inference(admitted, model)
+        _admit_inference(admitted, model, document)
     return admitted, presented[0], body
 
 
-async def _forward(
+async def _send(
     request: Request,
-    http: httpx.AsyncClient | None,
+    client: httpx.AsyncClient,
     guard: Callable[[str], Awaitable[None]],
     admitted: _Admitted,
     style: str,
     body: bytes,
     raw_path: str,
-) -> Response:
-    """Send the request to the connection's endpoint and stream its answer back."""
+) -> httpx.Response | None:
+    """Hand the request to the connection's endpoint: its answer, or ``None`` once the caller left."""
     connection = admitted.connection
     base_url = str(connection["base_url"])
     try:
@@ -540,12 +658,6 @@ async def _forward(
     origin = httpx.URL(base_url).copy_with(raw_path=b"/")
     query = request.url.query
     target = raw_path + (f"?{query}" if query else "")
-    client = http if http is not None else relay_client()
-
-    async def close_client() -> None:
-        if http is None:
-            await client.aclose()
-
     try:
         upstream = client.build_request(
             request.method,
@@ -561,34 +673,91 @@ async def _forward(
             timeout=_UPSTREAM_TIMEOUT,
         )
         admitted.sent = True
-        answer = await _unless_left(
+        return await _unless_left(
             request, client.send(upstream, stream=True, follow_redirects=False)
         )
     except httpx.HTTPError:
-        await close_client()
         raise unreachable from None
+
+
+async def _forward(
+    request: Request,
+    http: httpx.AsyncClient | None,
+    guard: Callable[[str], Awaitable[None]],
+    admitted: _Admitted,
+    style: str,
+    body: bytes,
+    raw_path: str,
+) -> Response:
+    """Send the request to the connection's endpoint and stream its answer back."""
+    client = http if http is not None else relay_client()
+
+    async def close_client() -> None:
+        if http is None:
+            await client.aclose()
+
+    try:
+        answer = await _send(request, client, guard, admitted, style, body, raw_path)
     except BaseException:
         await close_client()
         raise
     if answer is None:
-        # The request stays counted: the provider had it, and may bill for it.
-        admitted.release()
-        await close_client()
+        # The provider had the request and may bill for it: charged by estimate.
+        try:
+            await admitted.charge(None)
+        finally:
+            admitted.release()
+            await close_client()
         return Response(status_code=_CALLER_LEFT)
 
+    reader = _usage_reader(admitted, answer)
+
     async def close() -> None:
-        admitted.release()
         try:
             await answer.aclose()
         finally:
-            await close_client()
+            try:
+                # Charged before the reservation is given back, so that the
+                # cost counts somewhere at every moment.
+                if reader is not None:
+                    await admitted.charge(reader.usage(), complete=reader.complete)
+            finally:
+                admitted.release()
+                await close_client()
 
     try:
         await _settle(admitted, answer.status_code)
     except BaseException:
+        # The answer is not relayed, so its usage is never read. A refusal
+        # costs nothing; after a failure the caller charges by estimate.
+        reader = None
         await close()
         raise
-    return _Relayed(answer, on_end=close)
+    return _Relayed(answer, _metered(answer, reader), on_end=close)
+
+
+def _usage_reader(admitted: _Admitted, answer: httpx.Response) -> UsageReader | None:
+    """What reads the usage out of ``answer``; ``None`` for an answer that is not charged.
+
+    Only an inference request the provider served is charged: its error or
+    its redirect, like a listing or a token count, costs the owner nothing.
+    """
+    route = admitted.route
+    if route is None or not route.inference or not 200 <= answer.status_code < 300:
+        return None
+    return UsageReader(
+        route.api,
+        content_type=answer.headers.get("content-type", ""),
+        content_encoding=answer.headers.get("content-encoding", ""),
+    )
+
+
+async def _metered(answer: httpx.Response, reader: UsageReader | None) -> AsyncIterator[bytes]:
+    """The answer's bytes as they arrive, shown to ``reader`` on the way."""
+    async for chunk in answer.aiter_raw():
+        if reader is not None:
+            reader.feed(chunk)
+        yield chunk
 
 
 async def _left(request: Request) -> None:
@@ -630,10 +799,16 @@ class _Relayed(StreamingResponse):
     here in every case.
     """
 
-    def __init__(self, answer: httpx.Response, *, on_end: Callable[[], Awaitable[None]]) -> None:
-        """Stream ``answer`` as it was received; ``on_end`` runs once it is over."""
+    def __init__(
+        self,
+        answer: httpx.Response,
+        body: AsyncIterator[bytes],
+        *,
+        on_end: Callable[[], Awaitable[None]],
+    ) -> None:
+        """Stream ``body``, the bytes of ``answer`` as received; ``on_end`` runs once it is over."""
         super().__init__(
-            answer.aiter_raw(),
+            body,
             status_code=answer.status_code,
             headers=_downstream_headers(answer),
         )
@@ -652,8 +827,7 @@ async def _settle(admitted: _Admitted, status: int) -> None:
 
     A 401 is the provider refusing the deployment's key, which the member's
     CLI must not read as its own credential being wrong: it is answered as a
-    502 and remembered for the administrator. A request the provider did not
-    serve is taken back from the allowance.
+    502 and remembered for the administrator.
     """
     connection = admitted.connection
     connection_id = str(connection["id"])
@@ -670,9 +844,7 @@ async def _settle(admitted: _Admitted, status: int) -> None:
             "provider_refused_credential",
             "The model provider refused this deployment's key. Its administrator has to fix it.",
         )
-    if status in _REFUNDED_STATUSES:
-        await admitted.refund()
-    elif status < 400 and connection.get("key_refused_at") is not None:
+    if status < 400 and connection.get("key_refused_at") is not None:
         await admitted.store.operator_models.mark_operator_key_refused(
             connection_id=connection_id, refused=False
         )
@@ -708,9 +880,11 @@ def _log(
 
 __all__ = [
     "MAX_BODY_BYTES",
+    "Reserved",
     "Slots",
     "get_endpoint_guard",
     "get_relay_client",
+    "get_reserved",
     "get_slots",
     "relay_client",
     "router",

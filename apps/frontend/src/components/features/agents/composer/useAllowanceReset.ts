@@ -6,12 +6,12 @@ import { nextAllowanceReset } from './providedModels';
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /**
- * Draws its component again when a provided allowance's day starts over.
+ * Draws its component again when a provided source's day starts over.
  *
- * What an owner has left is read from the clock as well as from `/config`
- * (`allowanceOf`): once `resets_at` has passed, a model used up yesterday can
- * run. Nothing else redraws a page left open across that moment, so without
- * this it would go on holding Run for a model the server now accepts.
+ * What an owner has left of a budget is read from the clock as well as from
+ * `/config` (`allowanceOf`): once `resets_at` has passed, a model used up
+ * yesterday can run. Nothing else redraws a page left open across that moment,
+ * so without this it would go on holding Run for a model the server now accepts.
  */
 export function useAllowanceReset(config: AgentConfigApi | null): void {
   const [, redraw] = useState(0);

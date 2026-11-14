@@ -9,6 +9,7 @@ import { useT } from '@/components/providers/LocaleProvider';
 import { Select } from '@/components/ui/Select';
 import {
   createOperatorModelConnection,
+  MAX_DAILY_BUDGET_MICROUSD,
   MAX_USER_CONCURRENCY,
   OPERATOR_MAX_MODELS,
   OPERATOR_MAX_NAME_CHARS,
@@ -17,6 +18,7 @@ import {
 } from '@/lib/api/adminOperatorModels';
 import { refusedModels, type ModelStatus } from '@/lib/api/modelConnections';
 import type { TranslationKey } from '@/lib/i18n/translate';
+import { formatUsd } from '@/lib/money';
 
 import {
   initialFields,
@@ -44,6 +46,7 @@ const PROBLEM_KEYS: Record<ProvidedField, TranslationKey> = {
   default_model: 'adminModels.invalid.defaultModel',
   end_user_header: 'adminModels.invalid.header',
   user_concurrency: 'adminModels.invalid.userConcurrency',
+  user_daily_budget_microusd: 'adminModels.invalid.budget',
 };
 
 /** What a save answered: the connection, and what could not be done after it was saved. */
@@ -131,15 +134,16 @@ function Field({
 
 /**
  * Add or edit a provided connection: a name, a Base URL, a write-only key and
- * model IDs, then which model new users start on, whether this connection is
- * where they start, the header that names an account to the provider, and how
- * many requests one account may have in flight.
+ * model IDs, then which model new users start on, what each account may spend
+ * on its models a day, whether this connection is where new users start, the
+ * header that names an account to the provider, and how many requests one
+ * account may have in flight.
  *
  * **Verify and save** checks every model with the provider before anything is
  * stored, which can take minutes and cannot be cancelled once sent; a refusal
  * keeps every input, with each model's result on its chip. A new connection is
- * saved disabled: it is enabled from its card once every model has a default
- * allowance.
+ * saved disabled: it is enabled from its card once it has a daily budget,
+ * which may be chosen here or later, and every model has prices.
  */
 export function ProvidedConnectionForm({
   connection,
@@ -178,9 +182,13 @@ export function ProvidedConnectionForm({
     models,
     default_model: models.includes(fields.default_model) ? fields.default_model : '',
     end_user_header: fields.end_user_header.trim(),
+    daily_budget: fields.daily_budget.trim(),
   };
   const verify = providedNeedsVerification(connection, current);
-  const problem = (field: ProvidedField) => (problems[field] ? t(PROBLEM_KEYS[field]) : '');
+  // A budget that was chosen can be changed, not taken away again.
+  const budgetChosen = (connection?.user_daily_budget_microusd ?? null) !== null;
+  const problem = (field: ProvidedField) =>
+    problems[field] ? t(PROBLEM_KEYS[field], { max: formatUsd(MAX_DAILY_BUDGET_MICROUSD) }) : '';
 
   /** Any edit after a refusal: its results described the form as it was. */
   function edit(change: Partial<ProvidedFields>) {
@@ -203,7 +211,7 @@ export function ProvidedConnectionForm({
   async function save(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
-    const found = providedFieldProblems(current, !connection);
+    const found = providedFieldProblems(current, !connection, budgetChosen);
     const invalid = Object.keys(found).length > 0;
     setProblems(found);
     setResults({});
@@ -321,6 +329,25 @@ export function ProvidedConnectionForm({
                   { value: '', label: t('adminModels.form.noDefaultModel') },
                   ...models.map((model) => ({ value: model, label: model })),
                 ]}
+                aria-invalid={invalid}
+                aria-describedby={describedBy}
+              />
+            )}
+          </Field>
+          <Field
+            label={t('adminModels.form.budget')}
+            hint={t('adminModels.form.budgetHint')}
+            problem={problem('user_daily_budget_microusd')}
+          >
+            {(inputId, describedBy, invalid) => (
+              <input
+                id={inputId}
+                className={inputClass}
+                inputMode="decimal"
+                value={fields.daily_budget}
+                onChange={(event) => edit({ daily_budget: event.target.value })}
+                maxLength={20}
+                autoComplete="off"
                 aria-invalid={invalid}
                 aria-describedby={describedBy}
               />

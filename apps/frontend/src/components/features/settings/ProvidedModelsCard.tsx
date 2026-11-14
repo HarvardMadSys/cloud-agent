@@ -40,8 +40,8 @@ export function useProvidedSources(): ProvidedModelSourceApi[] | null {
 /**
  * The models this deployment provides to the owner, by name and nothing else.
  * Where they come from is not the owner's concern, so the list has no heading
- * and says nothing of the deployment; the model picker says how many requests
- * are left today. A source is named only when there is more than one, to tell
+ * and says nothing of the deployment; the model picker says what is left of
+ * today's budget. A source is named only when there is more than one, to tell
  * apart two that list the same model.
  */
 export function ProvidedModelsCard({ sources }: { sources: ProvidedModelSourceApi[] }) {

@@ -1,14 +1,22 @@
-"""Models a deployment provides: allowances, the relay's route list and the owner tag.
+"""Models a deployment provides: budgets, prices, the relay's route list and the owner tag.
 
 Pure rules, no I/O. A *provided* (operator) connection has the fields an
 owner's connection has, so the same predicate decides which agents run which
 model (``domain.model_connections.require_usable``). What is its own lives
 here:
 
-**Allowances.** Each owner may send each provided model a number of requests
-per UTC day. The model has a default; an owner may have a number of their own,
-which replaces it. ``None`` is unlimited and ``0`` withholds the model. A
-model with no default set is offered to nobody.
+**Budgets.** Each owner may spend an amount per UTC day on a connection's
+models together, in millionths of a US dollar. The connection has a default;
+an account may have an amount of its own, which replaces it. ``0`` withholds
+the connection, and a connection with no default chosen offers nothing.
+
+**Prices.** A request costs what it used at its model's prices: input, output
+and, where the provider prices them apart, tokens read from and written to
+its prompt cache, each in millionths of a US dollar per million tokens. A
+model with no prices is offered to nobody.
+
+**Who a model is for.** A model is open to every owner, or only to the
+accounts named for it; an account's own answer replaces either.
 
 **The relay's routes.** The model relay forwards exactly the inference and
 listing paths an agent CLI calls under the connection's Base URL, matched
@@ -24,11 +32,15 @@ import hmac
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from cloud_agent.domain.model_connections import ModelConnectionInvalid
+from cloud_agent.domain.model_usage import CHAT, MESSAGES, RESPONSES, TokenUsage
 from cloud_agent_shared.model_connections import anthropic_base_url
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 #: The domain the stored key of a provided connection is encrypted under, and
 #: its members' translator tokens are derived under, from the settings root key.
@@ -38,6 +50,22 @@ END_USER_TAG_DOMAIN = b"cloud-agent/operator-model-connection/end-user/v1"
 END_USER_TAG_CHARS = 24
 
 DEFAULT_USER_CONCURRENCY = 4
+
+#: Money is kept in whole millionths of a US dollar, and a price in those per
+#: million tokens, so that a cost is integer arithmetic: 2_800_000 is $2.80
+#: per million tokens, and a request's cost is rounded up to the next millionth.
+MICROUSD_PER_USD = 1_000_000
+TOKENS_PER_PRICE = 1_000_000
+#: Bytes of a request's text taken as one input token when its answer named no
+#: usage, and when reserving for a request still in flight.
+BYTES_PER_ESTIMATED_TOKEN = 4
+#: What a file embedded in a request (an image, a document) is taken to be in
+#: input tokens, whatever its size: its bytes are not text, and a screenshot
+#: of a few megabytes is on the order of a thousand tokens to a model.
+ESTIMATED_FILE_TOKENS = 1500
+#: A string at least this long with no whitespace in it is an embedded file
+#: in base64, not text.
+_EMBEDDED_MIN_CHARS = 4096
 
 _HEADER_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,62}")
 #: Headers the relay writes, strips or passes on from the client; an owner tag
@@ -62,53 +90,158 @@ _RESERVED_HEADERS = frozenset(
 )
 
 
-class OperatorLimitsMissing(Exception):
-    """A connection cannot be enabled while a model of its has no default allowance."""
+class OperatorTermsMissing(Exception):
+    """A connection cannot be enabled before it has a budget and every model has prices."""
 
-    def __init__(self, models: list[str]) -> None:
-        """Keep the models that still need one."""
-        super().__init__("models without a default allowance")
+    def __init__(self, models: list[str], *, budget: bool) -> None:
+        """Keep the models that still need prices, and whether the budget is still to be chosen."""
+        super().__init__("a default budget or model prices are missing")
         self.models = models
+        self.budget = budget
+
+
+@dataclass(frozen=True)
+class ModelPrices:
+    """What one provided model costs, in micro-dollars per million tokens."""
+
+    input: int
+    output: int
+    #: ``None`` charges tokens read from the provider's cache at ``input``.
+    cache_read: int | None = None
+    #: ``None`` charges tokens written to the provider's cache at ``input``.
+    cache_write: int | None = None
+
+
+def model_prices(terms: Mapping[str, Any] | None) -> ModelPrices | None:
+    """The prices in a model's stored terms; ``None`` while it has none."""
+    if terms is None or terms.get("input_price") is None or terms.get("output_price") is None:
+        return None
+    return ModelPrices(
+        input=int(terms["input_price"]),
+        output=int(terms["output_price"]),
+        cache_read=_price(terms.get("cache_read_price")),
+        cache_write=_price(terms.get("cache_write_price")),
+    )
+
+
+def _price(value: Any) -> int | None:
+    return int(value) if value else None
+
+
+def request_cost(prices: ModelPrices, usage: TokenUsage) -> int:
+    """What a request cost, in micro-dollars, rounded up.
+
+    ``usage.prompt`` counts every input token. Tokens read from or written to
+    the provider's cache are taken out of it and charged at their own price
+    only where the model has one; otherwise they stay in it, at the input
+    price.
+    """
+    plain = usage.prompt
+    read_price, write_price = prices.cache_read or 0, prices.cache_write or 0
+    if read_price:
+        plain -= usage.cache_read
+    if write_price:
+        plain -= usage.cache_write
+    total = (
+        max(plain, 0) * prices.input
+        + usage.output * prices.output
+        + usage.cache_read * read_price
+        + usage.cache_write * write_price
+    )
+    return -(-total // TOKENS_PER_PRICE)
+
+
+def estimated_prompt_tokens(document: Any) -> int:
+    """The input tokens a request is taken to be, from its decoded JSON body.
+
+    The text in it, keys and string values alike, at one token per four
+    bytes; and a fixed number for each embedded file. Counting a body's raw
+    bytes would take a conversation's screenshots for megabytes of text. It
+    is an estimate for when the provider's own count is not to be had, not a
+    tokenizer: it knows nothing of a model's vocabulary or of what the
+    provider will serve from its cache.
+    """
+    text = files = 0
+    pending = [document]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, str):
+            if _embedded_file(node):
+                files += 1
+            else:
+                text += len(node.encode("utf-8", "surrogatepass"))
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                text += len(str(key))
+                pending.append(value)
+        elif isinstance(node, list):
+            pending.extend(node)
+    return -(-text // BYTES_PER_ESTIMATED_TOKEN) + files * ESTIMATED_FILE_TOKENS
+
+
+def _embedded_file(value: str) -> bool:
+    """Whether a string in a request is a file's bytes rather than text."""
+    if value.startswith("data:"):
+        return True
+    return len(value) >= _EMBEDDED_MIN_CHARS and not any(ch in value for ch in " \n\t")
 
 
 @dataclass(frozen=True)
 class Allowance:
-    """One owner's allowance on one provided model, and today's use."""
+    """What one owner may use of one provided model today."""
 
-    #: Requests per UTC day; ``None`` is unlimited, ``0`` is not offered.
-    limit: int | None
-    used: int = 0
-
-    @property
-    def offered(self) -> bool:
-        """Whether the owner may use the model at all."""
-        return self.limit is None or self.limit > 0
+    #: Whether the model is this owner's to use at all: it has prices, it is
+    #: open to them, and their budget on its connection is not zero.
+    offered: bool
+    #: Micro-dollars the owner may spend per UTC day on the connection's models.
+    budget_microusd: int = 0
+    #: Micro-dollars the owner's requests on the connection have cost today.
+    spent_microusd: int = 0
 
     @property
     def exhausted(self) -> bool:
-        """Whether today's requests are used up."""
-        return self.limit is not None and self.used >= self.limit
+        """Whether today's budget is used up."""
+        return self.spent_microusd >= self.budget_microusd
+
+    @property
+    def remaining_microusd(self) -> int:
+        """What is left of today's budget."""
+        return max(self.budget_microusd - self.spent_microusd, 0)
 
 
-#: A model with no default set: offered to nobody.
-NOT_OFFERED = Allowance(limit=0)
+#: A model with no prices, or a connection with no budget chosen: offered to nobody.
+NOT_OFFERED = Allowance(offered=False)
+
+
+def effective_budget(default: int | None, own: int | None) -> int | None:
+    """An owner's daily budget on a connection; ``None`` while none was chosen."""
+    return own if own is not None else default
 
 
 def effective_allowance(
-    default: dict[str, Any] | None, own: dict[str, Any] | None, *, used: int = 0
+    terms: Mapping[str, Any] | None,
+    *,
+    own_offered: bool | None = None,
+    budget_microusd: int | None = None,
+    spent_microusd: int = 0,
 ) -> Allowance:
     """The allowance an owner has on a model.
 
-    ``default`` is the model's limit row and ``own`` the owner's, each ``None``
-    when there is none. Without a default the model is not offered, whatever
-    the owner's row says: a model is opened by setting its default, to ``0``
-    when it is for named owners only.
+    ``terms`` is the model's stored row, ``None`` when it has none;
+    ``own_offered`` is the account's own answer on the model, ``None`` when it
+    has none; ``budget_microusd`` is the owner's budget on the connection
+    (:func:`effective_budget`). A model without prices and a connection
+    without a budget are offered to nobody, whatever an account's rows say.
     """
-    if default is None:
+    if model_prices(terms) is None or budget_microusd is None:
         return NOT_OFFERED
-    if own is not None:
-        return Allowance(limit=own.get("daily_requests"), used=used)
-    return Allowance(limit=default.get("user_daily_requests"), used=used)
+    assert terms is not None
+    open_to_owner = own_offered if own_offered is not None else not terms.get("named_only")
+    return Allowance(
+        offered=bool(open_to_owner) and budget_microusd > 0,
+        budget_microusd=budget_microusd,
+        spent_microusd=spent_microusd,
+    )
 
 
 def utc_day(now: datetime | None = None) -> datetime:
@@ -164,10 +297,13 @@ class RelayRoute:
     """One path the model relay forwards."""
 
     #: Whether the request is an inference call: its body names the model, and
-    #: it counts against the owner's allowance.
+    #: what it costs is charged to the owner's budget.
     inference: bool
     #: Whether a refusal is shaped as Anthropic's error rather than OpenAI's.
     anthropic: bool
+    #: The inference API an answer on this path is read as
+    #: (``domain.model_usage``); empty where nothing is charged.
+    api: str = ""
 
 
 def relay_route(base_url: str, method: str, raw_path: str) -> RelayRoute | None:
@@ -182,10 +318,10 @@ def relay_route(base_url: str, method: str, raw_path: str) -> RelayRoute | None:
     openai = urlsplit(base_url).path.rstrip("/")
     anthropic = urlsplit(anthropic_base_url(base_url)).path.rstrip("/")
     routes: dict[tuple[str, str], RelayRoute] = {
-        ("POST", f"{openai}/chat/completions"): RelayRoute(inference=True, anthropic=False),
-        ("POST", f"{openai}/responses"): RelayRoute(inference=True, anthropic=False),
+        ("POST", f"{openai}/chat/completions"): RelayRoute(True, anthropic=False, api=CHAT),
+        ("POST", f"{openai}/responses"): RelayRoute(True, anthropic=False, api=RESPONSES),
         ("GET", f"{openai}/models"): RelayRoute(inference=False, anthropic=False),
-        ("POST", f"{anthropic}/v1/messages"): RelayRoute(inference=True, anthropic=True),
+        ("POST", f"{anthropic}/v1/messages"): RelayRoute(True, anthropic=True, api=MESSAGES),
         ("POST", f"{anthropic}/v1/messages/count_tokens"): RelayRoute(
             inference=False, anthropic=True
         ),
@@ -202,20 +338,29 @@ def is_messages_path(raw_path: str) -> bool:
 
 
 __all__ = [
+    "BYTES_PER_ESTIMATED_TOKEN",
     "DEFAULT_USER_CONCURRENCY",
     "END_USER_TAG_CHARS",
     "END_USER_TAG_DOMAIN",
+    "ESTIMATED_FILE_TOKENS",
+    "MICROUSD_PER_USD",
     "NOT_OFFERED",
     "OPERATOR_CONNECTION_KEY_DOMAIN",
+    "TOKENS_PER_PRICE",
     "Allowance",
-    "OperatorLimitsMissing",
+    "ModelPrices",
+    "OperatorTermsMissing",
     "RelayRoute",
     "clean_default_model",
     "clean_end_user_header",
     "effective_allowance",
+    "effective_budget",
     "end_user_tag",
+    "estimated_prompt_tokens",
     "is_messages_path",
+    "model_prices",
     "next_reset",
     "relay_route",
+    "request_cost",
     "utc_day",
 ]

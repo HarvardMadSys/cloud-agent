@@ -129,9 +129,10 @@ function useProvidedConnections(onAccessDenied?: (cause: unknown) => void) {
 
 /**
  * Models this deployment provides: connections whose key stays on the control
- * plane and which every admitted account may use with no setup, up to a daily
- * number of requests per model. An administrator adds a connection (saved
- * disabled), gives every model a default allowance, then enables it.
+ * plane and which every admitted account may use with no setup, within a
+ * daily budget that each request is charged against at its model's prices.
+ * An administrator adds a connection (saved disabled), chooses its daily
+ * budget and every model's prices, then enables it.
  */
 export default function ProvidedModelsSettings({
   onAccessDenied,

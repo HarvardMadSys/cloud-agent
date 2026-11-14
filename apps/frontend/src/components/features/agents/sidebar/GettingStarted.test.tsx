@@ -167,7 +167,7 @@ describe('GettingStarted', () => {
       model_connections_enabled: true,
       model_connection_required: false,
       model_connections: [],
-      provided_sources: [providedSource({ 'house-fast': [100, 0] })],
+      provided_sources: [providedSource(['house-fast'])],
     });
 
     sidebar();

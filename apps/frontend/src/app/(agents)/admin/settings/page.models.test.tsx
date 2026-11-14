@@ -159,7 +159,7 @@ describe('the Models tab of admin Settings', () => {
   it('is found by settings search, which opens the tab at its heading', async () => {
     render(<AdminSettingsPage />);
     await waitFor(() => expect(getAgentAdminSettings).toHaveBeenCalled());
-    for (const query of ['provided models', 'allowance', 'daily requests', 'model relay']) {
+    for (const query of ['provided models', 'daily budget', 'price', 'cost', 'model relay']) {
       fireEvent.change(screen.getByRole('searchbox', { name: 'Search settings' }), {
         target: { value: query },
       });

@@ -1,4 +1,4 @@
-"""Erasing an account takes its allowances and its request counts on provided models with it."""
+"""Erasing an account takes its budget, its model answers and its use of provided models with it."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ pytestmark = [pytest.mark.dbtest, pytest.mark.asyncio]
 _ID = "oconn_" + "f" * 32
 
 
-async def test_an_erased_account_leaves_no_allowance_or_usage_row(storage, pool) -> None:  # noqa: F811
+async def test_an_erased_account_leaves_no_budget_access_or_usage_row(storage, pool) -> None:  # noqa: F811
     models = storage.operator_models
     await models.create_operator_connection(
         values={
@@ -29,19 +29,37 @@ async def test_an_erased_account_leaves_no_allowance_or_usage_row(storage, pool)
             "model_checks": {"m1": {"protocols": {"chat_completions": {"status": "supported"}}}},
         }
     )
-    await models.set_operator_limit(
-        connection_id=_ID, model="m1", user_daily_requests=10, global_concurrency=None
-    )
+    terms = {"input_price": 2_800_000, "output_price": 8_800_000}
+    await models.set_operator_terms(connection_id=_ID, model="m1", terms=terms)
     gone = await make_account(storage, "gone@example.edu")
     stays = await make_account(storage, "stays@example.edu")
     for account in (gone, stays):
-        await models.set_operator_user_limit(
-            connection_id=_ID, user_id=account, model="m1", daily_requests=50
+        await models.set_operator_user_budget(
+            connection_id=_ID, user_id=account, daily_budget_microusd=50_000_000
         )
-        counted = await models.count_operator_request(
-            connection_id=_ID, user_id=account, model="m1"
+        await models.set_operator_user_access(
+            connection_id=_ID, user_id=account, model="m1", offered=True
         )
-        assert counted["outcome"] == "counted"
+        await models.record_operator_request(
+            connection_id=_ID,
+            user_id=account,
+            model="m1",
+            cost_microusd=1_000,
+            input_tokens=100,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            output_tokens=10,
+            estimated=False,
+        )
+    async with pool.acquire() as conn:
+        # What a previous release kept of an account, which nothing reads now.
+        for account in (gone, stays):
+            await conn.execute(
+                "INSERT INTO agent_operator_model_user_limits "
+                "(operator_connection_id, user_id, model, daily_requests) VALUES ($1, $2, 'm1', 5)",
+                _ID,
+                account,
+            )
 
     await act(storage, gone, "delete")
     await _stopped(storage, gone)
@@ -50,11 +68,16 @@ async def test_an_erased_account_leaves_no_allowance_or_usage_row(storage, pool)
     )
 
     async with pool.acquire() as conn:
-        for table in ("agent_operator_model_user_limits", "agent_operator_model_usage"):
+        for table in (
+            "agent_operator_user_budgets",
+            "agent_operator_model_user_access",
+            "agent_operator_model_usage",
+            "agent_operator_model_user_limits",
+        ):
             owners = await conn.fetch(f"SELECT user_id FROM {table}")
             assert [row["user_id"] for row in owners] == [stays], table
-    # The connection and the model's default are the deployment's, and stay.
+    # The connection and the model's prices are the deployment's, and stay.
     assert [row["id"] for row in await models.list_operator_connections()] == [_ID]
-    assert (await models.operator_limits(connection_ids=[_ID]))[_ID]["m1"][
-        "user_daily_requests"
-    ] == 10
+    assert (await models.operator_terms(connection_ids=[_ID]))[_ID]["m1"][
+        "input_price"
+    ] == 2_800_000

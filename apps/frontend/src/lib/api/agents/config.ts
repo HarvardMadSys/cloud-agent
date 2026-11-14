@@ -25,27 +25,28 @@ export interface ModelConnectionOptionApi {
   model_efforts?: Record<string, Record<string, ModelEffortOfferApi>>;
 }
 
-/** This owner's allowance on one provided model, for the current UTC day. */
-export interface ProvidedModelAllowanceApi {
-  /** Requests the owner may send today; `null` is unlimited. */
-  daily_requests: number | null;
-  /** Requests the deployment's relay has accepted from this owner today. */
-  used_today: number;
-}
-
 /**
  * A connection the deployment provides to every admitted owner (`oconn_…`),
  * as a composer offers it. The same shape as an owner's own connection, plus
- * this owner's allowances. Only the models this owner may use are listed.
+ * this owner's budget for the current UTC day on its models together. Only
+ * the models this owner may use are listed, and a source on which they have
+ * no budget is not listed at all.
+ *
+ * Money is in whole millionths of a US dollar: `5000000` is $5.00.
  */
 export interface ProvidedModelSourceApi extends ModelConnectionOptionApi {
   /** Whether a new owner with no history starts here. */
   is_default: boolean;
   /** The model a new owner starts on, when this owner may use it. */
   default_model: string | null;
-  /** Per listed model: this owner's allowance and today's use. */
-  allowances: Record<string, ProvidedModelAllowanceApi>;
-  /** When today's counts start over: the next midnight UTC, as ISO time. */
+  /** What this owner may spend today on this source's models together. */
+  daily_budget_microusd: number;
+  /**
+   * What this owner's requests on this source have cost today: the tokens
+   * each used, at its model's prices.
+   */
+  spent_today_microusd: number;
+  /** When today's spending starts over: the next midnight UTC, as ISO time. */
   resets_at: string;
 }
 
@@ -95,9 +96,10 @@ export interface AgentConfigApi {
   /** This owner's enabled model connections. Absent before the feature. */
   model_connections?: ModelConnectionOptionApi[];
   /**
-   * Connections this deployment provides, each with this owner's allowance. A
-   * model chosen from one is submitted with the source's id as
-   * `model_connection_id`. Absent on a control plane that predates them.
+   * Connections this deployment provides, each with this owner's daily budget
+   * on its models and what they spent of it today. A model chosen from one is
+   * submitted with the source's id as `model_connection_id`. Absent on a
+   * control plane that predates them.
    */
   provided_sources?: ProvidedModelSourceApi[];
   /** Whether this deployment lets owners add and run on their own connections. */

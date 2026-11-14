@@ -171,7 +171,7 @@ describe('Picker', () => {
           'house-spent': 'Provided by this deployment',
           mine: 'Your connections',
         }}
-        optionNotes={{ 'house-fast': '42 left today', 'house-spent': 'Resets at 8:00 AM' }}
+        optionNotes={{ 'house-fast': '$3.20 left today', 'house-spent': 'Resets at 8:00 AM' }}
         onChange={vi.fn()}
       />,
     );
@@ -181,7 +181,7 @@ describe('Picker', () => {
       within(provided)
         .getAllByRole('option')
         .map((option) => option.textContent),
-    ).toEqual(['house-fast 42 left today', 'house-spent Resets at 8:00 AM']);
+    ).toEqual(['house-fast $3.20 left today', 'house-spent Resets at 8:00 AM']);
     const own = screen.getByRole('group', { name: 'Your connections' });
     expect(
       within(own)

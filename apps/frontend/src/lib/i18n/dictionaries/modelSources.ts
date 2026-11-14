@@ -16,11 +16,11 @@ export const modelSourcesEn = {
   'modelSource.providedUnknown': '{model} · provided by this deployment',
   'modelSource.providedGroup': 'Provided by this deployment',
   'modelSource.ownGroup': 'Your connections',
-  'modelSource.remaining': '{count} left today',
-  'modelSource.resets': 'No requests left today · resets at {time}',
+  'modelSource.remaining': '{amount} left today',
+  'modelSource.resets': 'Today’s budget is used up · resets at {time}',
   'modelSource.usedUp': '{label} (used up today)',
   'modelSource.usedUpHint':
-    '{model} has no requests left today on this deployment. The allowance resets at {time}. Choose another model to continue.',
+    'Today’s budget for {model} on this deployment is used up. It resets at {time}. Choose a model that is still available to continue.',
   'modelSource.unavailable': '{label} (unavailable)',
   'modelSource.unavailableHint':
     '{label} cannot run with {runtime}, or its connection no longer offers it. Choose a model to continue.',
@@ -29,7 +29,7 @@ export const modelSourcesEn = {
   'modelSource.usageExternal':
     'Ran on your own connection: your provider bills it, and its cost is not tracked here.',
   'modelSource.usageProvided':
-    'Ran on a model this deployment provides: it counts against your daily request allowance, and its cost is not tracked here.',
+    'Ran on a model this deployment provides: its cost counts against your daily budget.',
   'modelSource.steerQueued':
     'A different model is selected, so this message runs as the next turn instead of joining the running one.',
   'modelSource.sendNowMismatch':
@@ -51,17 +51,17 @@ export const modelSourcesZhCN: Record<keyof typeof modelSourcesEn, string> = {
   'modelSource.providedUnknown': '{model} · 由本部署提供',
   'modelSource.providedGroup': '由本部署提供',
   'modelSource.ownGroup': '你的连接',
-  'modelSource.remaining': '今天还剩 {count} 次',
-  'modelSource.resets': '今天的次数已用完 · {time} 重置',
+  'modelSource.remaining': '今天还剩 {amount}',
+  'modelSource.resets': '今天的额度已用完 · {time} 重置',
   'modelSource.usedUp': '{label}（今日已用完）',
   'modelSource.usedUpHint':
-    '{model} 今天在本部署的请求次数已用完，将在 {time} 重置。请选择其他模型后继续。',
+    '{model} 今天在本部署的额度已用完，将在 {time} 重置。请选择仍可用的模型后继续。',
   'modelSource.unavailable': '{label}（不可用）',
   'modelSource.unavailableHint':
     '{label} 无法与 {runtime} 一起运行，或其连接已不再提供该模型。请选择模型后继续。',
   'modelSource.inheritedUnavailable': '此会话使用的 {label} 当前不可用，请为本轮选择模型。',
   'modelSource.usageExternal': '使用你自己的连接运行：费用由服务商计费，此处不统计其费用。',
-  'modelSource.usageProvided': '使用本部署提供的模型运行：计入你的每日请求次数，此处不统计其费用。',
+  'modelSource.usageProvided': '使用本部署提供的模型运行：费用计入你的每日额度。',
   'modelSource.steerQueued': '已选择其他模型，此消息将作为下一轮运行，不会加入正在运行的这一轮。',
   'modelSource.sendNowMismatch':
     '此消息使用的模型或来源与正在运行的这一轮不同，将作为单独的下一轮运行。',

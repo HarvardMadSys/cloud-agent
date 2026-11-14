@@ -406,6 +406,14 @@ describe('models the deployment provides', () => {
     ).toBe(
       'Changed provided model connection House: Base URL, default for new users, requests in flight per account',
     );
+    expect(
+      describeAuditEntry(
+        entry('agent.operator_model_connection.update', {
+          ...connection,
+          changed: ['name', 'user_daily_budget_microusd'],
+        }),
+      ),
+    ).toBe('Changed provided model connection House: name, daily budget per account');
     expect(describeAuditEntry(entry('agent.operator_model_connection.update', connection))).toBe(
       'Changed provided model connection House',
     );
@@ -435,6 +443,101 @@ describe('models the deployment provides', () => {
     );
   });
 
+  it('reads a model’s prices per million tokens, with what else was set for it', () => {
+    const terms = (details: Record<string, unknown>) =>
+      describeAuditEntry(
+        entry('agent.operator_model_connection.set_terms', {
+          ...connection,
+          model: 'house-fast',
+          input_price: 2_800_000,
+          output_price: 11_200_000,
+          cache_read_price: null,
+          cache_write_price: null,
+          named_only: false,
+          global_concurrency: null,
+          ...details,
+        }),
+      );
+    expect(terms({})).toBe(
+      'Set the prices for house-fast on provided model connection House: input $2.80 and output $11.20 per million tokens',
+    );
+    expect(
+      terms({
+        input_price: 150_000,
+        output_price: 600_000,
+        cache_read_price: 75_000,
+        cache_write_price: 187_500,
+        named_only: true,
+        global_concurrency: 8,
+      }),
+    ).toBe(
+      'Set the prices for house-fast on provided model connection House: input $0.15 and output $0.60 per million tokens, cached input $0.075, cache writes $0.1875, for named accounts only, at most 8 in flight across accounts',
+    );
+    // A free model is still a priced one.
+    expect(terms({ input_price: 0, output_price: 0 })).toBe(
+      'Set the prices for house-fast on provided model connection House: input $0.00 and output $0.00 per million tokens',
+    );
+    // A row recorded without its prices still reads as a sentence.
+    expect(
+      describeAuditEntry(
+        entry('agent.operator_model_connection.set_terms', { ...connection, model: 'house-fast' }),
+      ),
+    ).toBe('Set the prices for house-fast on provided model connection House');
+  });
+
+  it('names the account whose own daily budget was set or cleared', () => {
+    const budget = (daily_budget_microusd: unknown) =>
+      describeAuditEntry(
+        entry(
+          'agent.operator_model_user_budget.set',
+          { ...connection, daily_budget_microusd },
+          account,
+        ),
+      );
+    expect(budget(20_000_000)).toBe(
+      'Gave ada (u-222222…) a daily budget of $20.00 on provided model connection House',
+    );
+    // To the last decimal: a budget below a cent is not read as nothing.
+    expect(budget(4_200)).toBe(
+      'Gave ada (u-222222…) a daily budget of $0.0042 on provided model connection House',
+    );
+    expect(budget(0)).toBe(
+      'Gave ada (u-222222…) a daily budget of $0.00 on provided model connection House, which withholds it',
+    );
+    expect(budget(undefined)).toBe(
+      'Gave ada (u-222222…) a daily budget of its own on provided model connection House',
+    );
+    expect(
+      describeAuditEntry(entry('agent.operator_model_user_budget.clear', connection, account)),
+    ).toBe(
+      'Put ada (u-222222…) back on the default daily budget for provided model connection House',
+    );
+  });
+
+  it('names the account a model was offered to or withheld from, and the one put back', () => {
+    const details = { ...connection, model: 'house-fast' };
+    expect(
+      describeAuditEntry(
+        entry('agent.operator_model_user_access.set', { ...details, offered: true }, account),
+      ),
+    ).toBe('Offered house-fast on provided model connection House to ada (u-222222…)');
+    expect(
+      describeAuditEntry(
+        entry('agent.operator_model_user_access.set', { ...details, offered: false }, account),
+      ),
+    ).toBe('Withheld house-fast on provided model connection House from ada (u-222222…)');
+    expect(
+      describeAuditEntry(entry('agent.operator_model_user_access.set', details, account)),
+    ).toBe("Changed ada (u-222222…)'s access to house-fast on provided model connection House");
+    expect(
+      describeAuditEntry(entry('agent.operator_model_user_access.clear', details, account)),
+    ).toBe(
+      'Put ada (u-222222…) back on the default for house-fast on provided model connection House',
+    );
+  });
+
+  // What was recorded while an allowance was a number of requests a day: those
+  // rows are kept, and still read as what they were.
   it('reads a default allowance as a number, unlimited, or only named accounts', () => {
     const limit = (user_daily_requests: number | null, global_concurrency: number | null) =>
       describeAuditEntry(

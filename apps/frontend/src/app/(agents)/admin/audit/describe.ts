@@ -5,6 +5,7 @@
 // page; this is the line that has to make sense without them.
 
 import type { AdminAuditLogEntry, HostSettingDefinition } from '@/lib/api/admin';
+import { formatUsd } from '@/lib/money';
 
 import { formatSettingValue } from '../hosts/settings';
 import { agentName } from '../settings/AgentVersions';
@@ -241,7 +242,10 @@ function providedConnection(details: Details): string {
   return name ? `provided model connection ${name}` : 'a provided model connection';
 }
 
-/** A daily request allowance: a number, none at all, or no limit. */
+/**
+ * A daily request allowance: a number, none at all, or no limit. What a
+ * provided model was limited by before budgets; rows from then still say so.
+ */
 function allowance(value: unknown): string {
   const requests = count(value);
   if (requests === null) return 'unlimited requests a day';
@@ -249,10 +253,56 @@ function allowance(value: unknown): string {
   return `${requests.toLocaleString('en-US')} request${requests === 1 ? '' : 's'} a day`;
 }
 
-/** Which model of which provided connection an allowance is for. */
+/** Which model of which provided connection a row is about. */
 function providedModel(details: Details): string {
   const model = text(details.model) ?? 'a model';
   return `${model} on ${providedConnection(details)}`;
+}
+
+/**
+ * An amount recorded in millionths of a US dollar, to its last decimal: a
+ * budget, or a price per million tokens. `null` when none was recorded.
+ */
+function money(value: unknown): string | null {
+  const amount = count(value);
+  return amount === null ? null : formatUsd(amount, { precise: true });
+}
+
+/** A model's prices, who it is for and its cap on requests in flight, as they were set. */
+function termsSet(details: Details): string {
+  const what = `Set the prices for ${providedModel(details)}`;
+  const input = money(details.input_price);
+  const output = money(details.output_price);
+  if (input === null || output === null) return what;
+  const terms = [`input ${input} and output ${output} per million tokens`];
+  const cacheRead = money(details.cache_read_price);
+  if (cacheRead !== null) terms.push(`cached input ${cacheRead}`);
+  const cacheWrite = money(details.cache_write_price);
+  if (cacheWrite !== null) terms.push(`cache writes ${cacheWrite}`);
+  if (details.named_only === true) terms.push('for named accounts only');
+  const cap = count(details.global_concurrency);
+  if (cap !== null) terms.push(`at most ${cap} in flight across accounts`);
+  return `${what}: ${terms.join(', ')}`;
+}
+
+/** One account's own daily budget on a provided connection; zero withholds it. */
+function budgetGiven(details: Details, entry: AdminAuditLogEntry): string {
+  const who = subject(entry);
+  const where = providedConnection(details);
+  const amount = money(details.daily_budget_microusd);
+  if (amount === null) return `Gave ${who} a daily budget of its own on ${where}`;
+  const withheld = details.daily_budget_microusd === 0 ? ', which withholds it' : '';
+  return `Gave ${who} a daily budget of ${amount} on ${where}${withheld}`;
+}
+
+/** One account's own answer on a model: offered it, or refused it. */
+function accessSet(details: Details, entry: AdminAuditLogEntry): string {
+  const offered = flag(details.offered);
+  const model = providedModel(details);
+  if (offered === null) return `Changed ${subject(entry)}'s access to ${model}`;
+  return offered
+    ? `Offered ${model} to ${subject(entry)}`
+    : `Withheld ${model} from ${subject(entry)}`;
 }
 
 /** The fields an edit changed, in the words the settings form uses. */
@@ -264,11 +314,14 @@ const PROVIDED_FIELD_NAMES: Record<string, string> = {
   is_default: 'default for new users',
   end_user_header: 'end-user header',
   user_concurrency: 'requests in flight per account',
+  user_daily_budget_microusd: 'daily budget per account',
 };
 
 /**
- * Models the deployment provides, and each account's allowance on them. The
- * key itself is never recorded: a rotation says only that it happened.
+ * Models the deployment provides: each one's prices, and each account's
+ * budget and models. The key itself is never recorded: a rotation says only
+ * that it happened. `set_limit` and `user_limit.*` are what was recorded
+ * while an allowance was a number of requests; those rows read as they did.
  */
 const PROVIDED_SENTENCES: Record<string, Sentence> = {
   'agent.operator_model_connection.create': (details) => {
@@ -288,6 +341,15 @@ const PROVIDED_SENTENCES: Record<string, Sentence> = {
   'agent.operator_model_connection.enable': (details) => `Enabled ${providedConnection(details)}`,
   'agent.operator_model_connection.disable': (details) => `Disabled ${providedConnection(details)}`,
   'agent.operator_model_connection.delete': (details) => `Deleted ${providedConnection(details)}`,
+  'agent.operator_model_connection.set_terms': termsSet,
+  'agent.operator_model_user_budget.set': (details, _host, _definitions, entry) =>
+    budgetGiven(details, entry),
+  'agent.operator_model_user_budget.clear': (details, _host, _definitions, entry) =>
+    `Put ${subject(entry)} back on the default daily budget for ${providedConnection(details)}`,
+  'agent.operator_model_user_access.set': (details, _host, _definitions, entry) =>
+    accessSet(details, entry),
+  'agent.operator_model_user_access.clear': (details, _host, _definitions, entry) =>
+    `Put ${subject(entry)} back on the default for ${providedModel(details)}`,
   'agent.operator_model_connection.set_limit': (details) => {
     const daily = count(details.user_daily_requests);
     const cap = count(details.global_concurrency);

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentConfigApi } from '@/lib/api/agents';
-import { providedSource, TEST_PROVIDED, TEST_RESETS_AT } from '@/test/connectionConfig';
+import {
+  providedSource,
+  TEST_BUDGET,
+  TEST_PROVIDED,
+  TEST_RESETS_AT,
+} from '@/test/connectionConfig';
 import {
   allowanceOf,
   findSource,
@@ -26,63 +31,71 @@ function config(overrides: Partial<AgentConfigApi> = {}): AgentConfigApi {
   };
 }
 
-describe('an allowance on a provided model', () => {
-  const source = providedSource({
-    limited: [100, 40],
-    spent: [10, 10],
-    over: [10, 12],
-    open: [null, 5000],
-  });
+describe('an allowance on a provided source', () => {
+  /** $5.00 a day, of which `spent` micro-dollars are gone. */
+  const spending = (spent: number) =>
+    providedSource(['house-fast', 'house-deep'], { spent_today_microusd: spent });
 
-  it('is what is left of today’s requests, never below zero', () => {
-    expect(allowanceOf(source, 'limited')).toEqual({
-      limit: 100,
-      used: 40,
-      remaining: 60,
+  it('is what is left of today’s budget, never below zero', () => {
+    expect(allowanceOf(spending(1_800_000))).toEqual({
+      budget: TEST_BUDGET,
+      spent: 1_800_000,
+      remaining: 3_200_000,
       exhausted: false,
       resetsAt: TEST_RESETS_AT,
     });
-    expect(allowanceOf(source, 'spent')).toMatchObject({ remaining: 0, exhausted: true });
-    // A count can pass its allowance when the allowance was lowered during the day.
-    expect(allowanceOf(source, 'over')).toMatchObject({ remaining: 0, exhausted: true });
+    expect(allowanceOf(spending(0))).toMatchObject({ remaining: TEST_BUDGET, exhausted: false });
+    expect(allowanceOf(spending(TEST_BUDGET))).toMatchObject({ remaining: 0, exhausted: true });
+    // Spending can pass the budget: requests in flight finish, and a budget can be lowered.
+    expect(allowanceOf(spending(TEST_BUDGET + 40_000))).toMatchObject({
+      remaining: 0,
+      exhausted: true,
+    });
   });
 
-  it('has nothing to run out of when unlimited', () => {
-    expect(allowanceOf(source, 'open')).toMatchObject({
-      limit: null,
-      used: 5000,
-      remaining: null,
+  it('is not used up while a millionth of a dollar is left', () => {
+    expect(allowanceOf(spending(TEST_BUDGET - 1))).toMatchObject({
+      remaining: 1,
       exhausted: false,
     });
   });
 
   it('starts over once the reset time has passed, without a new answer from the server', () => {
     const reset = Date.parse('2026-11-13T00:00:00Z');
-    const yesterday = { ...source, resets_at: '2026-11-13T00:00:00Z' };
-    expect(allowanceOf(yesterday, 'spent', reset - 1)).toMatchObject({ exhausted: true });
-    expect(allowanceOf(yesterday, 'spent', reset)).toMatchObject({
-      used: 0,
-      remaining: 10,
+    const yesterday = { ...spending(TEST_BUDGET), resets_at: '2026-11-13T00:00:00Z' };
+    expect(allowanceOf(yesterday, reset - 1)).toMatchObject({ exhausted: true });
+    expect(allowanceOf(yesterday, reset)).toMatchObject({
+      spent: 0,
+      remaining: TEST_BUDGET,
       exhausted: false,
     });
   });
 
-  it('does not limit a listed model the server sent no allowance for', () => {
-    const bare = { ...source, models: ['limited', 'unlisted'] };
-    expect(allowanceOf(bare, 'unlisted')).toMatchObject({ limit: null, exhausted: false });
+  it('is one budget for every model the source lists', () => {
+    const loaded = config({ provided_sources: [spending(1_800_000)] });
+    const fast = providedAllowance(loaded, TEST_PROVIDED, 'house-fast');
+    expect(fast?.remaining).toBe(3_200_000);
+    expect(providedAllowance(loaded, TEST_PROVIDED, 'house-deep')).toEqual(fast);
   });
 
   it('is read by source id, and only for a model that source lists', () => {
-    const loaded = config({ provided_sources: [source] });
-    expect(providedAllowance(loaded, TEST_PROVIDED, 'limited')?.remaining).toBe(60);
+    const loaded = config({ provided_sources: [spending(1_800_000)] });
+    expect(providedAllowance(loaded, TEST_PROVIDED, 'house-fast')?.remaining).toBe(3_200_000);
     expect(providedAllowance(loaded, TEST_PROVIDED, 'elsewhere')).toBeNull();
-    expect(providedAllowance(loaded, 'mconn_test', 'limited')).toBeNull();
-    expect(providedAllowance(null, TEST_PROVIDED, 'limited')).toBeNull();
+    expect(providedAllowance(loaded, 'mconn_test', 'house-fast')).toBeNull();
+    expect(providedAllowance(null, TEST_PROVIDED, 'house-fast')).toBeNull();
+  });
+
+  it('does not limit a source whose answer names no budget', () => {
+    // The server still decides when the turn is sent; nothing here says "$NaN left".
+    const { daily_budget_microusd: _budget, spent_today_microusd: _spent, ...bare } = spending(0);
+    const loaded = config({ provided_sources: [bare as ReturnType<typeof spending>] });
+    expect(providedAllowance(loaded, TEST_PROVIDED, 'house-fast')).toBeNull();
   });
 });
 
 describe('provided sources in the configuration', () => {
-  const source = providedSource({ 'house-fast': [100, 0] });
+  const source = providedSource(['house-fast']);
 
   it('are found by id beside the owner’s own connections', () => {
     const loaded = config({
@@ -116,7 +129,7 @@ describe('provided sources in the configuration', () => {
 });
 
 describe('whether the owner must add a connection of their own', () => {
-  const runnable = providedSource({ 'house-fast': [100, 0] });
+  const runnable = providedSource(['house-fast']);
 
   it('follows the server', () => {
     expect(modelSetupRequired(config({ model_connection_required: true }))).toBe(true);
@@ -133,9 +146,9 @@ describe('whether the owner must add a connection of their own', () => {
 
   it('is still asked where the provided source offers this owner nothing that runs', () => {
     // Every model withheld from this account: the source is listed with none.
-    const withheld = providedSource({});
+    const withheld = providedSource([]);
     // Listed, but no agent can run it yet.
-    const unverified = providedSource({ 'house-fast': [100, 0] }, {}, []);
+    const unverified = providedSource(['house-fast'], {}, []);
     for (const source of [withheld, unverified]) {
       const loaded = config({ model_connection_required: true, provided_sources: [source] });
       expect(hasRunnableProvidedModel(loaded)).toBe(false);
@@ -144,12 +157,13 @@ describe('whether the owner must add a connection of their own', () => {
   });
 });
 
-describe('when the next count starts over', () => {
+describe('when the next day starts over', () => {
   const at = (iso: string) => Date.parse(iso);
+  const spent = { spent_today_microusd: TEST_BUDGET };
   const sources = [
-    providedSource({ a: [1, 1] }, { id: 'oconn_a', resets_at: '2026-11-13T00:00:00Z' }),
-    providedSource({ b: [1, 1] }, { id: 'oconn_b', resets_at: '2026-11-14T00:00:00Z' }),
-    providedSource({ c: [1, 1] }, { id: 'oconn_c', resets_at: 'soon' }),
+    providedSource(['a'], { ...spent, id: 'oconn_a', resets_at: '2026-11-13T00:00:00Z' }),
+    providedSource(['b'], { ...spent, id: 'oconn_b', resets_at: '2026-11-14T00:00:00Z' }),
+    providedSource(['c'], { ...spent, id: 'oconn_c', resets_at: 'soon' }),
   ];
 
   it('is the earliest reset still ahead', () => {

@@ -1,60 +1,100 @@
 'use client';
 
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { useT } from '@/components/providers/LocaleProvider';
-import { Select } from '@/components/ui/Select';
 import {
-  clearOperatorModelUserLimit,
+  clearOperatorModelUserAccess,
+  clearOperatorModelUserBudget,
   listOperatorModelUsers,
-  setOperatorModelUserLimit,
   type OperatorModelConnection,
   type OperatorModelUser,
 } from '@/lib/api/adminOperatorModels';
+import { formatUsd, formatUsdCost } from '@/lib/money';
 import { APIError } from '@/lib/utils/errors';
 
-import { AllowanceInput } from './ProvidedModelLimits';
-import {
-  allowanceValue,
-  countText,
-  isAccessDenied,
-  providedFailure,
-  type AllowanceMode,
-} from './providedModelsForm';
+import { SetAccessForm, SetBudgetForm } from './ProvidedModelAccountForms';
+import { countText, isAccessDenied, providedFailure } from './providedModelsForm';
 
-const inputClass = 'ui-input mt-1 block min-h-11 w-full rounded-lg';
 const cell = 'px-3 py-2 align-top';
-/** The refusal of a clear for an account that has no allowance of its own (any more). */
-const NO_OWN_LIMIT = 'operator_model_user_limit_not_found';
+/** The refusal of a clear for an account that has no budget of its own (any more). */
+const NO_OWN_BUDGET = 'operator_model_user_budget_not_found';
+/** The refusal of a clear for an account that has no answer of its own on the model (any more). */
+const NO_OWN_ACCESS = 'operator_model_user_access_not_found';
 
 type Translate = ReturnType<typeof useT>;
 
-/** One account's line for one model: its own allowance, if it has one, and today's use. */
-interface AccountRow {
-  user: OperatorModelUser;
-  model: string;
-  /** `undefined`: the account follows the model's default. */
-  limit: number | null | undefined;
-  used: number;
+/** `users` with one account's line as the server holds it now: in its place, or added. */
+function withUser(users: OperatorModelUser[], row: OperatorModelUser): OperatorModelUser[] {
+  return users.some((user) => user.account_id === row.account_id)
+    ? users.map((user) => (user.account_id === row.account_id ? row : user))
+    : [...users, row];
 }
 
-/** A line per account and model that has an own allowance or use today. */
-function accountRows(users: OperatorModelUser[]): AccountRow[] {
+/**
+ * `users` with a page added. An account already shown, because a write here
+ * answered its line before its page was read, keeps its place and takes the
+ * page's line.
+ */
+function withPage(users: OperatorModelUser[], page: OperatorModelUser[]): OperatorModelUser[] {
+  return page.reduce(withUser, users);
+}
+
+/** Whether an account has a line: something of its own, or use today. */
+function listed(user: OperatorModelUser): boolean {
+  if (user.daily_budget_microusd !== null || Object.keys(user.access).length > 0) return true;
+  return user.requests_today > 0 || user.spent_today_microusd > 0;
+}
+
+/**
+ * `users` with one account's line as `cleared` leaves it, or without the line
+ * once it has nothing to say. A clear answers nothing, so the line is adjusted
+ * here.
+ */
+function withCleared(
+  users: OperatorModelUser[],
+  accountId: string,
+  cleared: (user: OperatorModelUser) => OperatorModelUser,
+): OperatorModelUser[] {
   return users.flatMap((user) => {
-    const models = [...new Set([...Object.keys(user.limits), ...Object.keys(user.used_today)])];
-    return models.sort().map((model) => ({
-      user,
-      model,
-      limit: Object.hasOwn(user.limits, model) ? user.limits[model] : undefined,
-      used: user.used_today[model] ?? 0,
-    }));
+    if (user.account_id !== accountId) return [user];
+    const left = cleared(user);
+    return listed(left) ? [left] : [];
   });
 }
 
-function limitText(limit: number | null | undefined, t: Translate): string {
-  if (limit === undefined) return t('adminModels.accounts.followsDefault');
-  if (limit === null) return t('adminModels.limits.unlimited');
-  return limit === 0 ? t('adminModels.accounts.withheld') : countText(limit);
+/** `users` with one account's own budget removed: it follows the default again. */
+function withoutBudget(users: OperatorModelUser[], accountId: string): OperatorModelUser[] {
+  return withCleared(users, accountId, (user) => ({ ...user, daily_budget_microusd: null }));
+}
+
+/** `users` with one account's own answer on a model removed: it follows the model's default. */
+function withoutAccess(
+  users: OperatorModelUser[],
+  accountId: string,
+  model: string,
+): OperatorModelUser[] {
+  return withCleared(users, accountId, (user) => ({
+    ...user,
+    access: Object.fromEntries(Object.entries(user.access).filter(([key]) => key !== model)),
+  }));
+}
+
+/** An account's own daily budget, as the table says it. */
+function budgetText(budget: number | null, t: Translate): string {
+  if (budget === null) return t('adminModels.accounts.followsDefault');
+  const amount = formatUsd(budget, { precise: true });
+  return budget === 0 ? t('adminModels.accounts.withheldBudget', { amount }) : amount;
+}
+
+/** What names the clear of an account's own budget while it is in flight. */
+function budgetKey(user: OperatorModelUser): string {
+  return `budget:${user.account_id}`;
+}
+
+/** What names the clear of an account's own answer on a model while it is in flight. */
+function accessKey(user: OperatorModelUser, model: string): string {
+  return `access:${user.account_id}:${model}`;
 }
 
 /** An account as the table names it: its email, with the id kept beside it. */
@@ -69,141 +109,115 @@ function AccountName({ user }: { user: OperatorModelUser }) {
   );
 }
 
-/** `users` with one account's row replaced or added. */
-function withUser(users: OperatorModelUser[], row: OperatorModelUser): OperatorModelUser[] {
-  return users.some((user) => user.account_id === row.account_id)
-    ? users.map((user) => (user.account_id === row.account_id ? row : user))
-    : [...users, row];
-}
-
-/** `users` with one account's own allowance on a model removed. */
-function withoutLimit(
-  users: OperatorModelUser[],
-  accountId: string,
-  model: string,
-): OperatorModelUser[] {
-  return users.flatMap((user) => {
-    if (user.account_id !== accountId) return [user];
-    const limits = Object.fromEntries(Object.entries(user.limits).filter(([key]) => key !== model));
-    // An account with no allowance of its own and no use today has no line.
-    const listed = Object.keys(limits).length > 0 || Object.keys(user.used_today).length > 0;
-    return listed ? [{ ...user, limits }] : [];
-  });
-}
-
-/** Give one account, named by email or id, an allowance of its own on one model. */
-function SetAllowanceForm({
-  connection,
-  onSaved,
-  onAccessDenied,
+/** Puts an account back on a default: the connection's budget, or one model's. */
+function ClearButton({
+  label,
+  busy,
+  disabled,
+  onClick,
 }: {
-  connection: OperatorModelConnection;
-  onSaved: (user: OperatorModelUser) => void;
-  onAccessDenied?: (cause: unknown) => void;
+  label: string;
+  busy: boolean;
+  disabled: boolean;
+  onClick: () => void;
 }) {
   const t = useT();
-  const id = useId();
-  const [account, setAccount] = useState('');
-  const [model, setModel] = useState(connection.models[0] ?? '');
-  const [mode, setMode] = useState<AllowanceMode>('limited');
-  const [amount, setAmount] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const daily = allowanceValue(mode, amount);
-  const chosen = connection.models.includes(model) ? model : (connection.models[0] ?? '');
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    if (busy || daily === undefined || !account.trim() || !chosen) return;
-    setBusy(true);
-    setError('');
-    try {
-      onSaved(
-        await setOperatorModelUserLimit(connection.id, {
-          account: account.trim(),
-          model: chosen,
-          daily_requests: daily,
-        }),
-      );
-      setAccount('');
-    } catch (cause) {
-      if (isAccessDenied(cause)) onAccessDenied?.(cause);
-      setError(providedFailure(cause, t));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <form
-      onSubmit={(event) => void save(event)}
-      aria-label={t('adminModels.accounts.setTitle')}
-      className="mt-3 rounded-lg border border-border p-3"
+    <button
+      type="button"
+      className="ui-button ui-button-secondary min-h-9"
+      disabled={disabled}
+      aria-busy={busy || undefined}
+      aria-label={label}
+      onClick={onClick}
     >
-      <p className="text-sm font-medium">{t('adminModels.accounts.setTitle')}</p>
-      <div className="mt-2 grid gap-2 lg:grid-cols-2">
-        <div>
-          <label htmlFor={`${id}-account`} className="block text-xs font-medium text-muted">
-            {t('adminModels.accounts.account')}
-          </label>
-          <input
-            id={`${id}-account`}
-            className={inputClass}
-            value={account}
-            disabled={busy}
-            maxLength={320}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={t('adminModels.accounts.accountPlaceholder')}
-            onChange={(event) => setAccount(event.target.value)}
-          />
+      {t('adminModels.accounts.clear')}
+    </button>
+  );
+}
+
+/**
+ * One account: its own daily budget, what it spent and how many requests it
+ * was served today, and its own answer on each model it has one for. Each
+ * thing of its own can be cleared, which puts the account back on the default.
+ */
+function AccountRow({
+  user,
+  clearing,
+  onClearBudget,
+  onClearAccess,
+}: {
+  user: OperatorModelUser;
+  /** What is being cleared anywhere in the table: nothing else is cleared meanwhile. */
+  clearing: string;
+  onClearBudget: () => void;
+  onClearAccess: (model: string) => void;
+}) {
+  const t = useT();
+  const account = user.email || user.account_id;
+  const models = Object.keys(user.access).sort();
+  return (
+    <tr>
+      <td className={cell}>
+        <AccountName user={user} />
+      </td>
+      <td className={cell}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span>{budgetText(user.daily_budget_microusd, t)}</span>
+          {user.daily_budget_microusd !== null ? (
+            <ClearButton
+              label={t('adminModels.accounts.clearBudgetFor', { account })}
+              busy={clearing === budgetKey(user)}
+              disabled={clearing !== ''}
+              onClick={onClearBudget}
+            />
+          ) : null}
         </div>
-        <div>
-          <label htmlFor={`${id}-model`} className="block text-xs font-medium text-muted">
-            {t('adminModels.accounts.model')}
-          </label>
-          <Select
-            id={`${id}-model`}
-            className={inputClass}
-            value={chosen}
-            disabled={busy}
-            onValueChange={setModel}
-            options={connection.models.map((item) => ({ value: item, label: item }))}
-          />
-        </div>
-      </div>
-      <div className="mt-2">
-        <AllowanceInput
-          idPrefix={id}
-          mode={mode}
-          amount={amount}
-          zeroLabel={t('adminModels.accounts.withhold')}
-          disabled={busy}
-          onMode={setMode}
-          onAmount={setAmount}
-        />
-      </div>
-      <button
-        type="submit"
-        className="ui-button ui-button-secondary mt-3 min-h-11"
-        disabled={busy || daily === undefined || !account.trim() || !chosen}
-        aria-busy={busy || undefined}
-      >
-        {t(busy ? 'connections.busy' : 'adminModels.accounts.set')}
-      </button>
-      {error ? (
-        <p role="alert" className="mt-2 text-sm text-status-error">
-          {error}
-        </p>
-      ) : null}
-    </form>
+      </td>
+      <td className={`${cell} whitespace-nowrap text-right tabular-nums`}>
+        {formatUsdCost(user.spent_today_microusd)}
+      </td>
+      <td className={`${cell} whitespace-nowrap text-right tabular-nums`}>
+        {countText(user.requests_today)}
+      </td>
+      <td className={cell}>
+        {models.length === 0 ? (
+          <span>{t('adminModels.accounts.followsModels')}</span>
+        ) : (
+          <ul className="space-y-1">
+            {models.map((model) => (
+              <li key={model} className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  <span className="break-all font-mono text-[13px]">{model}</span>{' '}
+                  {t(
+                    user.access[model]
+                      ? 'adminModels.accounts.offered'
+                      : 'adminModels.accounts.withheld',
+                  )}
+                </span>
+                <ClearButton
+                  label={t('adminModels.accounts.clearAccessFor', { account, model })}
+                  busy={clearing === accessKey(user, model)}
+                  disabled={clearing !== ''}
+                  onClick={() => onClearAccess(model)}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </td>
+    </tr>
   );
 }
 
 /**
  * The accounts that differ from the defaults on this connection: those given
- * an allowance of their own, and those with use today. An allowance is set
- * for an account by email or id, and cleared to put it back on the default.
+ * a daily budget of their own, those offered a model or refused one by name,
+ * and those with use today. A budget or an answer is set for an account by
+ * email or id, and cleared to put it back on the default.
+ *
+ * A write answers the account's whole line as the list has it, so the line
+ * shown is the server's: for an account that was not in the table too.
  */
 export function ProvidedModelAccounts({
   connection,
@@ -239,7 +253,7 @@ export function ProvidedModelAccounts({
       try {
         const page = await listOperatorModelUsers(connectionId, { cursor: after });
         if (current !== request.current) return;
-        setUsers((shown) => (after && shown ? [...shown, ...page.users] : page.users));
+        setUsers((shown) => withPage(shown ?? [], page.users));
         setCursor(page.next_cursor);
       } catch (cause) {
         if (current === request.current) fail(cause);
@@ -257,25 +271,48 @@ export function ProvidedModelAccounts({
     };
   }, [load]);
 
-  async function clear(row: AccountRow) {
-    const key = `${row.user.account_id}:${row.model}`;
+  /** Clear one thing of an account's own, then show its line without it. */
+  async function clear(
+    key: string,
+    send: () => Promise<void>,
+    gone: string,
+    without: (shown: OperatorModelUser[]) => OperatorModelUser[],
+  ) {
     if (clearing) return;
     setClearing(key);
     setError('');
     let cleared = true;
     try {
-      await clearOperatorModelUserLimit(connectionId, row.user.account_id, row.model);
+      await send();
     } catch (cause) {
       // Already cleared elsewhere: the line only has to stop saying otherwise.
-      cleared = cause instanceof APIError && cause.code === NO_OWN_LIMIT;
+      cleared = cause instanceof APIError && cause.code === gone;
       if (!cleared) fail(cause);
     } finally {
       setClearing('');
     }
-    if (cleared) setUsers((shown) => withoutLimit(shown ?? [], row.user.account_id, row.model));
+    if (cleared) setUsers((shown) => without(shown ?? []));
   }
 
-  const rows = accountRows(users ?? []);
+  const clearBudget = (user: OperatorModelUser) =>
+    clear(
+      budgetKey(user),
+      () => clearOperatorModelUserBudget(connectionId, user.account_id),
+      NO_OWN_BUDGET,
+      (shown) => withoutBudget(shown, user.account_id),
+    );
+
+  const clearAccess = (user: OperatorModelUser, model: string) =>
+    clear(
+      accessKey(user, model),
+      () => clearOperatorModelUserAccess(connectionId, user.account_id, model),
+      NO_OWN_ACCESS,
+      (shown) => withoutAccess(shown, user.account_id, model),
+    );
+
+  const saved = (user: OperatorModelUser) => setUsers((shown) => withUser(shown ?? [], user));
+
+  const rows = users ?? [];
   return (
     <section aria-labelledby={headingId} className="mt-4">
       <h4 id={headingId} className="text-sm font-semibold">
@@ -292,7 +329,7 @@ export function ProvidedModelAccounts({
       ) : null}
       {rows.length > 0 ? (
         <div className="mt-2 overflow-x-auto rounded-lg border border-border">
-          <table className="w-full min-w-[34rem] text-left text-sm">
+          <table className="w-full min-w-[46rem] text-left text-sm">
             <caption className="sr-only">{t('adminModels.accounts.title')}</caption>
             <thead className="border-b border-border bg-surface-muted text-xs text-muted">
               <tr>
@@ -300,50 +337,29 @@ export function ProvidedModelAccounts({
                   {t('adminModels.accounts.account')}
                 </th>
                 <th scope="col" className={`${cell} font-medium`}>
-                  {t('adminModels.accounts.model')}
-                </th>
-                <th scope="col" className={`${cell} font-medium`}>
-                  {t('adminModels.accounts.ownAllowance')}
+                  {t('adminModels.accounts.ownBudget')}
                 </th>
                 <th scope="col" className={`${cell} text-right font-medium`}>
-                  {t('adminModels.accounts.usedToday')}
+                  {t('adminModels.accounts.spentToday')}
                 </th>
-                <th scope="col" className={cell}>
-                  <span className="sr-only">{t('adminModels.accounts.actions')}</span>
+                <th scope="col" className={`${cell} text-right font-medium`}>
+                  {t('adminModels.accounts.requestsToday')}
+                </th>
+                <th scope="col" className={`${cell} font-medium`}>
+                  {t('adminModels.accounts.ownAccess')}
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {rows.map((row) => {
-                const key = `${row.user.account_id}:${row.model}`;
-                return (
-                  <tr key={key}>
-                    <td className={cell}>
-                      <AccountName user={row.user} />
-                    </td>
-                    <td className={`${cell} break-all font-mono text-[13px]`}>{row.model}</td>
-                    <td className={cell}>{limitText(row.limit, t)}</td>
-                    <td className={`${cell} text-right tabular-nums`}>{countText(row.used)}</td>
-                    <td className={`${cell} text-right`}>
-                      {row.limit !== undefined ? (
-                        <button
-                          type="button"
-                          className="ui-button ui-button-secondary min-h-9"
-                          disabled={clearing !== ''}
-                          aria-busy={clearing === key || undefined}
-                          aria-label={t('adminModels.accounts.clearFor', {
-                            account: row.user.email || row.user.account_id,
-                            model: row.model,
-                          })}
-                          onClick={() => void clear(row)}
-                        >
-                          {t('adminModels.accounts.clear')}
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                );
-              })}
+              {rows.map((user) => (
+                <AccountRow
+                  key={user.account_id}
+                  user={user}
+                  clearing={clearing}
+                  onClearBudget={() => void clearBudget(user)}
+                  onClearAccess={(model) => void clearAccess(user, model)}
+                />
+              ))}
             </tbody>
           </table>
         </div>
@@ -362,11 +378,8 @@ export function ProvidedModelAccounts({
           {t('adminModels.accounts.more')}
         </button>
       ) : null}
-      <SetAllowanceForm
-        connection={connection}
-        onSaved={(user) => setUsers((shown) => withUser(shown ?? [], user))}
-        onAccessDenied={onAccessDenied}
-      />
+      <SetBudgetForm connection={connection} onSaved={saved} onAccessDenied={onAccessDenied} />
+      <SetAccessForm connection={connection} onSaved={saved} onAccessDenied={onAccessDenied} />
     </section>
   );
 }

@@ -24,19 +24,23 @@ export function offering(
 /** A connection the deployment provides, as a test's owner is offered it. */
 export const TEST_PROVIDED = 'oconn_0123456789abcdef0123456789abcdef';
 
-/** A time safely after any test's clock: today's counts have not started over. */
+/** A time safely after any test's clock: today's spending has not started over. */
 export const TEST_RESETS_AT = '2999-01-01T00:00:00Z';
 
+/** What a test's owner may spend a day on a provided source: $5.00, in micro-dollars. */
+export const TEST_BUDGET = 5_000_000;
+
 /**
- * One provided source listing `allowances`' models: each value is
- * `[daily_requests, used_today]`, with `null` for an unlimited allowance.
+ * One provided source listing `models`, on which the owner may spend
+ * `TEST_BUDGET` a day and has spent nothing. `overrides` sets another budget
+ * (`daily_budget_microusd`) or what was spent today (`spent_today_microusd`):
+ * all of the budget spent is a source used up for today.
  */
 export function providedSource(
-  allowances: Record<string, [number | null, number]>,
+  models: string[],
   overrides: Partial<ProvidedModelSourceApi> = {},
   runtimes: string[] = ['claude-code', 'codex', 'pi', 'opencode', 'kilo'],
 ): ProvidedModelSourceApi {
-  const models = Object.keys(allowances);
   return {
     id: TEST_PROVIDED,
     name: 'House models',
@@ -44,12 +48,8 @@ export function providedSource(
     default_model: models[0] ?? null,
     models,
     model_runtimes: Object.fromEntries(models.map((model) => [model, runtimes])),
-    allowances: Object.fromEntries(
-      Object.entries(allowances).map(([model, [daily_requests, used_today]]) => [
-        model,
-        { daily_requests, used_today },
-      ]),
-    ),
+    daily_budget_microusd: TEST_BUDGET,
+    spent_today_microusd: 0,
     resets_at: TEST_RESETS_AT,
     ...overrides,
   };

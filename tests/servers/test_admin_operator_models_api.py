@@ -20,7 +20,7 @@ from cloud_agent.application.model_connection_save import (
 from cloud_agent.application.model_connection_status import verification_status
 from cloud_agent.application.model_connections import operator_connection_cipher
 from cloud_agent.domain.model_connections import ModelConnectionConflict
-from cloud_agent.domain.operator_models import OperatorLimitsMissing
+from cloud_agent.domain.operator_models import OperatorTermsMissing, model_prices
 
 pytestmark = pytest.mark.asyncio
 
@@ -29,6 +29,16 @@ PATH = "/admin/agent/operator-model-connections"
 _KEY = "sk-deployment-key-0123456789"
 _NOW = datetime(2026, 11, 12, 9, tzinfo=UTC)
 _SUPPORTED = {"protocols": {"chat_completions": {"status": "supported"}}}
+#: $2.80 in and $8.80 out per million tokens, and $5 a day.
+_PRICES = {"input_price": 2_800_000, "output_price": 8_800_000}
+_TERMS = {
+    **_PRICES,
+    "cache_read_price": None,
+    "cache_write_price": None,
+    "named_only": False,
+    "global_concurrency": None,
+}
+_BUDGET = 5_000_000
 _FAILED = {"protocols": {"chat_completions": {"status": "failed", "category": "auth"}}}
 
 
@@ -43,8 +53,9 @@ class _Repository:
 
     def __init__(self) -> None:
         self.rows: dict[str, dict[str, Any]] = {}
-        self.limit_rows: dict[tuple[str, str], dict[str, Any]] = {}
-        self.user_limits: dict[tuple[str, str, str], int | None] = {}
+        self.term_rows: dict[tuple[str, str], dict[str, Any]] = {}
+        self.user_budgets: dict[tuple[str, str], int] = {}
+        self.user_access: dict[tuple[str, str, str], bool] = {}
         self.usage_rows: list[dict[str, Any]] = []
         self.released: list[str] = []
         self.relay_hosts = 1
@@ -63,6 +74,7 @@ class _Repository:
         ):
             raise ModelConnectionConflict(values["name"])
         row = {
+            "user_daily_budget_microusd": None,
             **values,
             "model_checks": {m: {**r, "revision": 1} for m, r in values["model_checks"].items()},
             "is_default": False,
@@ -81,9 +93,12 @@ class _Repository:
         row = self.rows[connection_id]
         if changes.get("enabled") and not row["enabled"]:
             models = changes.get("models", row["models"])
-            missing = [m for m in models if (connection_id, m) not in self.limit_rows]
-            if missing:
-                raise OperatorLimitsMissing(missing)
+            missing = [
+                m for m in models if model_prices(self.term_rows.get((connection_id, m))) is None
+            ]
+            budget = changes.get("user_daily_budget_microusd", row["user_daily_budget_microusd"])
+            if missing or budget is None:
+                raise OperatorTermsMissing(missing, budget=budget is None)
         if changes.get("enabled") is False and row["enabled"]:
             row["credential_revision"] += 1
         if changes.get("is_default"):
@@ -119,40 +134,73 @@ class _Repository:
     async def model_relay_host_count(self):
         return self.relay_hosts
 
-    async def operator_limits(self, *, connection_ids):
+    async def operator_terms(self, *, connection_ids):
         found: dict[str, dict[str, Any]] = {cid: {} for cid in connection_ids}
-        for (cid, model), limit in self.limit_rows.items():
+        for (cid, model), terms in self.term_rows.items():
             if cid in found:
-                found[cid][model] = limit
+                found[cid][model] = terms
         return found
 
-    async def set_operator_limit(
-        self, *, connection_id, model, user_daily_requests, global_concurrency
-    ):
+    async def set_operator_terms(self, *, connection_id, model, terms):
         if model not in self.rows[connection_id]["models"]:
             return False
-        self.limit_rows[(connection_id, model)] = {
-            "user_daily_requests": user_daily_requests,
-            "global_concurrency": global_concurrency,
-        }
+        self.term_rows[(connection_id, model)] = dict(terms)
         return True
 
-    async def set_operator_user_limit(self, *, connection_id, user_id, model, daily_requests):
+    async def set_operator_user_budget(self, *, connection_id, user_id, daily_budget_microusd):
+        self.user_budgets[(connection_id, user_id)] = daily_budget_microusd
+        return True
+
+    async def clear_operator_user_budget(self, *, connection_id, user_id):
+        return self.user_budgets.pop((connection_id, user_id), None) is not None
+
+    async def set_operator_user_access(self, *, connection_id, user_id, model, offered):
         if model not in self.rows[connection_id]["models"]:
             return False
-        self.user_limits[(connection_id, user_id, model)] = daily_requests
+        self.user_access[(connection_id, user_id, model)] = offered
         return True
 
-    async def clear_operator_user_limit(self, *, connection_id, user_id, model):
-        return self.user_limits.pop((connection_id, user_id, model), "absent") != "absent"
+    async def clear_operator_user_access(self, *, connection_id, user_id, model):
+        return self.user_access.pop((connection_id, user_id, model), None) is not None
 
     async def list_operator_users(self, *, connection_id, cursor, limit):
         users: dict[str, dict[str, Any]] = {}
-        for (cid, user_id, model), value in sorted(self.user_limits.items()):
-            if cid == connection_id and (cursor is None or user_id > cursor):
-                users.setdefault(user_id, {"user_id": user_id, "limits": {}, "used_today": {}})
-                users[user_id]["limits"][model] = value
-        return list(users.values())[:limit]
+
+        def user(user_id: str) -> dict[str, Any]:
+            return users.setdefault(
+                user_id,
+                {
+                    "user_id": user_id,
+                    "daily_budget_microusd": None,
+                    "access": {},
+                    "spent_today_microusd": 0,
+                    "requests_today": 0,
+                },
+            )
+
+        for (cid, user_id), budget in self.user_budgets.items():
+            if cid == connection_id:
+                user(user_id)["daily_budget_microusd"] = budget
+        for (cid, user_id, model), offered in self.user_access.items():
+            if cid == connection_id:
+                user(user_id)["access"][model] = offered
+        page = [row for user_id, row in sorted(users.items()) if cursor is None or user_id > cursor]
+        return page[:limit]
+
+    async def operator_user(self, *, connection_id, user_id):
+        listed = await self.list_operator_users(connection_id=connection_id, cursor=None, limit=999)
+        mine = [row for row in listed if row["user_id"] == user_id]
+        return (
+            mine[0]
+            if mine
+            else {
+                "user_id": user_id,
+                "daily_budget_microusd": None,
+                "access": {},
+                "spent_today_microusd": 0,
+                "requests_today": 0,
+            }
+        )
 
     async def operator_usage(self, *, connection_id, start, end, limit):
         return [row for row in self.usage_rows if start <= row["day"] <= end][:limit]
@@ -241,12 +289,15 @@ async def _created(admin: _Harness, **changes) -> dict[str, Any]:
     return response.json()
 
 
-async def _enabled(admin: _Harness) -> dict[str, Any]:
-    view = await _created(admin)
+async def _priced(admin: _Harness, view: dict[str, Any]) -> None:
     for model in view["models"]:
-        await admin.call(
-            "PUT", f"/{view['id']}/limits", json={"model": model, "user_daily_requests": 100}
-        )
+        response = await admin.call("PUT", f"/{view['id']}/terms", json={"model": model, **_PRICES})
+        assert response.status_code == 200, response.text
+
+
+async def _enabled(admin: _Harness) -> dict[str, Any]:
+    view = await _created(admin, user_daily_budget_microusd=_BUDGET)
+    await _priced(admin, view)
     response = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
     assert response.status_code == 200, response.text
     admin.audit.clear()
@@ -265,9 +316,12 @@ async def _enabled(admin: _Harness) -> dict[str, Any]:
         ("POST", ""),
         ("PATCH", "/x"),
         ("DELETE", "/x"),
-        ("PUT", "/x/limits"),
+        ("PUT", "/x/terms"),
         ("GET", "/x/users"),
-        ("PUT", "/x/user-limits"),
+        ("PUT", "/x/user-budgets"),
+        ("DELETE", "/x/user-budgets"),
+        ("PUT", "/x/user-access"),
+        ("DELETE", "/x/user-access"),
         ("GET", "/x/usage"),
     ],
 )
@@ -288,7 +342,8 @@ async def test_a_connection_is_saved_verified_disabled_and_without_its_key(admin
     assert view["id"].startswith("oconn_") and view["enabled"] is False
     assert view["base_url"] == "https://provider.example/v1"
     assert (view["default_model"], view["end_user_header"]) == ("model-1", "X-End-User")
-    assert view["limits"] == {}
+    # No budget chosen and no model priced: it offers nothing until both are.
+    assert view["terms"] == {} and view["user_daily_budget_microusd"] is None
     assert [status["status"] for status in view["model_status"]] == ["ready", "ready"]
     # Verified with exactly what would be saved, before anything was.
     assert admin.verified == [
@@ -375,52 +430,140 @@ async def test_the_master_switch_stops_saving_and_enabling(admin, monkeypatch) -
     assert (await admin.call("DELETE", f"/{view['id']}")).status_code == 204
 
 
-# -- enabling and limits ----------------------------------------------------------
+# -- enabling, prices and the budget ----------------------------------------------
 
 
-async def test_enabling_waits_for_every_models_default_allowance(admin) -> None:
+async def test_enabling_waits_for_a_budget_and_every_models_prices(admin) -> None:
     view = await _created(admin)
     refused = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
     assert refused.status_code == 409
     error = refused.json()["detail"]["error"]
-    assert error["type"] == "operator_model_limits_missing"
+    assert error["type"] == "operator_model_terms_missing"
+    assert "budget" in error["message"]
     assert "model-1" in error["message"] and "model-2" in error["message"]
+    # Named beside the sentence too, for a client that says it in its own words.
+    assert (error["budget"], error["models"]) == (True, ["model-1", "model-2"])
 
-    limited = await admin.call(
+    priced = await admin.call(
         "PUT",
-        f"/{view['id']}/limits",
-        json={"model": "model-1", "user_daily_requests": 1500, "global_concurrency": 8},
+        f"/{view['id']}/terms",
+        json={
+            "model": "model-1",
+            **_PRICES,
+            "cache_read_price": 800_000,
+            "global_concurrency": 8,
+        },
     )
-    assert limited.json()["limits"] == {
-        "model-1": {"user_daily_requests": 1500, "global_concurrency": 8}
+    assert priced.json()["terms"] == {
+        "model-1": {**_TERMS, "cache_read_price": 800_000, "global_concurrency": 8}
     }
-    assert (await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})).status_code == 409
-    # Zero is a choice too: the model is for named accounts only.
+    # Still missing: a budget, and the other model's prices.
+    still = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
+    assert still.status_code == 409
+    error = still.json()["detail"]["error"]
+    message = error["message"]
+    assert "budget" in message and "model-2" in message and "model-1" not in message
+    assert (error["budget"], error["models"]) == (True, ["model-2"])
+
+    # A model for named accounts only is priced like any other.
     await admin.call(
-        "PUT", f"/{view['id']}/limits", json={"model": "model-2", "user_daily_requests": 0}
+        "PUT", f"/{view['id']}/terms", json={"model": "model-2", **_PRICES, "named_only": True}
     )
-    enabled = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
+    no_budget = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
+    assert no_budget.status_code == 409
+    error = no_budget.json()["detail"]["error"]
+    assert "budget" in error["message"] and "model-" not in error["message"]
+    assert (error["budget"], error["models"]) == (True, [])
+
+    # The budget may be chosen in the request that enables.
+    enabled = await admin.call(
+        "PATCH", f"/{view['id']}", json={"enabled": True, "user_daily_budget_microusd": _BUDGET}
+    )
     assert enabled.status_code == 200 and enabled.json()["enabled"] is True
-    assert admin.actions()[-3:] == [
-        "agent.operator_model_connection.set_limit",
-        "agent.operator_model_connection.set_limit",
+    assert enabled.json()["user_daily_budget_microusd"] == _BUDGET
+    assert admin.actions()[-4:] == [
+        "agent.operator_model_connection.set_terms",
+        "agent.operator_model_connection.set_terms",
         "agent.operator_model_connection.enable",
+        "agent.operator_model_connection.update",
     ]
+    assert admin.audit[-1]["details"]["changed"] == ["user_daily_budget_microusd"]
+    assert admin.audit[-4]["details"] == {
+        "connection_id": view["id"],
+        "name": "Provider",
+        "model": "model-1",
+        **_TERMS,
+        "cache_read_price": 800_000,
+        "global_concurrency": 8,
+    }
+
+
+async def test_a_budget_of_zero_is_a_choice_and_the_budget_can_be_changed(admin) -> None:
+    # Zero offers the connection only to accounts given a budget of their own.
+    view = await _created(admin, user_daily_budget_microusd=0)
+    assert view["user_daily_budget_microusd"] == 0
+    await _priced(admin, view)
+    enabled = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
+    assert enabled.status_code == 200
+
+    raised = await admin.call(
+        "PATCH", f"/{view['id']}", json={"user_daily_budget_microusd": 20_000_000}
+    )
+    assert raised.json()["user_daily_budget_microusd"] == 20_000_000
+    # A budget is a number, never negative.
+    for bad in (-1, 1.5, "plenty"):
+        response = await admin.call(
+            "PATCH", f"/{view['id']}", json={"user_daily_budget_microusd": bad}
+        )
+        assert response.status_code == 422, bad
+    assert admin.repository.rows[view["id"]]["user_daily_budget_microusd"] == 20_000_000
+
+
+async def test_a_row_without_prices_reads_as_a_model_still_to_be_priced(admin) -> None:
+    """What a previous release stored for a model: a request limit, and no prices."""
+    view = await _created(admin, user_daily_budget_microusd=_BUDGET)
+    admin.repository.term_rows[(view["id"], "model-1")] = {
+        **_TERMS,
+        "input_price": None,
+        "output_price": None,
+    }
+    listed = (await admin.call("GET")).json()["connections"][0]
+    assert listed["terms"] == {}
+    refused = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
+    assert refused.status_code == 409 and "model-1" in refused.text
 
 
 @pytest.mark.parametrize(
-    "limit",
+    "terms",
     [
-        {"model": "model-9", "user_daily_requests": 1},
-        {"model": "model-1", "user_daily_requests": -1},
-        {"model": "model-1", "user_daily_requests": 1, "global_concurrency": 0},
+        {"model": "model-9", **_PRICES},
+        {"model": "model-1", "input_price": 1},
+        {"model": "model-1", "output_price": 1},
+        {"model": "model-1", **_PRICES, "input_price": -1},
+        {"model": "model-1", **_PRICES, "output_price": 1.5},
+        # A cache price is a price or absent: zero would read as free.
+        {"model": "model-1", **_PRICES, "cache_read_price": 0},
+        {"model": "model-1", **_PRICES, "cache_write_price": -5},
+        {"model": "model-1", **_PRICES, "global_concurrency": 0},
+        {"model": "model-1", **_PRICES, "user_daily_requests": 100},
     ],
 )
-async def test_a_limit_is_for_a_listed_model_and_never_negative(admin, limit) -> None:
+async def test_terms_are_for_a_listed_model_and_name_both_prices(admin, terms) -> None:
     view = await _created(admin)
-    response = await admin.call("PUT", f"/{view['id']}/limits", json=limit)
+    response = await admin.call("PUT", f"/{view['id']}/terms", json=terms)
     assert response.status_code in (404, 422)
-    assert admin.repository.limit_rows == {}
+    assert admin.repository.term_rows == {}
+
+
+async def test_a_model_may_be_free(admin) -> None:
+    view = await _created(admin)
+    response = await admin.call(
+        "PUT",
+        f"/{view['id']}/terms",
+        json={"model": "model-1", "input_price": 0, "output_price": 0},
+    )
+    assert response.status_code == 200
+    assert response.json()["terms"]["model-1"] == {**_TERMS, "input_price": 0, "output_price": 0}
 
 
 # -- editing -----------------------------------------------------------------------
@@ -492,29 +635,28 @@ async def test_only_an_added_model_is_verified(admin) -> None:
     assert admin.verified[0]["models"] == ["model-3"]
     statuses = {status["model"]: status["status"] for status in response.json()["model_status"]}
     assert statuses == {"model-1": "ready", "model-2": "ready", "model-3": "ready"}
-    # The new model has no default allowance yet, so it is offered to nobody.
-    assert "model-3" not in response.json()["limits"]
+    # The new model has no prices yet, so it is offered to nobody.
+    assert "model-3" not in response.json()["terms"]
 
 
 async def test_enabling_with_a_new_model_is_refused_before_anything_is_verified_or_saved(
     admin,
 ) -> None:
-    view = await _created(admin)
-    for model in view["models"]:
-        await admin.call(
-            "PUT", f"/{view['id']}/limits", json={"model": model, "user_daily_requests": 1}
-        )
+    view = await _created(admin, user_daily_budget_microusd=_BUDGET)
+    await _priced(admin, view)
     admin.verified.clear()
     before = json.dumps(admin.repository.rows[view["id"]], default=str, sort_keys=True)
-    # The added model has no default allowance, so the connection cannot be enabled with it.
+    # The added model has no prices, so the connection cannot be enabled with it.
     response = await admin.call(
         "PATCH",
         f"/{view['id']}",
         json={"models": ["model-1", "model-2", "model-3"], "enabled": True},
     )
     assert response.status_code == 409
-    assert response.json()["detail"]["error"]["type"] == "operator_model_limits_missing"
-    assert "model-3" in response.json()["detail"]["error"]["message"]
+    error = response.json()["detail"]["error"]
+    assert error["type"] == "operator_model_terms_missing"
+    assert "model-3" in error["message"]
+    assert (error["budget"], error["models"]) == (False, ["model-3"])
     assert admin.verified == []
     assert json.dumps(admin.repository.rows[view["id"]], default=str, sort_keys=True) == before
 
@@ -581,8 +723,10 @@ async def test_an_unknown_connection_is_not_found(admin, connection_id) -> None:
     for method, path, body in (
         ("PATCH", "", {"name": "X"}),
         ("DELETE", "", None),
-        ("PUT", "/limits", {"model": "m", "user_daily_requests": 1}),
+        ("PUT", "/terms", {"model": "m", **_PRICES}),
         ("GET", "/users", None),
+        ("PUT", "/user-budgets", {"account": "a@example.edu", "daily_budget_microusd": 1}),
+        ("PUT", "/user-access", {"account": "a@example.edu", "model": "m", "offered": True}),
         ("GET", "/usage", None),
     ):
         response = await admin.call(method, f"/{connection_id}{path}", json=body)
@@ -596,77 +740,166 @@ async def test_the_list_says_whether_any_host_reaches_the_relay(admin) -> None:
     assert (await admin.call("GET")).json()["relay_hosts"] == 0
 
 
-# -- one account's own allowance --------------------------------------------------
+# -- one account's own budget and models -------------------------------------------
 
 _ACCOUNT = "01HZXACCOUNTAAAAAAAAAAAAAAA"
 
 
 @pytest.mark.parametrize("account", [_ACCOUNT, "a@example.edu", " A@Example.edu "])
-async def test_an_account_is_named_by_id_or_by_email(admin, account) -> None:
+async def test_an_account_named_by_id_or_by_email_gets_a_budget_of_its_own(admin, account) -> None:
     view = await _created(admin)
     response = await admin.call(
         "PUT",
-        f"/{view['id']}/user-limits",
-        json={"account": account, "model": "model-2", "daily_requests": 300},
+        f"/{view['id']}/user-budgets",
+        json={"account": account, "daily_budget_microusd": 20_000_000},
     )
     assert response.status_code == 200
     assert response.json() == {
         "account_id": _ACCOUNT,
         "email": "a@example.edu",
-        "limits": {"model-2": 300},
-        "used_today": {},
+        "daily_budget_microusd": 20_000_000,
+        "access": {},
+        "spent_today_microusd": 0,
+        "requests_today": 0,
     }
     [row] = admin.audit[-1:]
-    assert row["action"] == "agent.operator_model_user_limit.set"
+    assert row["action"] == "agent.operator_model_user_budget.set"
     assert row["target_user_id"] == _ACCOUNT
-    assert row["details"]["daily_requests"] == 300
+    assert row["details"]["daily_budget_microusd"] == 20_000_000
 
     listed = await admin.call("GET", f"/{view['id']}/users")
-    assert listed.json()["users"][0]["limits"] == {"model-2": 300}
+    assert listed.json()["users"][0]["daily_budget_microusd"] == 20_000_000
 
     cleared = await admin.call(
-        "DELETE", f"/{view['id']}/user-limits", params={"account_id": _ACCOUNT, "model": "model-2"}
+        "DELETE", f"/{view['id']}/user-budgets", params={"account_id": _ACCOUNT}
     )
     assert cleared.status_code == 204
-    assert admin.audit[-1]["action"] == "agent.operator_model_user_limit.clear"
+    assert admin.audit[-1]["action"] == "agent.operator_model_user_budget.clear"
     again = await admin.call(
-        "DELETE", f"/{view['id']}/user-limits", params={"account_id": _ACCOUNT, "model": "model-2"}
+        "DELETE", f"/{view['id']}/user-budgets", params={"account_id": _ACCOUNT}
     )
     assert again.status_code == 404
+    assert again.json()["detail"]["error"]["type"] == "operator_model_user_budget_not_found"
 
 
-async def test_unlimited_and_withheld_are_both_an_accounts_own_allowance(admin) -> None:
-    view = await _created(admin)
-    for value in (None, 0):
-        response = await admin.call(
-            "PUT",
-            f"/{view['id']}/user-limits",
-            json={"account": _ACCOUNT, "model": "model-1", "daily_requests": value},
-        )
-        assert response.json()["limits"] == {"model-1": value}
-
-
-@pytest.mark.parametrize("account", ["nobody@example.edu", "01HZXNOBODY", "not an email@"])
-async def test_an_unknown_account_gets_no_allowance(admin, account) -> None:
+async def test_a_budget_of_zero_withholds_the_connection_from_one_account(admin) -> None:
     view = await _created(admin)
     response = await admin.call(
         "PUT",
-        f"/{view['id']}/user-limits",
-        json={"account": account, "model": "model-1", "daily_requests": 5},
+        f"/{view['id']}/user-budgets",
+        json={"account": _ACCOUNT, "daily_budget_microusd": 0},
+    )
+    assert response.status_code == 200 and response.json()["daily_budget_microusd"] == 0
+    for bad in (-1, None, "plenty"):
+        refused = await admin.call(
+            "PUT",
+            f"/{view['id']}/user-budgets",
+            json={"account": _ACCOUNT, "daily_budget_microusd": bad},
+        )
+        assert refused.status_code == 422, bad
+    assert admin.repository.user_budgets == {(view["id"], _ACCOUNT): 0}
+
+
+@pytest.mark.parametrize("offered", [True, False])
+async def test_an_account_is_offered_a_model_or_has_it_withheld(admin, offered) -> None:
+    view = await _created(admin)
+    response = await admin.call(
+        "PUT",
+        f"/{view['id']}/user-access",
+        json={"account": "a@example.edu", "model": "model-2", "offered": offered},
+    )
+    assert response.status_code == 200
+    assert response.json()["access"] == {"model-2": offered}
+    [row] = admin.audit[-1:]
+    assert row["action"] == "agent.operator_model_user_access.set"
+    # A write answers the account as the list has it, not only what it wrote.
+    budgeted = await admin.call(
+        "PUT",
+        f"/{view['id']}/user-budgets",
+        json={"account": _ACCOUNT, "daily_budget_microusd": 7_000_000},
+    )
+    assert budgeted.json() == {
+        "account_id": _ACCOUNT,
+        "email": "a@example.edu",
+        "daily_budget_microusd": 7_000_000,
+        "access": {"model-2": offered},
+        "spent_today_microusd": 0,
+        "requests_today": 0,
+    }
+    again = await admin.call(
+        "PUT",
+        f"/{view['id']}/user-access",
+        json={"account": _ACCOUNT, "model": "model-1", "offered": True},
+    )
+    assert again.json()["daily_budget_microusd"] == 7_000_000
+    assert again.json()["access"] == {"model-1": True, "model-2": offered}
+    await admin.call("DELETE", f"/{view['id']}/user-budgets", params={"account_id": _ACCOUNT})
+    await admin.call(
+        "DELETE", f"/{view['id']}/user-access", params={"account_id": _ACCOUNT, "model": "model-1"}
+    )
+    admin.audit[:] = [row]
+    assert row["target_user_id"] == _ACCOUNT
+    assert row["details"]["model"] == "model-2" and row["details"]["offered"] is offered
+
+    listed = await admin.call("GET", f"/{view['id']}/users")
+    assert listed.json()["users"][0]["access"] == {"model-2": offered}
+
+    cleared = await admin.call(
+        "DELETE", f"/{view['id']}/user-access", params={"account_id": _ACCOUNT, "model": "model-2"}
+    )
+    assert cleared.status_code == 204
+    assert admin.audit[-1]["action"] == "agent.operator_model_user_access.clear"
+    again = await admin.call(
+        "DELETE", f"/{view['id']}/user-access", params={"account_id": _ACCOUNT, "model": "model-2"}
+    )
+    assert again.status_code == 404
+    assert again.json()["detail"]["error"]["type"] == "operator_model_user_access_not_found"
+
+
+async def test_an_answer_is_for_a_listed_model(admin) -> None:
+    view = await _created(admin)
+    response = await admin.call(
+        "PUT",
+        f"/{view['id']}/user-access",
+        json={"account": _ACCOUNT, "model": "model-9", "offered": True},
     )
     assert response.status_code == 404
-    assert response.json()["detail"]["error"]["type"] == "account_not_found"
-    assert admin.repository.user_limits == {}
+    assert response.json()["detail"]["error"]["type"] == "operator_model_not_listed"
+    assert admin.repository.user_access == {}
+
+
+@pytest.mark.parametrize("account", ["nobody@example.edu", "01HZXNOBODY", "not an email@"])
+async def test_an_unknown_account_gets_nothing_of_its_own(admin, account) -> None:
+    view = await _created(admin)
+    for path, body in (
+        ("/user-budgets", {"daily_budget_microusd": 5}),
+        ("/user-access", {"model": "model-1", "offered": True}),
+    ):
+        response = await admin.call(
+            "PUT", f"/{view['id']}{path}", json={"account": account, **body}
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"]["error"]["type"] == "account_not_found"
+    assert admin.repository.user_budgets == {} and admin.repository.user_access == {}
 
 
 # -- usage -------------------------------------------------------------------------
 
 
-async def test_usage_is_requests_per_day_account_and_model(admin) -> None:
+async def test_usage_is_requests_tokens_and_cost_per_day_account_and_model(admin) -> None:
     view = await _created(admin)
+    used = {
+        "requests": 42,
+        "cost_microusd": 1_250_000,
+        "input_tokens": 400_000,
+        "cache_read_tokens": 300_000,
+        "cache_write_tokens": 0,
+        "output_tokens": 9_000,
+        "estimated_requests": 2,
+    }
     admin.repository.usage_rows = [
-        {"day": date(2026, 11, 11), "user_id": _ACCOUNT, "model": "model-1", "requests": 42},
-        {"day": date(2026, 10, 1), "user_id": _ACCOUNT, "model": "model-1", "requests": 7},
+        {"day": date(2026, 11, 11), "user_id": _ACCOUNT, "model": "model-1", **used},
+        {"day": date(2026, 10, 1), "user_id": _ACCOUNT, "model": "model-1", **used},
     ]
     response = await admin.call(
         "GET", f"/{view['id']}/usage", params={"from": "2026-11-10", "to": "2026-11-12"}
@@ -678,7 +911,7 @@ async def test_usage_is_requests_per_day_account_and_model(admin) -> None:
                 "account_id": _ACCOUNT,
                 "email": "a@example.edu",
                 "model": "model-1",
-                "requests": 42,
+                **used,
             }
         ],
         "truncated": False,

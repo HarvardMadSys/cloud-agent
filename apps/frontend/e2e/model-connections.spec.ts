@@ -106,7 +106,9 @@ test('personal connections fold beneath available models and keep a half-filled 
             default_model: 'fixture-provided',
             models: ['fixture-provided'],
             model_runtimes: { 'fixture-provided': ['codex'] },
-            allowances: { 'fixture-provided': { daily_requests: 100, used_today: 1 } },
+            // $5.00 a day on this source's models together, of which a cent is spent.
+            daily_budget_microusd: 5_000_000,
+            spent_today_microusd: 10_000,
             resets_at: '2026-10-29T00:00:00Z',
           },
         ],

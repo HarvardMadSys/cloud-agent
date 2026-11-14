@@ -10,10 +10,16 @@ can use it. The key is write-only, encrypted under the settings root key in a
 domain of its own, and leaves the control plane in no claim, residency,
 response, log or audit row: turns reach the provider through the model relay.
 
-A new connection is disabled. It can be enabled once every listed model has a
-default allowance: how many requests each owner may send it per UTC day
-(``null`` unlimited, ``0`` only owners given an allowance of their own). An
-administrator may give one account its own number for one model.
+A new connection is disabled. It can be enabled once it has a default budget,
+what each owner may spend per UTC day on its models together, and every
+listed model has prices: each request is charged the tokens it used at its
+model's prices. A budget of ``0`` offers the connection only to accounts
+given a budget of their own, and a model may be for named accounts only. An
+administrator may give one account its own budget, and its own answer on one
+model.
+
+Money is in whole millionths of a US dollar, and a price in those per million
+tokens.
 
 A new Base URL, disabling and deleting close every member process still
 running on the old state. A new key does not: no process holds the key.
@@ -65,21 +71,24 @@ from cloud_agent.crypto.credential_cipher import CredentialCipherError
 from cloud_agent.domain.model_connections import ModelConnectionConflict, ModelConnectionInvalid
 from cloud_agent.domain.operator_models import (
     DEFAULT_USER_CONCURRENCY,
-    OperatorLimitsMissing,
+    OperatorTermsMissing,
     clean_default_model,
     clean_end_user_header,
+    model_prices,
 )
 from cloud_agent.schemas import (
     OperatorModelConnectionList,
     OperatorModelConnectionView,
-    OperatorModelLimit,
-    OperatorModelLimitWrite,
+    OperatorModelTerms,
+    OperatorModelTermsWrite,
     OperatorModelUsageResponse,
     OperatorModelUsageRow,
-    OperatorModelUserLimitWrite,
+    OperatorModelUserAccessWrite,
+    OperatorModelUserBudgetWrite,
     OperatorModelUserList,
     OperatorModelUserRow,
 )
+from cloud_agent.schemas.operator_models import MAX_BUDGET_MICROUSD
 from cloud_agent_shared.model_connections import (
     MAX_API_KEY_CHARS,
     MAX_MODELS,
@@ -142,6 +151,9 @@ class OperatorModelConnectionCreate(_OperatorFields):
     end_user_header: str | None = Field(None, max_length=64)
     #: Requests one owner may have in flight at once.
     user_concurrency: int = Field(DEFAULT_USER_CONCURRENCY, ge=1, le=64)
+    #: What each owner may spend per UTC day on its models together, in
+    #: millionths of a US dollar. It may be chosen later, before enabling.
+    user_daily_budget_microusd: int | None = Field(None, ge=0, le=MAX_BUDGET_MICROUSD)
 
 
 class OperatorModelConnectionUpdate(_OperatorFields):
@@ -160,9 +172,10 @@ class OperatorModelConnectionUpdate(_OperatorFields):
     enabled: bool | None = None
     end_user_header: str | None = Field(None, max_length=64)
     user_concurrency: int | None = Field(None, ge=1, le=64)
+    user_daily_budget_microusd: int | None = Field(None, ge=0, le=MAX_BUDGET_MICROUSD)
 
 
-def _view(row: dict[str, Any], limits: dict[str, dict[str, Any]]) -> OperatorModelConnectionView:
+def _view(row: dict[str, Any], terms: dict[str, dict[str, Any]]) -> OperatorModelConnectionView:
     return OperatorModelConnectionView(
         id=row["id"],
         name=row["name"],
@@ -173,10 +186,13 @@ def _view(row: dict[str, Any], limits: dict[str, dict[str, Any]]) -> OperatorMod
         enabled=bool(row["enabled"]),
         end_user_header=row.get("end_user_header"),
         user_concurrency=int(row["user_concurrency"]),
-        limits={
-            model: OperatorModelLimit(**limit)
-            for model, limit in limits.items()
-            if model in row["models"]
+        user_daily_budget_microusd=row.get("user_daily_budget_microusd"),
+        # A row a previous release wrote has a request limit and no prices:
+        # it is answered as a model whose terms are still to be set.
+        terms={
+            model: OperatorModelTerms(**stored)
+            for model, stored in terms.items()
+            if model in row["models"] and model_prices(stored) is not None
         },
         model_status=[
             ModelStatusView(**status).model_dump() for status in connection_statuses(row)
@@ -188,8 +204,8 @@ def _view(row: dict[str, Any], limits: dict[str, dict[str, Any]]) -> OperatorMod
 
 
 async def _answer(store: _Storage, row: dict[str, Any]) -> OperatorModelConnectionView:
-    limits = await store.operator_models.operator_limits(connection_ids=[row["id"]])
-    return _view(row, limits[row["id"]])
+    terms = await store.operator_models.operator_terms(connection_ids=[row["id"]])
+    return _view(row, terms[row["id"]])
 
 
 def _cipher() -> Any:
@@ -299,12 +315,12 @@ async def _audit(
 async def list_connections(
     store: _Storage | None = Depends(get_storage),
 ) -> OperatorModelConnectionList:
-    """Every provided connection, with its limits and each model's verification."""
+    """Every provided connection, with its budget, each model's terms and verification."""
     store = require_store(store)
     rows = await store.operator_models.list_operator_connections()
-    limits = await store.operator_models.operator_limits(connection_ids=[row["id"] for row in rows])
+    terms = await store.operator_models.operator_terms(connection_ids=[row["id"] for row in rows])
     return OperatorModelConnectionList(
-        connections=[_view(row, limits[row["id"]]) for row in rows],
+        connections=[_view(row, terms[row["id"]]) for row in rows],
         relay_hosts=await store.operator_models.model_relay_host_count(),
         feature_enabled=model_connections_enabled(),
     )
@@ -344,6 +360,7 @@ async def create_connection(
                 "api_key_ciphertext": cipher.encrypt(body.api_key),
                 "end_user_header": body.end_user_header or None,
                 "user_concurrency": body.user_concurrency,
+                "user_daily_budget_microusd": body.user_daily_budget_microusd,
                 "model_checks": checks,
             }
         )
@@ -385,7 +402,7 @@ def _settings_changes(
         raise _invalid(str(exc)) from None
     if "end_user_header" in sent:
         wanted["end_user_header"] = body.end_user_header or None
-    for name in ("user_concurrency", "is_default", "enabled"):
+    for name in ("user_concurrency", "user_daily_budget_microusd", "is_default", "enabled"):
         value = getattr(body, name)
         if value is not None:
             wanted[name] = value
@@ -407,8 +424,8 @@ async def update_connection(
     A new key or Base URL verifies every model the connection would list, and
     added models are verified; the edit is committed only if all pass and the
     connection did not change meanwhile (409). A field sent with the value it
-    already has is not a change. Enabling is refused (409) while a listed
-    model has no default allowance.
+    already has is not a change. Enabling is refused (409) before the
+    connection has a default budget and every listed model has prices.
     """
     store = require_store(store)
     row = await _live(store, connection_id)
@@ -427,7 +444,8 @@ async def update_connection(
     if settings.get("enabled") is True:
         # Before any provider call or write: an edit that also verifies must
         # not commit that part and then be refused the enabling.
-        await _require_limits(store, connection_id, models)
+        budget = settings.get("user_daily_budget_microusd", row.get("user_daily_budget_microusd"))
+        await _require_terms(store, connection_id, models, budget)
     name = plan.changes.get("name")
     if name is not None and await _name_taken(store, name, other_than=row["id"]):
         raise _taken(name)
@@ -435,27 +453,47 @@ async def update_connection(
         updated = await _commit(store, row, plan, settings)
     except ModelConnectionConflict:
         raise _taken(str(name)) from None
-    except OperatorLimitsMissing as missing:
-        raise _limits_missing(missing.models) from None
+    except OperatorTermsMissing as missing:
+        raise _terms_missing(missing.models, budget=missing.budget) from None
     await invalidate_operator_connection(store, connection_id=connection_id)
     await _audit_update(request, store, actor, updated, plan, settings)
     return await _answer(store, updated)
 
 
-def _limits_missing(models: list[str]) -> HTTPException:
-    return _refused(
+def _terms_missing(models: list[str], *, budget: bool) -> HTTPException:
+    """What still has to be set before a connection can be enabled.
+
+    Named in the message, and beside it as ``budget`` and ``models`` for a
+    client that says it in its own words.
+    """
+    needed = []
+    if budget:
+        needed.append("choose a daily budget per account")
+    if models:
+        needed.append("set prices for " + ", ".join(models))
+    return HTTPException(
         409,
-        "operator_model_limits_missing",
-        "Set a default allowance for every model before enabling: " + ", ".join(models),
+        {
+            "error": {
+                "type": "operator_model_terms_missing",
+                "message": "Before enabling, " + " and ".join(needed) + ".",
+                "budget": budget,
+                "models": models,
+            }
+        },
     )
 
 
-async def _require_limits(store: _Storage, connection_id: str, models: list[str]) -> None:
-    """Refuse enabling while a model the connection would list has no default allowance."""
-    limits = await store.operator_models.operator_limits(connection_ids=[connection_id])
-    missing = [model for model in models if model not in limits[connection_id]]
-    if missing:
-        raise _limits_missing(missing)
+async def _require_terms(
+    store: _Storage, connection_id: str, models: list[str], budget: int | None
+) -> None:
+    """Refuse enabling before the connection has a budget and every listed model has prices."""
+    terms = (await store.operator_models.operator_terms(connection_ids=[connection_id]))[
+        connection_id
+    ]
+    missing = [model for model in models if model_prices(terms.get(model)) is None]
+    if missing or budget is None:
+        raise _terms_missing(missing, budget=budget is None)
 
 
 async def _commit(
@@ -573,22 +611,20 @@ def _not_listed() -> HTTPException:
     )
 
 
-@router.put("/{connection_id}/limits", response_model=OperatorModelConnectionView)
-async def set_limit(
+@router.put("/{connection_id}/terms", response_model=OperatorModelConnectionView)
+async def set_terms(
     request: Request,
     connection_id: str,
-    body: OperatorModelLimitWrite,
+    body: OperatorModelTermsWrite,
     actor: str = Depends(verify_admin_access),
     store: _Storage | None = Depends(get_storage),
 ) -> OperatorModelConnectionView:
-    """Set one model's default allowance and its cap on requests in flight across owners."""
+    """Set one model's prices, who it is open to, and its cap on requests in flight."""
     store = require_store(store)
     row = await _live(store, connection_id)
-    written = await store.operator_models.set_operator_limit(
-        connection_id=connection_id,
-        model=body.model,
-        user_daily_requests=body.user_daily_requests,
-        global_concurrency=body.global_concurrency,
+    terms = body.model_dump(exclude={"model"})
+    written = await store.operator_models.set_operator_terms(
+        connection_id=connection_id, model=body.model, terms=terms
     )
     if not written:
         raise _not_listed()
@@ -596,13 +632,9 @@ async def set_limit(
         request,
         store,
         actor,
-        "agent.operator_model_connection.set_limit",
+        "agent.operator_model_connection.set_terms",
         row,
-        {
-            "model": body.model,
-            "user_daily_requests": body.user_daily_requests,
-            "global_concurrency": body.global_concurrency,
-        },
+        {"model": body.model, **terms},
     )
     return await _answer(store, row)
 
@@ -624,7 +656,7 @@ async def list_users(
     limit: int = Query(100, ge=1, le=500),
     store: _Storage | None = Depends(get_storage),
 ) -> OperatorModelUserList:
-    """Accounts with an allowance of their own on this connection, or with use today."""
+    """Accounts with a budget or a model answer of their own on this connection, or with use today."""
     store = require_store(store)
     await _live(store, connection_id)
     rows = await store.operator_models.list_operator_users(
@@ -633,17 +665,26 @@ async def list_users(
     page = rows[:limit]
     emails = await _emails(store, [row["user_id"] for row in page])
     return OperatorModelUserList(
-        users=[
-            OperatorModelUserRow(
-                account_id=row["user_id"],
-                email=emails.get(row["user_id"], ""),
-                limits=row["limits"],
-                used_today=row["used_today"],
-            )
-            for row in page
-        ],
+        users=[_user_view(row, emails) for row in page],
         next_cursor=page[-1]["user_id"] if len(rows) > limit and page else None,
     )
+
+
+def _user_view(row: dict[str, Any], emails: dict[str, str]) -> OperatorModelUserRow:
+    return OperatorModelUserRow(
+        account_id=row["user_id"],
+        email=emails.get(row["user_id"], ""),
+        daily_budget_microusd=row["daily_budget_microusd"],
+        access=row["access"],
+        spent_today_microusd=row["spent_today_microusd"],
+        requests_today=row["requests_today"],
+    )
+
+
+async def _user(store: _Storage, connection_id: str, account_id: str) -> OperatorModelUserRow:
+    """One account as the list has it, after a write: all of it, not only what was written."""
+    row = await store.operator_models.operator_user(connection_id=connection_id, user_id=account_id)
+    return _user_view(row, await _emails(store, [account_id]))
 
 
 async def _account_id(store: _Storage, account: str) -> str:
@@ -663,23 +704,87 @@ async def _account_id(store: _Storage, account: str) -> str:
     return found
 
 
-@router.put("/{connection_id}/user-limits", response_model=OperatorModelUserRow)
-async def set_user_limit(
+@router.put("/{connection_id}/user-budgets", response_model=OperatorModelUserRow)
+async def set_user_budget(
     request: Request,
     connection_id: str,
-    body: OperatorModelUserLimitWrite,
+    body: OperatorModelUserBudgetWrite,
     actor: str = Depends(verify_admin_access),
     store: _Storage | None = Depends(get_storage),
 ) -> OperatorModelUserRow:
-    """Give one account its own allowance on one model, in place of the model's default."""
+    """Give one account its own daily budget on this connection, in place of the default.
+
+    Answers the account as the list has it now.
+    """
     store = require_store(store)
     row = await _live(store, connection_id)
     account_id = await _account_id(store, body.account)
-    written = await store.operator_models.set_operator_user_limit(
+    written = await store.operator_models.set_operator_user_budget(
         connection_id=connection_id,
         user_id=account_id,
-        model=body.model,
-        daily_requests=body.daily_requests,
+        daily_budget_microusd=body.daily_budget_microusd,
+    )
+    if not written:
+        await _live(store, connection_id)
+        raise _changed()
+    await _audit(
+        request,
+        store,
+        actor,
+        "agent.operator_model_user_budget.set",
+        row,
+        {"daily_budget_microusd": body.daily_budget_microusd},
+        target_user_id=account_id,
+    )
+    return await _user(store, connection_id, account_id)
+
+
+@router.delete("/{connection_id}/user-budgets", status_code=204)
+async def clear_user_budget(
+    request: Request,
+    connection_id: str,
+    account_id: str = Query(..., min_length=1, max_length=64),
+    actor: str = Depends(verify_admin_access),
+    store: _Storage | None = Depends(get_storage),
+) -> Response:
+    """Return one account to the connection's default budget."""
+    store = require_store(store)
+    row = await _live(store, connection_id)
+    removed = await store.operator_models.clear_operator_user_budget(
+        connection_id=connection_id, user_id=account_id
+    )
+    if not removed:
+        raise _refused(
+            404, "operator_model_user_budget_not_found", "That account has no budget of its own."
+        )
+    await _audit(
+        request,
+        store,
+        actor,
+        "agent.operator_model_user_budget.clear",
+        row,
+        target_user_id=account_id,
+    )
+    return Response(status_code=204)
+
+
+@router.put("/{connection_id}/user-access", response_model=OperatorModelUserRow)
+async def set_user_access(
+    request: Request,
+    connection_id: str,
+    body: OperatorModelUserAccessWrite,
+    actor: str = Depends(verify_admin_access),
+    store: _Storage | None = Depends(get_storage),
+) -> OperatorModelUserRow:
+    """Offer one account a model, or withhold it, in place of the model's default.
+
+    Answers the account as the list has it now.
+    """
+    store = require_store(store)
+    row = await _live(store, connection_id)
+    account_id = await _account_id(store, body.account)
+    written = await store.operator_models.set_operator_user_access(
+        connection_id=connection_id, user_id=account_id, model=body.model, offered=body.offered
     )
     if not written:
         raise _not_listed()
@@ -687,21 +792,16 @@ async def set_user_limit(
         request,
         store,
         actor,
-        "agent.operator_model_user_limit.set",
+        "agent.operator_model_user_access.set",
         row,
-        {"model": body.model, "daily_requests": body.daily_requests},
+        {"model": body.model, "offered": body.offered},
         target_user_id=account_id,
     )
-    emails = await _emails(store, [account_id])
-    return OperatorModelUserRow(
-        account_id=account_id,
-        email=emails.get(account_id, ""),
-        limits={body.model: body.daily_requests},
-    )
+    return await _user(store, connection_id, account_id)
 
 
-@router.delete("/{connection_id}/user-limits", status_code=204)
-async def clear_user_limit(
+@router.delete("/{connection_id}/user-access", status_code=204)
+async def clear_user_access(
     request: Request,
     connection_id: str,
     account_id: str = Query(..., min_length=1, max_length=64),
@@ -709,21 +809,23 @@ async def clear_user_limit(
     actor: str = Depends(verify_admin_access),
     store: _Storage | None = Depends(get_storage),
 ) -> Response:
-    """Return one account to a model's default allowance."""
+    """Return one account to a model's default: open to every owner, or to named accounts."""
     store = require_store(store)
     row = await _live(store, connection_id)
-    removed = await store.operator_models.clear_operator_user_limit(
+    removed = await store.operator_models.clear_operator_user_access(
         connection_id=connection_id, user_id=account_id, model=model
     )
     if not removed:
         raise _refused(
-            404, "operator_model_user_limit_not_found", "That account has no allowance of its own."
+            404,
+            "operator_model_user_access_not_found",
+            "That account has no answer of its own on that model.",
         )
     await _audit(
         request,
         store,
         actor,
-        "agent.operator_model_user_limit.clear",
+        "agent.operator_model_user_access.clear",
         row,
         {"model": model},
         target_user_id=account_id,
@@ -738,11 +840,12 @@ async def usage(
     end: date | None = Query(None, alias="to"),
     store: _Storage | None = Depends(get_storage),
 ) -> OperatorModelUsageResponse:
-    """Requests the model relay accepted, per UTC day, account and model.
+    """What each account used of each model per UTC day, and what it cost.
 
-    Counted outside the sandbox, one per inference request the relay let
-    through; not tokens and not a bill. The last seven days when no range is
-    given, and at most ``_MAX_USAGE_DAYS`` of them.
+    Read outside the sandbox, from the provider's own answers: the requests it
+    served, the tokens each answer said it used, and those tokens at the
+    model's prices at the time. Not the provider's bill. The last seven days
+    when no range is given, and at most ``_MAX_USAGE_DAYS`` of them.
     """
     store = require_store(store)
     await _live(store, connection_id)
@@ -766,6 +869,12 @@ async def usage(
                 email=emails.get(str(row["user_id"]), ""),
                 model=str(row["model"]),
                 requests=int(row["requests"]),
+                cost_microusd=int(row["cost_microusd"]),
+                input_tokens=int(row["input_tokens"]),
+                cache_read_tokens=int(row["cache_read_tokens"]),
+                cache_write_tokens=int(row["cache_write_tokens"]),
+                output_tokens=int(row["output_tokens"]),
+                estimated_requests=int(row["estimated_requests"]),
             )
             for row in page
         ],

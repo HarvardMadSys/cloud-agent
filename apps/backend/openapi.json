@@ -4076,7 +4076,7 @@
             "type": "array"
           },
           "provided_sources": {
-            "description": "Connections this deployment provides to every admitted owner, each with this owner's daily request allowance per model. A model chosen from one is submitted with the source's id as `model_connection_id`.",
+            "description": "Connections this deployment provides to every admitted owner, each with this owner's daily budget on its models and what they spent of it today. A model chosen from one is submitted with the source's id as `model_connection_id`.",
             "items": {
               "$ref": "#/components/schemas/ProvidedModelSource"
             },
@@ -18207,6 +18207,19 @@
             "minimum": 1.0,
             "title": "User Concurrency",
             "type": "integer"
+          },
+          "user_daily_budget_microusd": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Daily Budget Microusd"
           }
         },
         "required": [
@@ -18355,6 +18368,19 @@
               }
             ],
             "title": "User Concurrency"
+          },
+          "user_daily_budget_microusd": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Daily Budget Microusd"
           }
         },
         "title": "OperatorModelConnectionUpdate",
@@ -18420,13 +18446,6 @@
             ],
             "title": "Key Refused At"
           },
-          "limits": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/OperatorModelLimit"
-            },
-            "title": "Limits",
-            "type": "object"
-          },
           "model_status": {
             "items": {
               "additionalProperties": true,
@@ -18446,6 +18465,13 @@
             "title": "Name",
             "type": "string"
           },
+          "terms": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OperatorModelTerms"
+            },
+            "title": "Terms",
+            "type": "object"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -18456,6 +18482,18 @@
             "description": "Requests one owner may have in flight at once. Counted by each model relay process on its own requests.",
             "title": "User Concurrency",
             "type": "integer"
+          },
+          "user_daily_budget_microusd": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What each owner may spend per UTC day on this connection's models together, in millionths of a US dollar. `null` is not chosen yet: the connection cannot be enabled and offers nothing. `0` offers it only to accounts given a budget of their own.",
+            "title": "User Daily Budget Microusd"
           }
         },
         "required": [
@@ -18469,9 +18507,37 @@
         "title": "OperatorModelConnectionView",
         "type": "object"
       },
-      "OperatorModelLimit": {
-        "description": "The default allowance of one model, and its cap on requests in flight across owners.",
+      "OperatorModelTerms": {
+        "description": "What one model is provided on: its prices, who it is open to, and a cap on requests in flight.",
         "properties": {
+          "cache_read_price": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The price of input tokens the provider read from its prompt cache. Without one they are charged at the input price. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "title": "Cache Read Price"
+          },
+          "cache_write_price": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The price of input tokens the provider wrote to its prompt cache. Without one they are charged at the input price. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "title": "Cache Write Price"
+          },
           "global_concurrency": {
             "anyOf": [
               {
@@ -18486,27 +18552,65 @@
             "description": "Requests to this model in flight across all owners. Counted by each model relay process on its own requests: a deployment that runs several relay processes allows this many in each.",
             "title": "Global Concurrency"
           },
-          "user_daily_requests": {
+          "input_price": {
+            "description": "The price of input tokens. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "maximum": 1000000000000.0,
+            "minimum": 0.0,
+            "title": "Input Price",
+            "type": "integer"
+          },
+          "named_only": {
+            "default": false,
+            "title": "Named Only",
+            "type": "boolean"
+          },
+          "output_price": {
+            "description": "The price of output tokens, reasoning included. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "maximum": 1000000000000.0,
+            "minimum": 0.0,
+            "title": "Output Price",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input_price",
+          "output_price"
+        ],
+        "title": "OperatorModelTerms",
+        "type": "object"
+      },
+      "OperatorModelTermsWrite": {
+        "additionalProperties": false,
+        "description": "Set one model's prices, who it is open to, and its concurrency cap.",
+        "properties": {
+          "cache_read_price": {
             "anyOf": [
               {
-                "maximum": 10000000.0,
-                "minimum": 0.0,
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000.0,
                 "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "User Daily Requests"
-          }
-        },
-        "title": "OperatorModelLimit",
-        "type": "object"
-      },
-      "OperatorModelLimitWrite": {
-        "additionalProperties": false,
-        "description": "Set one model's default allowance and concurrency cap.",
-        "properties": {
+            "description": "The price of input tokens the provider read from its prompt cache. Without one they are charged at the input price. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "title": "Cache Read Price"
+          },
+          "cache_write_price": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The price of input tokens the provider wrote to its prompt cache. Without one they are charged at the input price. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "title": "Cache Write Price"
+          },
           "global_concurrency": {
             "anyOf": [
               {
@@ -18520,6 +18624,13 @@
             ],
             "description": "Requests to this model in flight across all owners. Counted by each model relay process on its own requests: a deployment that runs several relay processes allows this many in each.",
             "title": "Global Concurrency"
+          },
+          "input_price": {
+            "description": "The price of input tokens. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "maximum": 1000000000000.0,
+            "minimum": 0.0,
+            "title": "Input Price",
+            "type": "integer"
           },
           "model": {
             "maxLength": 256,
@@ -18527,28 +18638,29 @@
             "title": "Model",
             "type": "string"
           },
-          "user_daily_requests": {
-            "anyOf": [
-              {
-                "maximum": 10000000.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Daily Requests"
+          "named_only": {
+            "default": false,
+            "title": "Named Only",
+            "type": "boolean"
+          },
+          "output_price": {
+            "description": "The price of output tokens, reasoning included. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "maximum": 1000000000000.0,
+            "minimum": 0.0,
+            "title": "Output Price",
+            "type": "integer"
           }
         },
         "required": [
+          "input_price",
+          "output_price",
           "model"
         ],
-        "title": "OperatorModelLimitWrite",
+        "title": "OperatorModelTermsWrite",
         "type": "object"
       },
       "OperatorModelUsageResponse": {
-        "description": "Accepted requests per day, account and model, newest day first.",
+        "description": "Use per day, account and model, newest day first and the dearest first within a day.",
         "properties": {
           "rows": {
             "items": {
@@ -18567,11 +18679,26 @@
         "type": "object"
       },
       "OperatorModelUsageRow": {
-        "description": "Requests the model relay accepted from one account for one model on one UTC day.",
+        "description": "What one account used of one model on one UTC day, and what it cost.",
         "properties": {
           "account_id": {
             "title": "Account Id",
             "type": "string"
+          },
+          "cache_read_tokens": {
+            "default": 0,
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "default": 0,
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "cost_microusd": {
+            "default": 0,
+            "title": "Cost Microusd",
+            "type": "integer"
           },
           "day": {
             "format": "date",
@@ -18583,9 +18710,24 @@
             "title": "Email",
             "type": "string"
           },
+          "estimated_requests": {
+            "default": 0,
+            "title": "Estimated Requests",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "default": 0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
           "model": {
             "title": "Model",
             "type": "string"
+          },
+          "output_tokens": {
+            "default": 0,
+            "title": "Output Tokens",
+            "type": "integer"
           },
           "requests": {
             "title": "Requests",
@@ -18601,9 +18743,9 @@
         "title": "OperatorModelUsageRow",
         "type": "object"
       },
-      "OperatorModelUserLimitWrite": {
+      "OperatorModelUserAccessWrite": {
         "additionalProperties": false,
-        "description": "Give one account an allowance of its own on one model.",
+        "description": "Offer one account a model, or withhold it, in place of the model's default.",
         "properties": {
           "account": {
             "maxLength": 320,
@@ -18611,31 +18753,47 @@
             "title": "Account",
             "type": "string"
           },
-          "daily_requests": {
-            "anyOf": [
-              {
-                "maximum": 10000000.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daily Requests"
-          },
           "model": {
             "maxLength": 256,
             "minLength": 1,
             "title": "Model",
             "type": "string"
+          },
+          "offered": {
+            "title": "Offered",
+            "type": "boolean"
           }
         },
         "required": [
           "account",
-          "model"
+          "model",
+          "offered"
         ],
-        "title": "OperatorModelUserLimitWrite",
+        "title": "OperatorModelUserAccessWrite",
+        "type": "object"
+      },
+      "OperatorModelUserBudgetWrite": {
+        "additionalProperties": false,
+        "description": "Give one account a daily budget of its own on a connection.",
+        "properties": {
+          "account": {
+            "maxLength": 320,
+            "minLength": 1,
+            "title": "Account",
+            "type": "string"
+          },
+          "daily_budget_microusd": {
+            "maximum": 1000000000000.0,
+            "minimum": 0.0,
+            "title": "Daily Budget Microusd",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account",
+          "daily_budget_microusd"
+        ],
+        "title": "OperatorModelUserBudgetWrite",
         "type": "object"
       },
       "OperatorModelUserList": {
@@ -18664,37 +18822,44 @@
         "type": "object"
       },
       "OperatorModelUserRow": {
-        "description": "One account with an allowance of its own, or with use today.",
+        "description": "One account with a budget or a model answer of its own, or with use today.",
         "properties": {
+          "access": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Access",
+            "type": "object"
+          },
           "account_id": {
             "title": "Account Id",
             "type": "string"
+          },
+          "daily_budget_microusd": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Budget Microusd"
           },
           "email": {
             "default": "",
             "title": "Email",
             "type": "string"
           },
-          "limits": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "Limits",
-            "type": "object"
+          "requests_today": {
+            "default": 0,
+            "title": "Requests Today",
+            "type": "integer"
           },
-          "used_today": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "title": "Used Today",
-            "type": "object"
+          "spent_today_microusd": {
+            "default": 0,
+            "title": "Spent Today Microusd",
+            "type": "integer"
           }
         },
         "required": [
@@ -19846,38 +20011,12 @@
         "title": "ProtocolResultView",
         "type": "object"
       },
-      "ProvidedModelAllowance": {
-        "description": "One owner's allowance on one provided model, for the current UTC day.",
-        "properties": {
-          "daily_requests": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daily Requests"
-          },
-          "used_today": {
-            "default": 0,
-            "title": "Used Today",
-            "type": "integer"
-          }
-        },
-        "title": "ProvidedModelAllowance",
-        "type": "object"
-      },
       "ProvidedModelSource": {
-        "description": "One connection the deployment provides, as the composer offers it to this owner.\n\nThe same shape as an owner's own connection option, plus the owner's\nallowances. Only the models this owner may use are listed: one whose\nallowance is zero is absent, as if it were not provided.",
+        "description": "One connection the deployment provides, as the composer offers it to this owner.\n\nThe same shape as an owner's own connection option, plus the owner's\nbudget for the current UTC day on its models together. Only the models\nthis owner may use are listed: one withheld from them is absent, as if it\nwere not provided.",
         "properties": {
-          "allowances": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/ProvidedModelAllowance"
-            },
-            "title": "Allowances",
-            "type": "object"
+          "daily_budget_microusd": {
+            "title": "Daily Budget Microusd",
+            "type": "integer"
           },
           "default_model": {
             "anyOf": [
@@ -19934,12 +20073,18 @@
             "format": "date-time",
             "title": "Resets At",
             "type": "string"
+          },
+          "spent_today_microusd": {
+            "default": 0,
+            "title": "Spent Today Microusd",
+            "type": "integer"
           }
         },
         "required": [
           "id",
           "name",
           "models",
+          "daily_budget_microusd",
           "resets_at"
         ],
         "title": "ProvidedModelSource",
@@ -31321,7 +31466,7 @@
     },
     "/admin/agent/operator-model-connections": {
       "get": {
-        "description": "Every provided connection, with its limits and each model's verification.",
+        "description": "Every provided connection, with its budget, each model's terms and verification.",
         "operationId": "list_connections_admin_agent_operator_model_connections_get",
         "parameters": [
           {
@@ -31485,7 +31630,7 @@
         ]
       },
       "patch": {
-        "description": "Edit, rotate the key of, enable or disable a provided connection.\n\nA new key or Base URL verifies every model the connection would list, and\nadded models are verified; the edit is committed only if all pass and the\nconnection did not change meanwhile (409). A field sent with the value it\nalready has is not a change. Enabling is refused (409) while a listed\nmodel has no default allowance.",
+        "description": "Edit, rotate the key of, enable or disable a provided connection.\n\nA new key or Base URL verifies every model the connection would list, and\nadded models are verified; the edit is committed only if all pass and the\nconnection did not change meanwhile (409). A field sent with the value it\nalready has is not a change. Enabling is refused (409) before the\nconnection has a default budget and every listed model has prices.",
         "operationId": "update_connection_admin_agent_operator_model_connections__connection_id__patch",
         "parameters": [
           {
@@ -31558,10 +31703,10 @@
         ]
       }
     },
-    "/admin/agent/operator-model-connections/{connection_id}/limits": {
+    "/admin/agent/operator-model-connections/{connection_id}/terms": {
       "put": {
-        "description": "Set one model's default allowance and its cap on requests in flight across owners.",
-        "operationId": "set_limit_admin_agent_operator_model_connections__connection_id__limits_put",
+        "description": "Set one model's prices, who it is open to, and its cap on requests in flight.",
+        "operationId": "set_terms_admin_agent_operator_model_connections__connection_id__terms_put",
         "parameters": [
           {
             "in": "path",
@@ -31593,7 +31738,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OperatorModelLimitWrite"
+                "$ref": "#/components/schemas/OperatorModelTermsWrite"
               }
             }
           },
@@ -31621,7 +31766,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Set Limit",
+        "summary": "Set Terms",
         "tags": [
           "operator-model-connections"
         ]
@@ -31629,7 +31774,7 @@
     },
     "/admin/agent/operator-model-connections/{connection_id}/usage": {
       "get": {
-        "description": "Requests the model relay accepted, per UTC day, account and model.\n\nCounted outside the sandbox, one per inference request the relay let\nthrough; not tokens and not a bill. The last seven days when no range is\ngiven, and at most ``_MAX_USAGE_DAYS`` of them.",
+        "description": "What each account used of each model per UTC day, and what it cost.\n\nRead outside the sandbox, from the provider's own answers: the requests it\nserved, the tokens each answer said it used, and those tokens at the\nmodel's prices at the time. Not the provider's bill. The last seven days\nwhen no range is given, and at most ``_MAX_USAGE_DAYS`` of them.",
         "operationId": "usage_admin_agent_operator_model_connections__connection_id__usage_get",
         "parameters": [
           {
@@ -31720,10 +31865,10 @@
         ]
       }
     },
-    "/admin/agent/operator-model-connections/{connection_id}/user-limits": {
+    "/admin/agent/operator-model-connections/{connection_id}/user-access": {
       "delete": {
-        "description": "Return one account to a model's default allowance.",
-        "operationId": "clear_user_limit_admin_agent_operator_model_connections__connection_id__user_limits_delete",
+        "description": "Return one account to a model's default: open to every owner, or to named accounts.",
+        "operationId": "clear_user_access_admin_agent_operator_model_connections__connection_id__user_access_delete",
         "parameters": [
           {
             "in": "path",
@@ -31788,14 +31933,14 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Clear User Limit",
+        "summary": "Clear User Access",
         "tags": [
           "operator-model-connections"
         ]
       },
       "put": {
-        "description": "Give one account its own allowance on one model, in place of the model's default.",
-        "operationId": "set_user_limit_admin_agent_operator_model_connections__connection_id__user_limits_put",
+        "description": "Offer one account a model, or withhold it, in place of the model's default.\n\nAnswers the account as the list has it now.",
+        "operationId": "set_user_access_admin_agent_operator_model_connections__connection_id__user_access_put",
         "parameters": [
           {
             "in": "path",
@@ -31827,7 +31972,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OperatorModelUserLimitWrite"
+                "$ref": "#/components/schemas/OperatorModelUserAccessWrite"
               }
             }
           },
@@ -31855,7 +32000,137 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Set User Limit",
+        "summary": "Set User Access",
+        "tags": [
+          "operator-model-connections"
+        ]
+      }
+    },
+    "/admin/agent/operator-model-connections/{connection_id}/user-budgets": {
+      "delete": {
+        "description": "Return one account to the connection's default budget.",
+        "operationId": "clear_user_budget_admin_agent_operator_model_connections__connection_id__user_budgets_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear User Budget",
+        "tags": [
+          "operator-model-connections"
+        ]
+      },
+      "put": {
+        "description": "Give one account its own daily budget on this connection, in place of the default.\n\nAnswers the account as the list has it now.",
+        "operationId": "set_user_budget_admin_agent_operator_model_connections__connection_id__user_budgets_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorModelUserBudgetWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorModelUserRow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set User Budget",
         "tags": [
           "operator-model-connections"
         ]
@@ -31863,7 +32138,7 @@
     },
     "/admin/agent/operator-model-connections/{connection_id}/users": {
       "get": {
-        "description": "Accounts with an allowance of their own on this connection, or with use today.",
+        "description": "Accounts with a budget or a model answer of their own on this connection, or with use today.",
         "operationId": "list_users_admin_agent_operator_model_connections__connection_id__users_get",
         "parameters": [
           {

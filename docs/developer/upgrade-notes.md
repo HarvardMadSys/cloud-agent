@@ -9,7 +9,7 @@ this page. The deployment order itself, and how to roll back, are in
 ## Before starting this release
 
 Before starting this release, run `alembic upgrade head` through
-`0119_drop_account_provisioning`. The supported deployment scripts run migrations
+`0120_operator_model_budgets`. The supported deployment scripts run migrations
 before replacing the API; every migration listed here is additive and safe
 under the running previous release unless it says otherwise. The few
 transitions that need stopped writers are listed in
@@ -66,12 +66,21 @@ own address, and ends on Admin → Servers.
 
 An administrator can now save a provider's endpoint and key once, under
 **Admin → Settings → Models**, and every admitted owner runs on those models
-with no setup, within a daily request allowance per model
+with no setup, within a daily budget that each request is charged against for
+the tokens it used, at prices the administrator sets per model
 ([Provided models](operations.md#provided-models)). Owners' own model
 connections work as before, and nothing changes for a deployment that adds no
 provided connection.
 
-`0118_operator_model_connections` only adds tables. The feature needs two new
+`0118_operator_model_connections` only adds tables, and
+`0120_operator_model_budgets` adds prices, budgets and recorded costs to them.
+A deployment that set up a provided connection on a build between the two had
+a daily request limit per model instead. Those limits are no longer read:
+after upgrading, such a connection offers nothing until an administrator
+chooses its daily budget and sets each model's prices. Which accounts a model
+was for is carried over.
+
+The feature needs two new
 services, both behind the `model-relay` Compose profile: `model-relay` on the
 control plane and `model-tunnel` on each host, with
 `AGENT_SANDBOX_MODEL_RELAY_URL` set there. Roll hosts first, as usual. A host
@@ -401,6 +410,7 @@ Newest first.
 
 | Migration | What it changes |
 |---|---|
+| `0120_operator_model_budgets` | Charges provided models by cost instead of counting requests. Adds `user_daily_budget_microusd` to `agent_operator_model_connections`; four prices and `named_only` to `agent_operator_model_limits`; `agent_operator_user_budgets` (one account's own daily budget) and `agent_operator_model_user_access` (one account's own answer on one model); and to `agent_operator_model_usage` the cost of the requests it counts, their tokens and how many were charged by estimate. Only additions: `user_daily_requests` and `agent_operator_model_user_limits` stay, unread, for a later revision to drop. A model with a request limit of `0` becomes one for named accounts only, and each account's own limit becomes its own answer (`0` withheld, anything else offered); no budget or price is derived from a request count. The previous release runs beside it and keeps enforcing the request limits it reads; a model first priced by this release is written with a limit of `0`, which that release reads as offered to nobody by default. A downgrade drops what was added ([A deployment can provide models](#a-deployment-can-provide-models)). |
 | `0119_drop_account_provisioning` | Drops `agent_account_provisioning` and `agent_account_provisioning_activation`, and removes the four `accounts.inference_provisioning_*` values from the stored settings, the dispatch token among them, moving the settings revision on by one when it removed any. Rows in the two tables are deleted with them. The previous release runs beside it with provisioning off: it reads the setting as off, and a pass that is off touches neither table. A downgrade recreates the two tables empty and does not restore the settings ([Inference provisioning is withdrawn](#inference-provisioning-is-withdrawn)). |
 | `0118_operator_model_connections` | Adds the models a deployment provides: `agent_operator_model_connections` (endpoint, encrypted key, models and their verification), `agent_operator_model_limits` (each model's default daily request allowance and concurrency cap), `agent_operator_model_user_limits` (one account's own allowance), `agent_operator_model_usage` (requests the model relay accepted per account, model and UTC day) and `agent_operator_connection_residencies` (which revision a member's process started on). Only new tables; a turn names a provided connection in the existing `model_connection_id` columns. The previous release runs beside it. A downgrade refuses while any provided connection exists or any turn or waiting message names one ([A deployment can provide models](#a-deployment-can-provide-models)). |
 | `0117_connection_model_limit` | Raises `agent_model_connections_models_check` from eight model ids to sixteen, under the same constraint name and the table lock it takes first. No row is rewritten. The previous release runs beside it: it still refuses a seventeenth id in the application, and the wider check accepts the eight it already stored. A downgrade restores the eight-model check and fails while any connection lists more than eight. |
