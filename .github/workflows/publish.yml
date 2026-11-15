@@ -490,7 +490,7 @@ jobs:
         if: always()
         run: |
           docker ps -aq --filter "label=io.hybridinference.smoke.run=${SUFFIX}" \
-            | xargs -r docker rm -f || true
+            | xargs -r docker rm -fv || true
           docker image rm "${IMAGE_TAG}" >/dev/null 2>&1 || true
           docker image rm "${IMAGE_REF}" >/dev/null 2>&1 || true
 
@@ -647,7 +647,7 @@ jobs:
         run: |
           for project in "${PROJECT}" "${PROJECT}-refusal"; do
             docker ps -aq --filter "label=com.docker.compose.project=${project}" \
-              | xargs -r docker rm -f || true
+              | xargs -r docker rm -fv || true
             docker volume ls -q --filter "name=${project}" | xargs -r docker volume rm -f || true
             docker network ls -q --filter "label=com.docker.compose.project=${project}" \
               | xargs -r docker network rm || true

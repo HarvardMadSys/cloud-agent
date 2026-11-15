@@ -593,13 +593,15 @@ jobs:
         # The data directory on tmpfs. postgres:15 declares it a volume, and
         # the runner removes a service container without its volumes, so on a
         # persistent runner every job left a database volume behind: 30 to 150
-        # a day on spark2. A mount at that path means no volume is made.
+        # a day on spark2. A mount at that path means no volume is made. 1g is
+        # several times what the tier writes (100-250MB) and bounds the memory
+        # a runaway test can take from the host.
         options: >-
           --health-cmd pg_isready
           --health-interval 1s
           --health-timeout 5s
           --health-retries 15
-          --tmpfs /var/lib/postgresql/data
+          --tmpfs /var/lib/postgresql/data:rw,size=1g
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -1223,8 +1225,19 @@ jobs:
           # A cap on the builder's cache. Left to its defaults buildkitd keeps up
           # to 100GB per builder, and a persistent pool keeps one builder per
           # runner: on spark2, 21 of them held 2TB of a 3.6TB disk (2026-11-14).
-          # buildkitd reads this when the builder is created, so a builder made
-          # under a different config is recreated, dropping its cache once.
+          # A pull request's disposable builder gets the same config, which on a
+          # hosted VM also keeps buildkitd off the last 15% of the disk. These
+          # are BuildKit 0.17's GC keys; the builder image is buildx's default,
+          # which has them.
+          #
+          # buildkitd reads the config when the builder is created, so a builder
+          # made under a different one is removed first, dropping its cache once.
+          # The config is recorded only once that builder is gone: a removal that
+          # fails is tried again by the next job, rather than leaving an uncapped
+          # builder behind a config file that says otherwise.
+          #
+          # The artifacts and mcp jobs share this builder and this directory, so
+          # this step must stay the same in both, or each would undo the other.
           buildkitd_config="${buildx_config}/buildkitd.toml"
           printf '%s\n' \
             '[worker.oci]' \
@@ -1232,12 +1245,15 @@ jobs:
             '  reservedSpace = "2GB"' \
             '  maxUsedSpace = "20GB"' \
             '  minFreeSpace = "15%"' > "${buildkitd_config}.next"
-          if cmp -s "${buildkitd_config}.next" "${buildkitd_config}"; then
-            rm -f "${buildkitd_config}.next"
-          else
-            mv "${buildkitd_config}.next" "${buildkitd_config}"
+          if ! cmp -s "${buildkitd_config}.next" "${buildkitd_config}"; then
             docker buildx rm "${builder}" >/dev/null 2>&1 || true
+            if docker buildx inspect "${builder}" >/dev/null 2>&1; then
+              echo "::warning::builder ${builder} could not be removed; it keeps its old cache settings until a later job removes it"
+            else
+              mv "${buildkitd_config}.next" "${buildkitd_config}"
+            fi
           fi
+          rm -f "${buildkitd_config}.next"
           if ! docker buildx inspect "${builder}" --bootstrap >/dev/null 2>&1; then
             docker buildx rm "${builder}" >/dev/null 2>&1 || true
             docker buildx create --name "${builder}" --driver docker-container \
@@ -1356,7 +1372,9 @@ jobs:
         run: |
           set -euo pipefail
           database="mcp-db-${SUFFIX}"
-          trap 'docker rm -f "${database}" >/dev/null 2>&1 || true' EXIT
+          # `-v`: postgres declares its data directory a volume, which plain
+          # `rm -f` leaves behind on a persistent runner.
+          trap 'docker rm -fv "${database}" >/dev/null 2>&1 || true' EXIT
           docker run -d --name "${database}" \
             --label "io.hybridinference.smoke.run=${SUFFIX}" \
             -e POSTGRES_DB="${TEST_DB_NAME}" -e POSTGRES_PASSWORD="${TEST_DB_PASSWORD}" \
@@ -1416,7 +1434,7 @@ jobs:
           # runner hosts several cells at once, so `--filter name=smoke-`
           # reaches into the others and kills their containers mid-check.
           docker ps -aq --filter "label=io.hybridinference.smoke.run=${SUFFIX}" \
-            | xargs -r docker rm -f || true
+            | xargs -r docker rm -fv || true
           # Not `-f`. Forced removal untags an image another cell or run may
           # still be starting containers from; a plain `rm` refuses while any
           # container references it, so the worst case is a leftover image
@@ -1534,8 +1552,19 @@ jobs:
           # A cap on the builder's cache. Left to its defaults buildkitd keeps up
           # to 100GB per builder, and a persistent pool keeps one builder per
           # runner: on spark2, 21 of them held 2TB of a 3.6TB disk (2026-11-14).
-          # buildkitd reads this when the builder is created, so a builder made
-          # under a different config is recreated, dropping its cache once.
+          # A pull request's disposable builder gets the same config, which on a
+          # hosted VM also keeps buildkitd off the last 15% of the disk. These
+          # are BuildKit 0.17's GC keys; the builder image is buildx's default,
+          # which has them.
+          #
+          # buildkitd reads the config when the builder is created, so a builder
+          # made under a different one is removed first, dropping its cache once.
+          # The config is recorded only once that builder is gone: a removal that
+          # fails is tried again by the next job, rather than leaving an uncapped
+          # builder behind a config file that says otherwise.
+          #
+          # The artifacts and mcp jobs share this builder and this directory, so
+          # this step must stay the same in both, or each would undo the other.
           buildkitd_config="${buildx_config}/buildkitd.toml"
           printf '%s\n' \
             '[worker.oci]' \
@@ -1543,12 +1572,15 @@ jobs:
             '  reservedSpace = "2GB"' \
             '  maxUsedSpace = "20GB"' \
             '  minFreeSpace = "15%"' > "${buildkitd_config}.next"
-          if cmp -s "${buildkitd_config}.next" "${buildkitd_config}"; then
-            rm -f "${buildkitd_config}.next"
-          else
-            mv "${buildkitd_config}.next" "${buildkitd_config}"
+          if ! cmp -s "${buildkitd_config}.next" "${buildkitd_config}"; then
             docker buildx rm "${builder}" >/dev/null 2>&1 || true
+            if docker buildx inspect "${builder}" >/dev/null 2>&1; then
+              echo "::warning::builder ${builder} could not be removed; it keeps its old cache settings until a later job removes it"
+            else
+              mv "${buildkitd_config}.next" "${buildkitd_config}"
+            fi
           fi
+          rm -f "${buildkitd_config}.next"
           if ! docker buildx inspect "${builder}" --bootstrap >/dev/null 2>&1; then
             docker buildx rm "${builder}" >/dev/null 2>&1 || true
             docker buildx create --name "${builder}" --driver docker-container \
@@ -1626,7 +1658,9 @@ jobs:
         run: |
           set -euo pipefail
           database="mcp-db-${SUFFIX}"
-          trap 'docker rm -f "${database}" >/dev/null 2>&1 || true' EXIT
+          # `-v`: postgres declares its data directory a volume, which plain
+          # `rm -f` leaves behind on a persistent runner.
+          trap 'docker rm -fv "${database}" >/dev/null 2>&1 || true' EXIT
           docker run -d --name "${database}" \
             --label "io.hybridinference.smoke.run=${SUFFIX}" \
             -e POSTGRES_DB="${TEST_DB_NAME}" -e POSTGRES_PASSWORD="${TEST_DB_PASSWORD}" \
@@ -1670,7 +1704,7 @@ jobs:
           # runner hosts several cells at once, so `--filter name=smoke-`
           # reaches into the others and kills their containers mid-check.
           docker ps -aq --filter "label=io.hybridinference.smoke.run=${SUFFIX}" \
-            | xargs -r docker rm -f || true
+            | xargs -r docker rm -fv || true
           # Not `-f`. Forced removal untags an image another cell or run may
           # still be starting containers from; a plain `rm` refuses while any
           # container references it, so the worst case is a leftover image

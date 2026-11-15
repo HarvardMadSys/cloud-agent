@@ -418,27 +418,40 @@ def test_builder_configuration_is_disposable_for_prs_and_persistent_for_pushes(
         assert outputs["BUILDER"] == "ci-trusted-runner"
 
 
-@pytest.mark.parametrize("job", ["artifacts", "mcp"])
-def test_a_persistent_builder_caps_its_cache_and_is_recreated_when_the_cap_changes(
-    tmp_path: Path, job: str
-) -> None:
-    """buildkitd keeps up to 100GB per builder by default; one per runner filled a disk."""
-    script = next(
+def _builder_script(job: str) -> str:
+    return next(
         step["run"]
         for step in _document()["jobs"][job]["steps"]
         if step.get("name") == "Reuse this runner's builder, or make one"
     ).replace("${{ matrix.artifact.name }}", "sandbox")
+
+
+def test_the_jobs_sharing_a_runners_builder_set_it_up_identically() -> None:
+    """Two configs for one builder would have each job recreate it, cold, for the other."""
+    assert _builder_script("artifacts") == _builder_script("mcp")
+
+
+@pytest.mark.parametrize("removal_fails", [False, True])
+def test_a_persistent_builder_caps_its_cache_and_is_recreated_when_the_cap_changes(
+    tmp_path: Path, removal_fails: bool
+) -> None:
+    """buildkitd keeps up to 100GB per builder by default; one per runner filled a disk."""
+    script = _builder_script("artifacts")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "docker-calls"
+    made = shlex.quote(str(tmp_path / "made"))
     docker = bin_dir / "docker"
-    # Records each call; `buildx inspect` fails until a builder has been created.
+    # Records each call. A builder exists from `buildx create` until `buildx rm`,
+    # which leaves it in place (and fails) when the removal is to fail.
     docker.write_text(
         "#!/bin/sh\n"
         f'echo "$*" >> {shlex.quote(str(calls))}\n'
-        f'if [ "$1 $2" = "buildx create" ]; then touch {shlex.quote(str(tmp_path / "made"))}; fi\n'
-        f'if [ "$1 $2" = "buildx inspect" ] && [ ! -e {shlex.quote(str(tmp_path / "made"))} ]; '
-        "then exit 1; fi\n"
+        'case "$1 $2" in\n'
+        f'  "buildx create") touch {made} ;;\n'
+        f'  "buildx inspect") [ -e {made} ] || exit 1 ;;\n'
+        f'  "buildx rm") [ -e "$REMOVAL_FAILS" ] && exit 1; rm -f {made} ;;\n'
+        "esac\n"
         "exit 0\n"
     )
     docker.chmod(0o755)
@@ -454,6 +467,7 @@ def test_a_persistent_builder_caps_its_cache_and_is_recreated_when_the_cap_chang
         "RUNNER_TEMP": str(tmp_path / "job-temp"),
         "RUNNER_WORKSPACE": str(runner_workspace),
         "RUNNER_NAME": "trusted-runner",
+        "REMOVAL_FAILS": str(tmp_path / "removal-fails"),
     }
     config = runner_workspace.parent / "buildx" / "trusted-runner" / "buildkitd.toml"
 
@@ -462,24 +476,49 @@ def test_a_persistent_builder_caps_its_cache_and_is_recreated_when_the_cap_chang
         subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, check=True)
         return calls.read_text().splitlines()
 
+    def creates(log: list[str]) -> list[str]:
+        return [call for call in log if call.startswith("buildx create")]
+
     first = run()
     assert 'maxUsedSpace = "20GB"' in config.read_text()
-    create = next(call for call in first if call.startswith("buildx create"))
-    assert f"--buildkitd-config {config}" in create
+    assert [f"--buildkitd-config {config}" in call for call in creates(first)] == [True]
 
     # The same cap again: the warm builder is kept.
-    assert not [call for call in run() if call.startswith("buildx rm")]
+    second = run()
+    assert not [call for call in second if call.startswith("buildx rm")]
+    assert not creates(second)
 
-    # A builder made under another cap is dropped, so the new one takes effect.
+    # A builder made under another cap is replaced by one made under this one.
     config.write_text(config.read_text().replace("20GB", "100GB"))
-    assert "buildx rm ci-trusted-runner" in run()
+    if removal_fails:
+        (tmp_path / "removal-fails").touch()
+    third = run()
+    assert "buildx rm ci-trusted-runner" in third
+    if removal_fails:
+        # Nothing recorded, so the next job tries the removal again.
+        assert not creates(third)
+        assert '"100GB"' in config.read_text()
+        assert not config.with_name("buildkitd.toml.next").exists()
+        (tmp_path / "removal-fails").unlink()
+        third = run()
+        assert "buildx rm ci-trusted-runner" in third
+    rebuilt = creates(third)
+    assert len(rebuilt) == 1 and f"--buildkitd-config {config}" in rebuilt[0]
+    assert third.index("buildx rm ci-trusted-runner") < third.index(rebuilt[0])
     assert 'maxUsedSpace = "20GB"' in config.read_text()
 
 
 def test_the_test_database_leaves_no_volume_on_a_persistent_runner() -> None:
     """postgres declares its data directory a volume; the runner removes services without it."""
     service = _document()["jobs"]["test-db"]["services"]["postgres"]
-    assert "--tmpfs /var/lib/postgresql/data" in service["options"]
+    assert "--tmpfs /var/lib/postgresql/data:rw,size=1g" in service["options"]
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", "publish.yml"])
+def test_removed_containers_take_their_anonymous_volumes(workflow: str) -> None:
+    """`docker rm -f` leaves an image's declared volumes behind on a persistent runner."""
+    text = (Path(__file__).parents[2] / ".github" / "workflows" / workflow).read_text()
+    assert not re.findall(r"docker rm -f(?![a-z])", text)
 
 
 def test_pull_request_builder_is_always_removed_after_the_artifact_job() -> None:
