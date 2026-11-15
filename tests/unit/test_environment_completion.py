@@ -643,7 +643,8 @@ class _Sandbox:
             self.reap()
             return SimpleNamespace(returncode=0, stdout=b"")
         self.calls.append((argv, kwargs))
-        self.started.append(time.monotonic())
+        # The clock the process schedules its waits by: a test may turn it.
+        self.started.append(environment_process.time.monotonic())
         return self.guest_wait(float(argv[5]))
 
     def guest_wait(self, limit):
@@ -888,23 +889,38 @@ def test_a_guest_wait_that_runs_out_is_followed_by_the_next(guest, monkeypatch):
     assert guest.most_at_once == 1
 
 
+class _TurnedClock:
+    """A monotonic clock that moves only when the test moves it."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+
 @pytest.mark.parametrize("ending", [137, environment_process._NOT_YET])
-def test_guest_waits_that_end_at_once_start_no_closer_than_the_floor(guest, ending):
+def test_guest_waits_that_end_at_once_start_no_closer_than_the_floor(guest, ending, monkeypatch):
     # As when the script's own processes kill each wait, or one finds a clock
     # that makes it exit at once.
+    #
+    # On the process's own clock, turned by the test in steps of 10 ms: on the
+    # wall clock, a wait's thread that started late on a loaded machine made two
+    # starts look closer than the floor the process kept (0.846 s, CI job
+    # 132299160328).
+    clock = _TurnedClock()
+    monkeypatch.setattr(environment_process, "time", clock)
     guest.ends_at_once = ending
     process = guest.spawn_environment_script(phase="setup", script="./install", env={})
-    began = time.monotonic()
-    while time.monotonic() - began < 2.5:
+    for tick in range(250):
+        clock.now = tick / 100
         assert process.poll() is None
-        time.sleep(0.01)
+        # Each wait ends before the clock moves on, so a wait starts at the
+        # first tick its floor allows, never later.
+        _eventually(lambda: process._guest_wait is None or process._guest_wait.done())
 
-    # Started at about 0, 1 and 2 s: at most an exec a second.
-    assert 2 <= len(guest.started) <= 3
-    gaps = [
-        later - earlier for earlier, later in zip(guest.started, guest.started[1:], strict=False)
-    ]
-    assert min(gaps) >= environment_process._RETRY_S - 0.05
+    # At most an exec a second: at 0, 1 and 2 s, and no sooner.
+    assert guest.started == [0.0, environment_process._RETRY_S, 2 * environment_process._RETRY_S]
 
 
 @pytest.mark.parametrize(
