@@ -511,7 +511,7 @@ def test_a_persistent_builder_caps_its_cache_and_is_recreated_when_the_cap_chang
 def test_the_test_database_leaves_no_volume_on_a_persistent_runner() -> None:
     """postgres declares its data directory a volume; the runner removes services without it."""
     service = _document()["jobs"]["test-db"]["services"]["postgres"]
-    assert "--tmpfs /var/lib/postgresql/data:rw,size=1g" in service["options"]
+    assert "--tmpfs /var/lib/postgresql/data:rw,size=4g" in service["options"]
 
 
 @pytest.mark.parametrize("workflow", ["ci.yml", "publish.yml"])

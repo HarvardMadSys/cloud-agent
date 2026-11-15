@@ -593,15 +593,16 @@ jobs:
         # The data directory on tmpfs. postgres:15 declares it a volume, and
         # the runner removes a service container without its volumes, so on a
         # persistent runner every job left a database volume behind: 30 to 150
-        # a day on spark2. A mount at that path means no volume is made. 1g is
-        # several times what the tier writes (100-250MB) and bounds the memory
-        # a runaway test can take from the host.
+        # a day on spark2. A mount at that path means no volume is made. The tier
+        # peaks at 1.5GB on a shard and 1.9GB unsharded (measured 2026-11-15);
+        # 4g leaves room for that to grow and still bounds the memory a runaway
+        # test can take from the host. tmpfs holds only what is written.
         options: >-
           --health-cmd pg_isready
           --health-interval 1s
           --health-timeout 5s
           --health-retries 15
-          --tmpfs /var/lib/postgresql/data:rw,size=1g
+          --tmpfs /var/lib/postgresql/data:rw,size=4g
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
