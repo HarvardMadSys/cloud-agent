@@ -496,6 +496,22 @@ jobs:
             --junitxml="${RUNNER_TEMP}/host-release.xml"
           uv run python scripts/ci_tests_ran.py "${RUNNER_TEMP}/host-release.xml"
 
+      # A relay's tunnel needs a way out to the control plane's machine, and
+      # the relay network has none. `config` renders a tunnel left on that
+      # network alone without complaint; on a host it restarts forever while
+      # the deployment reports success (the GitHub relay's, on staging). Start
+      # the tunnels as the shipped Compose file wires them.
+      - name: Every relay tunnel reaches its far host
+        timeout-minutes: 5
+        env:
+          AGENT_RELAY_TUNNEL_TEST_IMAGE: alpine:3.21
+        run: |
+          set -euo pipefail
+          docker pull "${AGENT_RELAY_TUNNEL_TEST_IMAGE}"
+          uv run pytest -q -m external tests/external/test_relay_tunnel_upstream_real_docker.py \
+            --junitxml="${RUNNER_TEMP}/relay-tunnels.xml"
+          uv run python scripts/ci_tests_ran.py "${RUNNER_TEMP}/relay-tunnels.xml"
+
       # Completion can precede the native CLI's history flush. Unit doubles
       # cannot catch that race; exercise the shipped pin before CI can deploy.
       # Inference is a loopback protocol fixture, with no API key or model cost.
