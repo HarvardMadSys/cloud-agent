@@ -29,6 +29,7 @@ timeout. Where the package mirror is slow, build it first, as CI does:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -137,6 +138,80 @@ def _wait(condition, message: str, seconds: float = 120) -> None:
         time.sleep(1)
 
 
+#: The units a node must run before the control plane can reach it.
+BOOT_UNITS = ("docker", "ssh")
+#: A node is up in 1 to 4 seconds, twelve started at once included (measured on
+#: the persistent runners' machine). The limit is for a node that never comes
+#: up; a node that stopped or whose unit failed is reported at once.
+BOOT_SECONDS = 120
+
+
+def _node_diagnostics(name: str) -> str:
+    """What a node and the Docker running it say, for a node that did not boot."""
+    commands = [
+        ("container state", ["inspect", "--format", "{{json .State}}", name]),
+        ("container log", ["logs", "--tail", "100", name]),
+        ("units", ["exec", name, "systemctl", "is-active", *BOOT_UNITS, "containerd"]),
+        ("failed units", ["exec", name, "systemctl", "--failed", "--no-pager"]),
+        (
+            "unit status",
+            ["exec", name, "systemctl", "status", *BOOT_UNITS, "containerd", "--no-pager"],
+        ),
+        ("system state", ["exec", name, "systemctl", "is-system-running"]),
+        ("journal", ["exec", name, "journalctl", "-b", "--no-pager", "-n", "100"]),
+        ("runner's Docker", ["info", "--format", "{{json .}}"]),
+    ]
+    sections = []
+    for title, args in commands:
+        try:
+            result = _docker(*args, check=False, timeout=30)
+            output = (result.stdout + result.stderr).strip() or f"(exit {result.returncode})"
+        except subprocess.TimeoutExpired:
+            output = "(no answer within 30 s)"
+        sections.append(f"--- {title}: docker {' '.join(args)}\n{output}")
+    with contextlib.suppress(OSError):
+        sections.append("--- runner's load: " + Path("/proc/loadavg").read_text().strip())
+    return "\n".join(sections)
+
+
+def _boot_state(name: str) -> str:
+    """``up``, ``booting``, or why the node will not come up by waiting."""
+    state = _docker("inspect", "--format", "{{.State.Status}}", name, check=False)
+    if state.stdout.strip() != "running":
+        return f"its container is {state.stdout.strip() or 'gone'}"
+    try:
+        failed = _docker(
+            "exec", name, "systemctl", "is-failed", *BOOT_UNITS, check=False, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        return "booting"
+    if "failed" in failed.stdout.split():
+        return "a unit it needs failed"
+    try:
+        active = _docker(
+            "exec", name, "systemctl", "is-active", *BOOT_UNITS, check=False, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        return "booting"
+    # Each unit's own answer: the exit code is 0 when any one of them is active.
+    return "up" if active.stdout.split() == ["active"] * len(BOOT_UNITS) else "booting"
+
+
+def _wait_for_boot(name: str, seconds: float = BOOT_SECONDS) -> None:
+    """Return once ``name`` runs Docker and sshd; fail with its diagnostics otherwise.
+
+    It fails at once when waiting cannot help (the container stopped, or a unit
+    it needs failed), and after ``seconds`` when the node is still booting.
+    """
+    deadline = time.monotonic() + seconds
+    while (state := _boot_state(name)) == "booting" and time.monotonic() < deadline:
+        time.sleep(0.5)
+    if state == "up":
+        return
+    reason = state if state != "booting" else f"it was still booting after {seconds:.0f} s"
+    pytest.fail(f"{name} did not boot: {reason}\n{_node_diagnostics(name)}", pytrace=False)
+
+
 @pytest.fixture(scope="module")
 def node_image() -> str:
     if shutil.which("docker") is None or _docker("image", "inspect", BASE, check=False).returncode:
@@ -195,15 +270,7 @@ def nodes(node_image: str, management_key: tuple[str, str]) -> Iterator[tuple[No
             )
         built: list[Node] = []
         for name in names:
-            _wait(
-                lambda name=name: (
-                    _docker(
-                        "exec", name, "systemctl", "is-active", "docker", "ssh", check=False
-                    ).returncode
-                    == 0
-                ),
-                f"{name} did not boot",
-            )
+            _wait_for_boot(name)
             _docker(
                 "exec",
                 name,
