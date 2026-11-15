@@ -93,6 +93,11 @@ services:
       - ${AGENT_GITHUB_TUNNEL_SSH_KEY:-/etc/hybridinference/github-tunnel-id}:/etc/agent-tunnel/id:ro
       - ${AGENT_GITHUB_TUNNEL_SSH_KNOWN_HOSTS:-/etc/hybridinference/github-tunnel-known-hosts}:/etc/agent-tunnel/known_hosts:ro
     networks:
+      # Its way out to the control plane. The relay network has no route and
+      # resolves no name outside itself, so on that alone ssh never finds the
+      # far host and the service restarts forever. No alias here: the runner
+      # is on this network, and must go on reaching GitHub itself.
+      internal: {}
       agent-relays:
         aliases:
           - github.com
@@ -129,6 +134,9 @@ services:
       - ${AGENT_MODEL_TUNNEL_SSH_KEY:-/dev/null}:/etc/agent-tunnel/id:ro
       - ${AGENT_MODEL_TUNNEL_SSH_KNOWN_HOSTS:-/dev/null}:/etc/agent-tunnel/known_hosts:ro
     networks:
+      # Its way out to the control plane, as the GitHub tunnel's. No alias
+      # here: only a sandbox group calls the model relay.
+      internal: {}
       agent-relays:
         aliases:
           - ${AGENT_MODEL_RELAY_HOSTNAME:-agent-models}
@@ -523,8 +531,10 @@ networks:
     driver: bridge
   agent-relays:
     name: ${AGENT_RELAY_NETWORK:-${COMPOSE_PROJECT:?the unique host Compose project}-agent-relays}
-    # Discovery only: the MCP relay, and never a sandbox. Group lifecycle reads
-    # the relay's identity here and attaches it to each group's own bridge.
-    # `internal` because nothing on it needs a route, and the runner refuses to
-    # start if it has one.
+    # Discovery only: the relays, and never a sandbox. Group lifecycle reads
+    # each relay's identity here and attaches it to each group's own bridge.
+    # Route-less (`internal: true`) because nothing reaches anything through
+    # it, and the runner refuses to start if it has a route. A relay's tunnel
+    # therefore leaves by the stack's own network above, the one named
+    # `internal`, which every relay joins as well.
     internal: true
