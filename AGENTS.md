@@ -128,6 +128,16 @@ tests, scripts, `deploy/` or migrations; the frontend limits skip
   mention, and on an entry above its file's count; after removing mentions,
   `uv run python scripts/check_distribution_neutrality.py --write` lowers the
   entries.
+- `tests/unit/deployment_config_baseline.json` lists what a deployment must
+  still supply itself: the variables `tests/support/env_inventory.py` gives to
+  the deployment that nothing here writes (server setup, the `keys` service,
+  the deployer; `tests/support/env_suppliers.py`), and the Compose profiles of
+  the production stacks. `tests/unit/test_env_classification.py` fails on a
+  new one, and on a listed one that is now supplied or gone, which is then
+  deleted from the list. A new feature's configuration goes into Admin, a host
+  setting, or what server setup writes, and a service starts always with a
+  setting deciding what it does. Adding a name or profile to the list is a
+  decision: say in the pull request why nothing else can supply it.
 - `apps/frontend/eslint-ratchet.json` lists the frontend files over a limit,
   each at its current value. ESLint applies a listed value to every function in
   that file, so it lets a new function there go past 15; keep new functions
