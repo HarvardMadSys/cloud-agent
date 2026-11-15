@@ -1,4 +1,4 @@
-"""Erasing an account takes its budget, its model answers and its use of provided models with it."""
+"""Erasing an account takes its use of provided models with it, and what earlier releases kept."""
 
 from __future__ import annotations
 
@@ -11,12 +11,14 @@ from tests.integration.storage.test_local_account_parity_store import (  # noqa:
 )
 from tests.support.local_accounts import act, make_account
 
+from cloud_agent.domain.operator_models import ModelPrices
+
 pytestmark = [pytest.mark.dbtest, pytest.mark.asyncio]
 
 _ID = "oconn_" + "f" * 32
 
 
-async def test_an_erased_account_leaves_no_budget_access_or_usage_row(storage, pool) -> None:  # noqa: F811
+async def test_an_erased_account_leaves_no_usage_row_or_older_one_of_its_own(storage, pool) -> None:  # noqa: F811
     models = storage.operator_models
     await models.create_operator_connection(
         values={
@@ -25,21 +27,14 @@ async def test_an_erased_account_leaves_no_budget_access_or_usage_row(storage, p
             "base_url": "https://provider.example/v1",
             "models": ["m1"],
             "api_key_ciphertext": "ciphertext",
-            "user_concurrency": 4,
             "model_checks": {"m1": {"protocols": {"chat_completions": {"status": "supported"}}}},
         }
     )
-    terms = {"input_price": 2_800_000, "output_price": 8_800_000}
-    await models.set_operator_terms(connection_id=_ID, model="m1", terms=terms)
+    prices = ModelPrices(input=2_800_000, output=8_800_000)
+    await models.set_operator_prices(connection_id=_ID, prices={"m1": prices})
     gone = await make_account(storage, "gone@example.edu")
     stays = await make_account(storage, "stays@example.edu")
     for account in (gone, stays):
-        await models.set_operator_user_budget(
-            connection_id=_ID, user_id=account, daily_budget_microusd=50_000_000
-        )
-        await models.set_operator_user_access(
-            connection_id=_ID, user_id=account, model="m1", offered=True
-        )
         await models.record_operator_request(
             connection_id=_ID,
             user_id=account,
@@ -52,8 +47,20 @@ async def test_an_erased_account_leaves_no_budget_access_or_usage_row(storage, p
             estimated=False,
         )
     async with pool.acquire() as conn:
-        # What a previous release kept of an account, which nothing reads now.
+        # What earlier releases kept of an account, which nothing reads now.
         for account in (gone, stays):
+            await conn.execute(
+                "INSERT INTO agent_operator_user_budgets "
+                "(operator_connection_id, user_id, daily_budget_microusd) VALUES ($1, $2, 5)",
+                _ID,
+                account,
+            )
+            await conn.execute(
+                "INSERT INTO agent_operator_model_user_access "
+                "(operator_connection_id, user_id, model, offered) VALUES ($1, $2, 'm1', TRUE)",
+                _ID,
+                account,
+            )
             await conn.execute(
                 "INSERT INTO agent_operator_model_user_limits "
                 "(operator_connection_id, user_id, model, daily_requests) VALUES ($1, $2, 'm1', 5)",
@@ -78,6 +85,4 @@ async def test_an_erased_account_leaves_no_budget_access_or_usage_row(storage, p
             assert [row["user_id"] for row in owners] == [stays], table
     # The connection and the model's prices are the deployment's, and stay.
     assert [row["id"] for row in await models.list_operator_connections()] == [_ID]
-    assert (await models.operator_terms(connection_ids=[_ID]))[_ID]["m1"][
-        "input_price"
-    ] == 2_800_000
+    assert (await models.operator_prices(connection_ids=[_ID]))[_ID] == {"m1": prices}

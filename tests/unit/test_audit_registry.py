@@ -149,7 +149,7 @@ def test_every_computed_action_is_known_and_declared() -> None:
     accounts = {f"agent.local_account.{name}" for name in ADMIN_ACTIONS}
     assert sorted(accounts - set(ACTIONS)) == []
     provided = _provided_model_actions()
-    assert len(provided) == 11, "admin_operator_models writes a different set of actions?"
+    assert len(provided) == 6, "admin_operator_models writes a different set of actions?"
     assert sorted(provided - set(ACTIONS)) == []
 
 

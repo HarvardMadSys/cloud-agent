@@ -121,7 +121,7 @@ async def get_agent_config(
         _mcp_connections_for_user(store, user["user_id"]),
         _model_preference_for_user(store, user["user_id"]),
         _model_connections_for_user(store, user["user_id"]),
-        _provided_sources_for_user(store, user["user_id"]),
+        _provided_sources(store),
     )
     if not model_connections_enabled():
         # Switched off: nothing is offered, so the control stays empty.
@@ -252,13 +252,11 @@ async def _model_connections_for_user(
     return await store.model_connections.list_model_connections(user_id=user_id)
 
 
-async def _provided_sources_for_user(
-    store: _ConfigStorage | None, user_id: str
-) -> list[dict[str, Any]]:
-    """What the deployment provides to this owner; none without a store."""
+async def _provided_sources(store: _ConfigStorage | None) -> list[dict[str, Any]]:
+    """What the deployment provides to every owner; none without a store."""
     if store is None:
         return []
-    return await provided_sources(store.operator_models, user_id=user_id)
+    return await provided_sources(store.operator_models)
 
 
 async def _mcp_connections_for_user(

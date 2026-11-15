@@ -2,7 +2,6 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useT } from '@/components/providers';
 import type { AgentConfigApi } from '@/lib/api/agents';
 import {
-  isUsedUp,
   listedChoices,
   modelPicker,
   NO_MODEL,
@@ -11,8 +10,6 @@ import {
   storedChoice,
   type ModelChoice,
 } from './modelSource';
-import { providedAllowance, resetTime } from './providedModels';
-import { useAllowanceReset } from './useAllowanceReset';
 
 /** The pick a draft kept, with its source; see `NewTaskDraft`. */
 interface DraftedPick {
@@ -38,9 +35,8 @@ interface DraftedPick {
  * stays empty and Run waits, exactly as it does for an unset repository.
  *
  * Both values carry their source (see `modelSource`). A model on a source
- * that cannot run here — another agent was chosen, the connection was
- * disabled or no longer lists it, or a provided model has nothing left of
- * today's budget — stays on screen marked so and holds Run. It never gives
+ * that cannot run here — another agent was chosen, or the connection was
+ * disabled or no longer lists it — stays on screen marked so and holds Run. It never gives
  * way to the resolved model: that would bill another account.
  */
 export function useComposerModel(drafted: DraftedPick | null, runtime: string) {
@@ -61,17 +57,11 @@ export function useComposerModel(drafted: DraftedPick | null, runtime: string) {
     setResolved((current) => (current.connectionId ? current : resolvedChoice(loaded)));
   }, []);
   const listed = useMemo(() => listedChoices(config, runtime), [config, runtime]);
-  // What can run now: a provided model used up for today is listed, not offered.
-  // Worked out on every draw, as the picker's own options are: it depends on
-  // the clock, and a list kept from before the day's budget started over would
-  // hold Run for a model the picker shows as back.
-  useAllowanceReset(config);
-  const offered = listed.filter((option) => !isUsedUp(config, option));
   let choice = NO_MODEL;
   let unavailable: ModelChoice | null = null;
   for (const candidate of [chosen, resolved]) {
     if (!candidate.model) continue;
-    if (offered.some((option) => sameChoice(option, candidate))) {
+    if (listed.some((option) => sameChoice(option, candidate))) {
       choice = candidate;
       break;
     }
@@ -88,12 +78,8 @@ export function useComposerModel(drafted: DraftedPick | null, runtime: string) {
   // Said beside the composer while a pick that cannot run holds Run.
   let unavailableHint = '';
   if (unavailable) {
-    const { connectionId: source, model } = unavailable;
-    const allowance = providedAllowance(config, source, model);
     const label = picker.optionLabels[picker.value];
-    unavailableHint = allowance?.exhausted
-      ? t('modelSource.usedUpHint', { model, time: resetTime(allowance.resetsAt) })
-      : t('modelSource.unavailableHint', { label, runtime });
+    unavailableHint = t('modelSource.unavailableHint', { label, runtime });
   }
   const modelControl = useMemo(
     () => ({

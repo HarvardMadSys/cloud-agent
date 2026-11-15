@@ -5,7 +5,6 @@ import {
   choiceKey,
   choiceLabel,
   isModelUnavailable,
-  isUsedUp,
   listedChoices,
   modelOverride,
   modelPicker,
@@ -16,7 +15,6 @@ import {
   turnChoice,
   turnModelPicker,
 } from './modelSource';
-import { resetTime } from './providedModels';
 
 const A = 'mconn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const B = 'mconn_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -153,34 +151,23 @@ describe('per-model availability', () => {
 describe('models the deployment provides', () => {
   const P = 'oconn_dddddddddddddddddddddddddddddddd';
   const S = 'oconn_ffffffffffffffffffffffffffffffff';
-  const RESETS = '2999-01-01T00:00:00Z';
-  /** $5.00 a day, of which $1.80 is spent: $3.20 is left for its three models together. */
+  /** The oldest provided source, with three models. */
   const house = {
     id: P,
     name: 'House models',
-    is_default: true,
-    default_model: 'gpt-5',
     models: ['gpt-5', 'house-fast', 'house-open'],
     model_runtimes: {
       'gpt-5': ['codex', 'opencode'],
       'house-fast': ['codex'],
       'house-open': ['codex'],
     },
-    daily_budget_microusd: 5_000_000,
-    spent_today_microusd: 1_800_000,
-    resets_at: RESETS,
   };
-  /** A second source whose budget for today is used up, for both of its models. */
+  /** A second provided source, with two models. */
   const spentHouse = {
     id: S,
     name: 'Spent house',
-    is_default: false,
-    default_model: null,
     models: ['house-spent', 'house-idle'],
     model_runtimes: { 'house-spent': ['codex'], 'house-idle': ['codex'] },
-    daily_budget_microusd: 2_000_000,
-    spent_today_microusd: 2_000_000,
-    resets_at: RESETS,
   };
   const provided = {
     ...config,
@@ -190,7 +177,6 @@ describe('models the deployment provides', () => {
   const pick = (model: string, connectionId = P) => ({ model, connectionId });
   const codex = (loaded: AgentConfigApi = provided) =>
     modelPicker(loaded, listedChoices(loaded, 'codex'), NO_MODEL, () => {}, t);
-  const usedUp = `Today’s budget is used up · resets at ${resetTime(RESETS)}`;
 
   it('lists provided models first, each with its source id, filtered by the agent', () => {
     expect(listedChoices(provided, 'codex')).toEqual([
@@ -236,39 +222,7 @@ describe('models the deployment provides', () => {
     expect(picker.optionLabels['house-fast']).toBe('house-fast');
   });
 
-  it('shows what is left of today’s budget on every model of a source, as money', () => {
-    const picker = codex();
-    expect(picker.optionNotes).toEqual({
-      // One budget for the source: each of its models says the same.
-      [choiceKey(pick('gpt-5'))]: '$3.20 left today',
-      'house-fast': '$3.20 left today',
-      'house-open': '$3.20 left today',
-      'house-spent': usedUp,
-      'house-idle': usedUp,
-    });
-    // The owner's own connection has no budget here: its provider bills it.
-    expect(picker.optionNotes).not.toHaveProperty(choiceKey(pick('gpt-5', A)));
-  });
-
-  it('shows an untouched budget whole, and less than a cent as that', () => {
-    const spending = (spent_today_microusd: number) =>
-      codex({
-        ...provided,
-        provided_sources: [{ ...house, spent_today_microusd }],
-      } as AgentConfigApi);
-    expect(spending(0).optionNotes?.['house-fast']).toBe('$5.00 left today');
-    expect(spending(4_990_000).optionNotes?.['house-fast']).toBe('$0.01 left today');
-    // Something is left, so the model is not closed, and it does not read as nothing.
-    const nearly = spending(4_995_800);
-    expect(nearly.optionNotes?.['house-fast']).toBe('<$0.01 left today');
-    expect(nearly.disabledOptions).toBeUndefined();
-    // The last millionth gone, it is used up.
-    const gone = spending(5_000_000);
-    expect(gone.optionNotes?.['house-fast']).toBe(usedUp);
-    expect(gone.disabledOptions).toEqual([choiceKey(pick('gpt-5')), 'house-fast', 'house-open']);
-  });
-
-  it('shows the models of a used-up source, but does not let one be chosen or run', () => {
+  it('offers every model of every provided source, with nothing to count down', () => {
     const chosen: unknown[] = [];
     const picker = modelPicker(
       provided,
@@ -277,57 +231,13 @@ describe('models the deployment provides', () => {
       (choice) => chosen.push(choice),
       t,
     );
-    expect(picker.options).toContain('house-spent');
-    // The budget is the source's: with it gone, every model of that source is closed.
-    expect(picker.disabledOptions).toEqual(['house-spent', 'house-idle']);
-    expect(picker.optionLabels['house-spent']).toBe('house-spent (used up today)');
-    expect(picker.optionLabels['house-idle']).toBe('house-idle (used up today)');
+    expect(picker).not.toHaveProperty('optionNotes');
+    expect(picker).not.toHaveProperty('disabledOptions');
+    expect(picker.optionLabels['house-spent']).toBe('house-spent');
     picker.onChange('house-spent');
-    picker.onChange('house-idle');
-    picker.onChange('house-fast');
-    expect(chosen).toEqual([pick('house-fast')]);
-
-    expect(offeredChoices(provided, 'codex')).not.toContainEqual(pick('house-spent', S));
-    expect(offeredChoices(provided, 'codex')).not.toContainEqual(pick('house-idle', S));
-    expect(isUsedUp(provided, pick('house-spent', S))).toBe(true);
-    expect(isModelUnavailable(provided, 'codex', pick('house-spent', S))).toBe(true);
-    expect(isModelUnavailable(provided, 'codex', pick('house-idle', S))).toBe(true);
-    // Another source's budget is its own.
-    expect(isUsedUp(provided, pick('house-fast'))).toBe(false);
-    expect(isModelUnavailable(provided, 'codex', pick('house-fast'))).toBe(false);
-    expect(isModelUnavailable(provided, 'codex', pick('house-open'))).toBe(false);
-  });
-
-  it('keeps a used-up model in its place when it is the current choice', () => {
-    const spent = pick('house-spent', S);
-    const picker = modelPicker(provided, listedChoices(provided, 'codex'), spent, () => {}, t);
-    expect(picker.value).toBe('house-spent');
-    // Listed where it belongs, never moved to the top as a missing source is.
-    expect(picker.options[0]).toBe(choiceKey(pick('gpt-5')));
-    expect(choiceLabel(provided, spent, t, { unavailable: true })).toBe(
-      'house-spent (used up today)',
-    );
-  });
-
-  it('opens a used-up source’s models again once its reset time has passed', () => {
-    const before = Date.parse(RESETS) - 1;
-    for (const model of ['house-spent', 'house-idle']) {
-      expect(isUsedUp(provided, pick(model, S), before)).toBe(true);
-      expect(isUsedUp(provided, pick(model, S), before + 1)).toBe(false);
-    }
-  });
-
-  it('still offers a turn its picker when every listed model is used up', () => {
-    const spentOnly = {
-      ...provided,
-      model_connections: [],
-      provided_sources: [spentHouse],
-    } as AgentConfigApi;
-    const inherited = pick('house-spent', S);
-    const picker = turnModelPicker(spentOnly, 'codex', inherited, () => {}, t, inherited);
-    expect(picker?.options).toEqual(['house-spent', 'house-idle']);
-    expect(picker?.disabledOptions).toEqual(['house-spent', 'house-idle']);
-    expect(offeredChoices(spentOnly, 'codex')).toEqual([]);
+    expect(chosen).toEqual([pick('house-spent', S)]);
+    expect(offeredChoices(provided, 'codex')).toContainEqual(pick('house-spent', S));
+    expect(isModelUnavailable(provided, 'codex', pick('house-spent', S))).toBe(false);
   });
 
   it('finds the source name of a turn that ran on a provided connection', () => {

@@ -1,8 +1,9 @@
 """Models the deployment provides: what an owner is offered, and closing what a change left behind.
 
-An administrator configures a *provided* connection: a provider's Base URL,
-the deployment's own key and the models it lists. Every admitted owner may run
-turns on it with no setup, within a daily budget on its models together. Turns
+An administrator configures a *provided* connection: a provider's Base URL and
+the deployment's own key, and it lists what the provider lists for that key.
+Every admitted owner may run turns on it with no setup; the provider's own
+budget on the key is what limits them. Turns
 resolve it through :mod:`cloud_agent.application.model_connections`, like an
 owner's own connection; the model relay (:mod:`cloud_agent.api.model_relay`)
 is what holds the key. This module is the rest: what the composer is told, and
@@ -18,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from cloud_agent.application.model_connection_status import model_efforts, usable_runtimes
 from cloud_agent.application.residency import close_released_residencies
-from cloud_agent.domain.operator_models import next_reset
+from cloud_agent.domain.operator_models import first_usable_model
 from cloud_agent.logging_utils import get_logger
 
 if TYPE_CHECKING:
@@ -39,40 +40,27 @@ def new_operator_connection_id() -> str:
     return f"oconn_{secrets.token_hex(16)}"
 
 
-async def provided_sources(
-    operator_models: OperatorModelRepository, *, user_id: str
-) -> list[dict[str, Any]]:
-    """Every provided connection as ``user_id``'s composer offers it.
+async def provided_sources(operator_models: OperatorModelRepository) -> list[dict[str, Any]]:
+    """Every provided connection as an owner's composer offers it, oldest first.
 
-    Each enabled connection with the models this owner may use: one that has
-    no prices, or is not open to this owner, is left out as if it were not
-    provided, and a connection left with no model, or on which this owner has
-    no budget, is not listed at all. The row is narrowed to those models, so
-    the helpers that decide which agents can run what answer for exactly what
-    is offered.
+    Each enabled connection with the models an agent can use, in the order
+    its provider lists them; one with no such model is not listed. Every
+    admitted owner is offered the same.
     """
     sources: list[dict[str, Any]] = []
-    for row in await operator_models.operator_sources_for_user(user_id=user_id):
-        allowances = row["allowances"]
-        offered = [model for model in row["models"] if allowances[model].offered]
-        if not offered:
+    for row in await operator_models.enabled_operator_connections():
+        runtimes = usable_runtimes(row)
+        models = [model for model in row["models"] if runtimes.get(model)]
+        if not models:
             continue
-        narrowed = {**row, "models": offered}
-        default_model = row.get("default_model")
-        runtimes = usable_runtimes(narrowed)
         sources.append(
             {
                 "id": row["id"],
                 "name": row["name"],
-                "is_default": bool(row.get("is_default")),
-                "default_model": default_model if default_model in runtimes else None,
-                "models": offered,
+                "models": models,
                 "enabled": True,
-                "model_runtimes": runtimes,
-                "model_efforts": model_efforts(narrowed),
-                "daily_budget_microusd": int(row["budget_microusd"]),
-                "spent_today_microusd": int(row["spent_microusd"]),
-                "resets_at": next_reset(),
+                "model_runtimes": {model: runtimes[model] for model in models},
+                "model_efforts": model_efforts({**row, "models": models}),
             }
         )
     return sources
@@ -81,15 +69,12 @@ async def provided_sources(
 def provided_default(sources: list[dict[str, Any]]) -> tuple[str, str] | None:
     """``(model, connection_id)`` an owner with no history starts on, when there is one.
 
-    The default connection's default model, while this owner may use it and
-    has budget left today.
+    The oldest provided connection's first model an agent can use.
     """
     for source in sources:
-        model = source.get("default_model")
-        if not source.get("is_default") or not model:
-            continue
-        if source["spent_today_microusd"] < source["daily_budget_microusd"]:
-            return str(model), str(source["id"])
+        model = first_usable_model(source["models"], source["model_runtimes"])
+        if model is not None:
+            return model, str(source["id"])
     return None
 
 

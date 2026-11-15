@@ -21,15 +21,11 @@ function withConnection(
   connection: OperatorModelConnection,
 ): OperatorModelConnectionList {
   const exists = list.connections.some((item) => item.id === connection.id);
-  // Only one connection is where new users start: the server moved the mark.
-  const others = connection.is_default
-    ? list.connections.map((item) => (item.is_default ? { ...item, is_default: false } : item))
-    : list.connections;
   return {
     ...list,
     connections: exists
-      ? others.map((item) => (item.id === connection.id ? connection : item))
-      : [...others, connection],
+      ? list.connections.map((item) => (item.id === connection.id ? connection : item))
+      : [...list.connections, connection],
   };
 }
 
@@ -129,10 +125,10 @@ function useProvidedConnections(onAccessDenied?: (cause: unknown) => void) {
 
 /**
  * Models this deployment provides: connections whose key stays on the control
- * plane and which every admitted account may use with no setup, within a
- * daily budget that each request is charged against at its model's prices.
- * An administrator adds a connection (saved disabled), chooses its daily
- * budget and every model's prices, then enables it.
+ * plane and which every admitted account may use with no setup. An
+ * administrator adds one with a name, a Base URL and a key (saved disabled),
+ * and enables it; its models are whatever the provider lists for the key,
+ * and the oldest enabled one is where new users start.
  */
 export default function ProvidedModelsSettings({
   onAccessDenied,
@@ -141,18 +137,15 @@ export default function ProvidedModelsSettings({
 }) {
   const t = useT();
   const { list, loading, error, load, changed, removed } = useProvidedConnections(onAccessDenied);
-  const [notice, setNotice] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
 
   function saved(result: SavedConnection | null) {
     setEditing(null);
-    setNotice(result?.problem ?? '');
     if (result) changed(result.connection);
   }
 
   /** Open the form for a new connection (`'new'`) or an existing one. */
   function edit(target: string) {
-    setNotice('');
     setEditing(target);
   }
 
@@ -174,11 +167,6 @@ export default function ProvidedModelsSettings({
       <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">{t('adminModels.description')}</p>
       {list ? <DeploymentNotices list={list} /> : null}
       {error ? <LoadProblem error={error} onRetry={list ? undefined : () => void load()} /> : null}
-      {notice ? (
-        <p role="alert" className="mt-4 text-sm leading-6 text-status-warning">
-          {notice}
-        </p>
-      ) : null}
       <div role="status" aria-live="polite">
         {loading && !list ? <p className="mt-4 text-sm text-muted">{t('common.loading')}</p> : null}
       </div>

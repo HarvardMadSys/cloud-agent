@@ -1,22 +1,20 @@
-"""Charges the model relay could not write when their answer ended: counted meanwhile, written later.
+"""Use the model relay could not record when its answer ended: written later.
 
-A served request's cost is added to its owner's use today as its answer ends
-(``record_operator_request``). When that write fails, dropping the cost would
-let the owner spend it again and leave the deployment paying for it. As the
-gateway keeps a cost it has not written yet (hybridInference's
-``serving.spend_ledger``), the relay keeps it here: it stays counted against
-the owner's budget (:class:`~cloud_agent.api.model_relay.Reserved`) and is
-written again, a little later each time and then every few minutes, until the
-write lands. One that has not landed when the process stops is reported with
-its amount.
+A served request's tokens and cost are added to its owner's use today as its
+answer ends (``record_operator_request``). When that write fails, dropping it
+would leave the usage table short of what the deployment's key was used for.
+As the gateway keeps a cost it has not written yet (hybridInference's
+``serving.spend_ledger``), the relay keeps it here and writes it again, a
+little later each time and then every few minutes, until the write lands. One
+that has not landed when the process stops is reported with its amount.
 
 Only a write that certainly did not land is tried again. One whose outcome is
 unknown (the connection broke after the statement was sent) may have been
-counted already. It is reported instead: counting it twice would charge its
-owner for one request twice.
+counted already. It is reported instead: counting it twice would record one
+request twice.
 
-Per process, like the reservations: a process that stops makes one last try
-for each charge it still holds, and reports what is left.
+Per process: a process that stops makes one last try for each record it still
+holds, and reports what is left.
 """
 
 from __future__ import annotations
@@ -48,7 +46,7 @@ class _ChargeStorage(Protocol):
 
 @dataclass(frozen=True)
 class Charge:
-    """One served request's cost, as it is added to its owner's use."""
+    """One served request's tokens and cost, as they are added to its owner's use."""
 
     connection_id: str
     user_id: str
@@ -59,11 +57,6 @@ class Charge:
     used: TokenUsage
     estimated: bool
     job_id: str | None = None
-
-    @property
-    def budget_key(self) -> tuple[str, ...]:
-        """Where the relay counts its owner's budget on the connection."""
-        return ("budget", self.connection_id, self.user_id)
 
     def facts(self) -> dict[str, Any]:
         """What a log line says of it: who, which model, what it cost. Never content."""
@@ -105,14 +98,10 @@ def report(event: str, charge: Charge, *, error: bool = False) -> None:
 
 
 class PendingCharges:
-    """Charges not written yet: counted against their owners' budgets until they are."""
+    """Records not written yet, each written again until it lands."""
 
-    def __init__(self, reserved: Any, *, delays: Sequence[float] = RETRY_DELAYS) -> None:
-        """Count kept charges in ``reserved``; wait ``delays`` before each further try.
-
-        After the last of ``delays``, it is waited again before every try.
-        """
-        self._reserved = reserved
+    def __init__(self, *, delays: Sequence[float] = RETRY_DELAYS) -> None:
+        """Wait ``delays`` before each further try; after the last, it again before every try."""
         self._delays = tuple(delays) or (0.0,)
         self._tasks: set[asyncio.Task[None]] = set()
         self._closing = False
@@ -123,8 +112,7 @@ class PendingCharges:
         return len(self._tasks)
 
     def keep(self, store: _ChargeStorage, charge: Charge) -> None:
-        """Count ``charge`` against its owner's budget now, and write it later."""
-        self._reserved.hold(charge.budget_key, charge.cost_microusd)
+        """Write ``charge`` later."""
         task = asyncio.get_running_loop().create_task(self._write_later(store, charge))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -134,7 +122,7 @@ class PendingCharges:
         if not self._tasks:
             return
         # A charge kept a moment ago may not have begun waiting yet; cancelled
-        # before it starts, it would skip its last try and its release.
+        # before it starts, it would skip its last try.
         await asyncio.sleep(0)
         waiting = list(self._tasks)
         self._closing = True
@@ -171,8 +159,6 @@ class PendingCharges:
         except asyncio.CancelledError:
             report("agent_model_relay_charge_lost", charge, error=True)
             raise
-        finally:
-            self._reserved.free(charge.budget_key, charge.cost_microusd)
 
     async def _try(self, store: _ChargeStorage, charge: Charge) -> bool:
         """Write ``charge`` once; whether there is nothing more to try."""
@@ -188,7 +174,6 @@ class PendingCharges:
                 exc_info=True,
             )
             return False
-        self._reserved.landed(charge.budget_key, charge.cost_microusd)
         report("agent_model_relay_charged_late", charge)
         return True
 

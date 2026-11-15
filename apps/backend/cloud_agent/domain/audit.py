@@ -187,7 +187,7 @@ _DECLARED: tuple[AuditAction, ...] = (
     AuditAction("agent.runtime_version.set", "settings", "runtime", "runtime"),
     AuditAction("agent.runtime_version.upgrade", "settings", "runtime", "runtime"),
     _host("set_settings", category="settings"),
-    # Models the deployment provides, and each account's budget and models on them.
+    # Models the deployment provides.
     *(
         _provided(name)
         for name in (
@@ -197,9 +197,11 @@ _DECLARED: tuple[AuditAction, ...] = (
             "enable",
             "disable",
             "delete",
+            # No longer written: written while an administrator set a model's
+            # prices (``set_terms``) or its daily request limit (``set_limit``),
+            # and each account's budget and models (below). Rows remain, so
+            # they still read as what they were.
             "set_terms",
-            # Written while a model had a daily request limit instead of
-            # prices; rows remain, so they still read as what they were.
             "set_limit",
         )
     ),

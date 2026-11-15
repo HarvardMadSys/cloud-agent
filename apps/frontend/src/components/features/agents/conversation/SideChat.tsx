@@ -28,7 +28,6 @@ import {
   turnChoice,
   turnModelPicker,
 } from '../composer/modelSource';
-import { useAllowanceReset } from '../composer/useAllowanceReset';
 import { McpApprovalNotice } from '../mcp/McpApprovalNotice';
 import { McpSessionPanel } from '../mcp/McpSessionPanel';
 import { NativeQuestionPrompt } from './NativeQuestionPrompt';
@@ -194,7 +193,6 @@ function SideChatContent({
   );
   const inheritedTurn = current ?? sourceJob;
   const picker = turnModelPicker(config, runtime, model, setModel, t, turnChoice(inheritedTurn));
-  useAllowanceReset(config);
   const modelUnavailable = isModelUnavailable(config, runtime, model);
 
   useEffect(() => {
