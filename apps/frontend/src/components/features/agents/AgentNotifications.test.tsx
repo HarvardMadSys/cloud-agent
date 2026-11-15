@@ -1119,16 +1119,15 @@ describe('a hinted refresh racing an in-flight question read', () => {
 
     // The hint fires while the first read is still in flight: it aborts that
     // read and asks the clock for a refresh in the same synchronous turn.
+    // The aborted read's finally block runs the retained re-read immediately,
+    // so the notification does not wait for the next 12 s poll.
     await act(async () => {
       receiveHint('question', 'thread-1');
       await vi.advanceTimersByTimeAsync(PUSH_BATCH_MS);
     });
-    expect(questions.mock.calls.length).toBeGreaterThanOrEqual(2);
-
-    // Settle the aborted first read; the retained re-read then runs at once.
-    pending.reject(new DOMException('The read was cancelled.', 'AbortError'));
-    await act(async () => vi.advanceTimersByTimeAsync(0));
-    expect(questions.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(notify).toHaveBeenCalled();
+    expect(questions).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ kind: 'question', jobId: 'job-1', attemptId: 10 }),
+    );
   });
 });
