@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
@@ -1986,6 +1987,39 @@ def test_the_tunnel_refuses_to_skip_host_verification():
     # And it must refuse to start without one, rather than quietly trusting
     # whatever answers the first time.
     assert re.search(r'\[ -s "\$KNOWN_HOSTS" \] \|\| die', script)
+
+
+def test_only_the_model_tunnel_may_wait_idle_without_a_destination(
+    remote_compose: dict, tmp_path
+):
+    """Its service is on every host and used only by one that names the relay,
+    so it waits instead of restarting forever; every other tunnel still fails."""
+    optional = {
+        name
+        for name, service in remote_compose["services"].items()
+        if (service.get("environment") or {}).get("TUNNEL_OPTIONAL") == "1"
+    }
+    assert optional == {"model-tunnel"}
+    assert "profiles" not in remote_compose["services"]["model-tunnel"]
+    env = {"PATH": os.environ["PATH"], "TUNNEL_SSH_DESTINATION": ""}
+    refused = subprocess.run(
+        ["sh", str(_TUNNEL_ENTRYPOINT)], env=env, capture_output=True, text=True, timeout=10
+    )
+    assert refused.returncode == 1 and "TUNNEL_SSH_DESTINATION is required" in refused.stderr
+    idle = subprocess.Popen(
+        ["sh", str(_TUNNEL_ENTRYPOINT)],
+        env={**env, "TUNNEL_OPTIONAL": "1"},
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert idle.stdout is not None
+        assert "no destination configured; idle" in idle.stdout.readline()
+        assert idle.poll() is None
+        idle.send_signal(signal.SIGTERM)
+        assert idle.wait(timeout=10) == 0
+    finally:
+        idle.kill()
 
 
 def test_the_tunnel_dies_rather_than_listening_on_nothing():

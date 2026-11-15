@@ -613,10 +613,12 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "internal",
         "Compose maps the operator's AGENT_*TUNNEL_* values onto the tunnel container's "
-        "own names; a deploy script hands its child a held lock.",
+        "own names, and marks the model relay's tunnel as one that may wait idle "
+        "(TUNNEL_OPTIONAL); a deploy script hands its child a held lock.",
         names=(
             "_KATA_RUNTIME_EPOCH_LOCK_FD",
             "TUNNEL_LISTEN_PORT",
+            "TUNNEL_OPTIONAL",
             "TUNNEL_REMOTE_HOST",
             "TUNNEL_REMOTE_PORT",
             "TUNNEL_REVERSE_BIND",

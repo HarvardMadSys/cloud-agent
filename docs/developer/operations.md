@@ -4511,28 +4511,34 @@ an **end-user header**: the relay then sends, with every request, an opaque
 tag for the owner's account (a keyed digest, not the account id or email),
 which a provider that supports it can attribute or limit by.
 
+Nothing has to be configured on the machines. The control plane always runs
+the `model-relay` service, bound to `127.0.0.1:8002`
+(`AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT`; keep it off the public
+edge), and refuses every request until a provided connection is enabled. Every
+host has a `model-tunnel` service, which waits idle until the host is given a
+destination. **Admin → Servers → Add server** gives each new server one: its
+own SSH key, an account of its own on the control-plane machine allowed only
+that forward, and `AGENT_SANDBOX_MODEL_RELAY_URL` with `AGENT_MODEL_TUNNEL_*`
+in the host's configuration. The host then advertises `model-relay-v1`; a host
+without it is never handed a turn on a provided model, and the admin page
+warns while no host advertises it.
+
 To turn it on:
 
-1. On the control plane, add `model-relay` to `COMPOSE_PROFILES`. The
-   `model-relay` service binds `127.0.0.1:8002`
-   (`AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT`); keep it off the
-   public edge.
-2. On each host that should run these turns, add `model-relay` to
-   `COMPOSE_PROFILES`, set `AGENT_SANDBOX_MODEL_RELAY_URL=http://agent-models:8000`
-   and give the `model-tunnel` an SSH key of its own (`AGENT_MODEL_TUNNEL_*`),
-   on an account of its own on the control-plane machine, allowed that one
-   forward and nothing else:
+1. Make sure at least one host advertises the model relay. A server set up
+   before this release has no model tunnel: prepare a new setup for it under
+   Admin → Servers, and retire the old one. A host that Add server did not set
+   up gets the values by hand, from whatever deploys it: give the
+   `model-tunnel` an SSH key of its own (`AGENT_MODEL_TUNNEL_*`), on an
+   account of its own on the control-plane machine, allowed that one forward
+   and nothing else, and set
+   `AGENT_SANDBOX_MODEL_RELAY_URL=http://agent-models:8000`:
 
    ```text
    command="",restrict,port-forwarding,permitopen="127.0.0.1:8002" ssh-ed25519 AAAA... models
    ```
 
-   The host then advertises `model-relay-v1`; a host without it is never
-   handed a turn on a provided model, and the admin page warns while no host
-   advertises it.
-3. Roll hosts before the control plane, as always
-   ([rolling deployment order](#rolling-deployment-order)).
-4. In **Admin → Settings → Models**, add the connection. The save verifies
+2. In **Admin → Settings → Models**, add the connection. The save verifies
    every model with the key, as an owner's save does, and stores nothing if
    one fails. Choose the daily budget per account and set each model's
    prices, then enable it.

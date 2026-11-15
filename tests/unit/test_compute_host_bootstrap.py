@@ -1442,3 +1442,34 @@ async def test_a_profile_naming_the_retired_mode_or_inference_relay_is_refused(t
     with pytest.raises(ProviderError, match="removed Gateway inference relay"):
         await bootstrap._archive(profile, INTENT, None)
     transport.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_profile_with_the_model_tunnel_must_carry_its_own_key_files(tmp_path):
+    """The model relay's tunnel is optional, but present it is held to the rule
+    the other two are: its key and known_hosts are this profile's own files."""
+    bootstrap, profile, _transport, secrets = setup(tmp_path)
+    secrets["deployment:env"] += (
+        "\nAGENT_SANDBOX_MODEL_RELAY_URL=http://agent-models:8000"
+        "\nAGENT_MODEL_TUNNEL_SSH_DESTINATION=ca-md-x@control.example.org"
+        "\nAGENT_MODEL_TUNNEL_SSH_KEY=/etc/somewhere/else"
+        "\nAGENT_MODEL_TUNNEL_SSH_KNOWN_HOSTS={deploy_root}/.compute-secrets/model.known_hosts"
+    )
+    with pytest.raises(ProviderError, match="dedicated deployed files"):
+        await bootstrap._archive(profile, INTENT, None)
+
+    bootstrap, profile, _transport, secrets = setup(tmp_path)
+    for name in ("model.key", "model.known_hosts"):
+        profile.files[".compute-secrets/" + name] = "deployment:" + name
+        secrets["deployment:" + name] = "DEDICATED MODEL TUNNEL " + name
+    secrets["deployment:env"] += (
+        "\nAGENT_SANDBOX_MODEL_RELAY_URL=http://agent-models:8000"
+        "\nAGENT_MODEL_TUNNEL_SSH_DESTINATION=ca-md-x@control.example.org"
+        "\nAGENT_MODEL_TUNNEL_SSH_KEY={deploy_root}/.compute-secrets/model.key"
+        "\nAGENT_MODEL_TUNNEL_SSH_KNOWN_HOSTS={deploy_root}/.compute-secrets/model.known_hosts"
+    )
+    payload = await bootstrap._archive(profile, INTENT, None)
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+        assert ".compute-secrets/model.key" in archive.getnames()
+        env = dotenv_values(stream=io.StringIO(archive.extractfile(".env").read().decode()))
+    assert env["AGENT_SANDBOX_MODEL_RELAY_URL"] == "http://agent-models:8000"

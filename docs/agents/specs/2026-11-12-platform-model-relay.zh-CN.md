@@ -561,3 +561,9 @@ terms:                               # 价格是美元每百万 token，照供�
 - 第 13 节的 Playwright 端到端用例和 staging 实测。延迟、长应答、并发和中继重启时五个 CLI 的表现都还没有数据。
 - 第 11 节第 4 项里“由部署声明的文件”这个配置入口。只有管理页。
 - 托管计算节点的自动配置。本 PR 没有改它，所以自动扩容出来的宿主机不带 `model-tunnel`，也就领不到平台连接的 turn。
+
+2026-11-15 的修订（不再要手工配置，见[部署方要自己提供的配置只减不增](2026-11-15-deployment-config-ratchet.zh-CN.md)）：
+
+- 去掉 `model-relay` profile。控制面一直运行 `model-relay`，没有启用的平台连接时拒绝所有请求；每台宿主机一直有 `model-tunnel`，没有目的地址时空转（`TUNNEL_OPTIONAL`）。上面第 10 节和第 14 节说的「在 profile 后面」不再成立。
+- Admin → Servers → Add server 给每台新服务器配好模型中继的隧道：单独的 SSH 密钥，控制面机器上单独的账号（`ca-md-…`，只允许转发到模型中继的端口），宿主机配置里写入 `AGENT_SANDBOX_MODEL_RELAY_URL` 和 `AGENT_MODEL_TUNNEL_*`。上面「托管计算节点的自动配置没有改」这一条因此不再成立。
+- 这次修订之前保存的 setup 不带模型隧道，它的宿主机照常运行，只是领不到平台连接的 turn；重新做一次 setup 才有。不由 Add server 部署的宿主机仍由部署它的一方提供这些值。

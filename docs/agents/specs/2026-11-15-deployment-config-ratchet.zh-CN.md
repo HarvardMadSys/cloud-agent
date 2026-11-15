@@ -74,13 +74,12 @@ GitHub relay 之前就是同一个样子。
 
 ## 5. 接下来
 
-第一批可以从基线里删掉的，是两个 relay 的手工配置：
+**model relay（已做，随后的 PR）。** 去掉 `model-relay` profile：服务一直启动，是否提供模型由 Admin → Settings → Models
+决定，没配置时宿主机上的 `model-tunnel` 空转。server setup 给每台主机生成 model tunnel 的专用 key，在控制面机器上开好
+只允许转发到模型中继端口的账号，并写入 `AGENT_SANDBOX_MODEL_RELAY_URL` 和 `AGENT_MODEL_TUNNEL_*`。基线因此少了
+7 个变量和 1 个 profile。已经做好的 setup 不带它，要重新做一次 setup；不由 server setup 部署的主机（例如发行版用自己的
+部署 workflow 维护的 staging 和 production 主机）仍要由发行版提供这些值。
 
-- 去掉 `model-relay` 和 `github-relay` 两个 profile：服务一直启动，是否提供模型由 Admin → Settings → Models 决定，
-  是否转发 GitHub 由对应的设置决定。
-- server setup 给每台主机生成 model tunnel 和 GitHub tunnel 的专用 key，在控制面机器上开好只允许转发对应端口的账号，
-  并写入 `AGENT_SANDBOX_MODEL_RELAY_URL`、`AGENT_MODEL_TUNNEL_*`、`AGENT_GITHUB_TUNNEL_*` 和 GitHub relay 的 CA。
-  已经加好的主机重跑一次 server setup 补上。
-
-那会是一个单独的 PR，到时基线一次减少十几项。不由 server setup 部署的主机（例如发行版自己用部署 workflow
-维护的 staging 和 production 主机）仍要由发行版提供这些值，这一点要和发行版一起处理。
+**GitHub relay（还没做）。** 它和 model relay 不一样：一旦打开，所有 sandbox 访问 github.com 的流量都经过控制面，
+sandbox 还要信任部署自己的 CA。所以「一直启动」对每个部署都是行为变化，还要让系统自动生成 relay 的 CA 和证书、
+由 server setup 把 CA 发给主机、用一个 Admin 设置决定开不开。这需要单独设计。

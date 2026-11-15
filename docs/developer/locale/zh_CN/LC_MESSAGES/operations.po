@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: HybridInference Cloud Agent \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-14 09:25-0500\n"
+"POT-Creation-Date: 2026-11-15 04:11-0500\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: The HybridInference contributors\n"
 "Language: zh_CN\n"
@@ -3492,7 +3492,7 @@ msgstr ""
 " GitHub App 用户令牌转发；针对其他任何东西的请求则不带任何凭据转发；仓库管理、secrets、GraphQL、删除分支和推 tag "
 "一律拒绝。中继看到创建 PR 的请求成功时，会把这个 PR 记到对话上。所有者的令牌在控制平面里续期，所以轮次跑得再久也不会遇到令牌过期。"
 
-#: ../developer/operations.md:1619 ../developer/operations.md:4514
+#: ../developer/operations.md:1619 ../developer/operations.md:4526
 msgid "To turn it on:"
 msgstr "启用步骤："
 
@@ -9113,7 +9113,13 @@ msgid ""
 "(unreachable, or answered with an error) costs nothing, and neither do "
 "listing models and counting tokens."
 msgstr ""
-"**一次请求怎么计费。** 应答结束时，中继读出服务商放在应答里的用量记录（三种推理 API 各有一份，流式应答里在最后几个事件上），把这些 token 按模型的价格算成费用，加到所有者今天的花费上。费用的计算和推理网关一步一步完全相同，每次请求四舍五入到百万分之一美元，有测试保证两边算出的金额精确到微美元都一样。输出 token 包含推理 token。应答没有给出用量、在给出之前被截断（Stop、连接中断），或者用了中继没有要求的内容编码时，按估算计费，和网关给客户端中途关闭的流计费一样：输入是请求里的文本，输出是应答已经生成的文本，都按每四个字节一个 token 算；请求里的图片、音频、视频不论大小，分别算 85、200、1,000 个 token。用量表把这类请求单独计数。服务商没有答复的请求（连不上，或者答了错误）不收费，列出模型和计算 token 数也不收费。"
+"**一次请求怎么计费。** 应答结束时，中继读出服务商放在应答里的用量记录（三种推理 API 各有一份，流式应答里在最后几个事件上），把这些 "
+"token "
+"按模型的价格算成费用，加到所有者今天的花费上。费用的计算和推理网关一步一步完全相同，每次请求四舍五入到百万分之一美元，有测试保证两边算出的金额精确到微美元都一样。输出"
+" token 包含推理 "
+"token。应答没有给出用量、在给出之前被截断（Stop、连接中断），或者用了中继没有要求的内容编码时，按估算计费，和网关给客户端中途关闭的流计费一样：输入是请求里的文本，输出是应答已经生成的文本，都按每四个字节一个"
+" token 算；请求里的图片、音频、视频不论大小，分别算 85、200、1,000 个 "
+"token。用量表把这类请求单独计数。服务商没有答复的请求（连不上，或者答了错误）不收费，列出模型和计算 token 数也不收费。"
 
 #: ../developer/operations.md:4494
 msgid ""
@@ -9128,7 +9134,11 @@ msgid ""
 "and an owner can pass a budget by about what their requests in flight "
 "cost."
 msgstr ""
-"**进行中的请求。** 费用要到应答结束才知道，所以每个请求在进行期间先从所有者的额度里预留一笔估算的费用；剩下的额度都被预留时，新请求得到 `429`，由 agent 重试。另一个请求正在读所有者已花掉的金额时写进去的费用，也会算到那个请求的检查里，所以不会有费用从读库和看预留之间漏过去。另外还有两个上限限制进行中的请求数：每个所有者（默认 4 个），以及可选的、某个模型上所有人合计的。这些都记在中继进程里，所以是按中继的每个副本分别生效的；一个所有者超出额度的量，大约是他进行中的请求的费用。"
+"**进行中的请求。** 费用要到应答结束才知道，所以每个请求在进行期间先从所有者的额度里预留一笔估算的费用；剩下的额度都被预留时，新请求得到 "
+"`429`，由 agent "
+"重试。另一个请求正在读所有者已花掉的金额时写进去的费用，也会算到那个请求的检查里，所以不会有费用从读库和看预留之间漏过去。另外还有两个上限限制进行中的请求数：每个所有者（默认"
+" 4 "
+"个），以及可选的、某个模型上所有人合计的。这些都记在中继进程里，所以是按中继的每个副本分别生效的；一个所有者超出额度的量，大约是他进行中的请求的费用。"
 
 #: ../developer/operations.md:4504
 msgid ""
@@ -9147,45 +9157,35 @@ msgstr ""
 "数算出来的；它可能和服务商实际收的不一样，比如服务商按时段定价，或者把一个模型分到价格不同的线路上。请同样在服务商那边给部署的密钥设好预算和可用的模型：那才是部署花费的上限。连接可以指定一个**终端用户请求头**：指定后，中继会在每个请求上带一个代表所有者账号的不透明标签（一个带密钥的摘要，不是账号"
 " id 或邮箱），支持的服务商可以按它归因或限额。"
 
-#: ../developer/operations.md:4516
+#: ../developer/operations.md:4514
 msgid ""
-"On the control plane, add `model-relay` to `COMPOSE_PROFILES`. The "
-"`model-relay` service binds `127.0.0.1:8002` (`AGENT_MODEL_RELAY_BIND` / "
-"`AGENT_MODEL_RELAY_PORT`); keep it off the public edge."
-msgstr ""
-"在控制平面上，把 `model-relay` 加进 `COMPOSE_PROFILES`。`model-relay` 服务绑定在 "
-"`127.0.0.1:8002`（`AGENT_MODEL_RELAY_BIND` / "
-"`AGENT_MODEL_RELAY_PORT`）；不要把它放到公网入口后面。"
+"Nothing has to be configured on the machines. The control plane always "
+"runs the `model-relay` service, bound to `127.0.0.1:8002` "
+"(`AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT`; keep it off the "
+"public edge), and refuses every request until a provided connection is "
+"enabled. Every host has a `model-tunnel` service, which waits idle until "
+"the host is given a destination. **Admin → Servers → Add server** gives "
+"each new server one: its own SSH key, an account of its own on the "
+"control-plane machine allowed only that forward, and "
+"`AGENT_SANDBOX_MODEL_RELAY_URL` with `AGENT_MODEL_TUNNEL_*` in the host's"
+" configuration. The host then advertises `model-relay-v1`; a host without"
+" it is never handed a turn on a provided model, and the admin page warns "
+"while no host advertises it."
+msgstr "机器上不需要做任何配置。控制平面总是运行 `model-relay` 服务，绑定在 `127.0.0.1:8002`（`AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT`；不要把它放到公网入口后面），在启用部署提供的连接之前，它拒绝所有请求。每台主机上都有 `model-tunnel` 服务，在主机拿到隧道目标之前它空闲等待。**Admin → Servers → Add server** 会给每台新服务器配好：一把单独的 SSH 密钥，控制平面机器上一个只允许这一个转发的单独账号，以及主机配置里的 `AGENT_SANDBOX_MODEL_RELAY_URL` 和 `AGENT_MODEL_TUNNEL_*`。这样主机就会通告 `model-relay-v1`；没有它的主机永远领不到跑在部署提供的模型上的轮次，没有任何主机通告它时，管理页会给出提醒。"
 
-#: ../developer/operations.md:4520
+#: ../developer/operations.md:4528
 msgid ""
-"On each host that should run these turns, add `model-relay` to "
-"`COMPOSE_PROFILES`, set `AGENT_SANDBOX_MODEL_RELAY_URL=http://agent-"
-"models:8000` and give the `model-tunnel` an SSH key of its own "
-"(`AGENT_MODEL_TUNNEL_*`), on an account of its own on the control-plane "
-"machine, allowed that one forward and nothing else:"
-msgstr ""
-"在每台要运行这类轮次的主机上，把 `model-relay` 加进 `COMPOSE_PROFILES`，设置 "
-"`AGENT_SANDBOX_MODEL_RELAY_URL=http://agent-models:8000`，并给 `model-"
-"tunnel` 单独一把 SSH "
-"密钥（`AGENT_MODEL_TUNNEL_*`）。这把密钥在控制平面机器上用一个专门的账号，只允许这一条转发，别的都不允许："
+"Make sure at least one host advertises the model relay. A server set up "
+"before this release has no model tunnel: prepare a new setup for it under"
+" Admin → Servers, and retire the old one. A host that Add server did not "
+"set up gets the values by hand, from whatever deploys it: give the "
+"`model-tunnel` an SSH key of its own (`AGENT_MODEL_TUNNEL_*`), on an "
+"account of its own on the control-plane machine, allowed that one forward"
+" and nothing else, and set `AGENT_SANDBOX_MODEL_RELAY_URL=http://agent-"
+"models:8000`:"
+msgstr "确认至少有一台主机通告了模型中继。这个版本之前配置的服务器没有模型隧道：在 Admin → Servers 里为它重新做一次配置，再停用旧的。不是由 Add server 配置的主机，要由部署它的一方手工提供这些值：给 `model-tunnel` 单独一把 SSH 密钥（`AGENT_MODEL_TUNNEL_*`），在控制平面机器上为它单独开一个只允许这一个转发、别的什么都不允许的账号，并设置 `AGENT_SANDBOX_MODEL_RELAY_URL=http://agent-models:8000`："
 
-#: ../developer/operations.md:4530
-msgid ""
-"The host then advertises `model-relay-v1`; a host without it is never "
-"handed a turn on a provided model, and the admin page warns while no host"
-" advertises it."
-msgstr ""
-"之后这台主机会通告 `model-"
-"relay-v1`；没有通告的主机永远领不到跑在部署提供的模型上的轮次，而且只要没有任何主机通告它，管理页面就会给出警告。"
-
-#: ../developer/operations.md:4533
-msgid ""
-"Roll hosts before the control plane, as always ([rolling deployment order"
-"](#rolling-deployment-order))."
-msgstr "和平时一样，先发布主机，再发布控制平面（[滚动部署顺序](#rolling-deployment-order)）。"
-
-#: ../developer/operations.md:4535
+#: ../developer/operations.md:4541
 msgid ""
 "In **Admin → Settings → Models**, add the connection. The save verifies "
 "every model with the key, as an owner's save does, and stores nothing if "
@@ -9195,11 +9195,11 @@ msgstr ""
 "在 **Admin → Settings → Models** "
 "里添加连接。保存时会用这把密钥验证每个模型，和所有者保存自己的连接时一样，只要有一个不通过就什么都不保存。选好每个账号的每日额度，给每个模型设好价格，然后启用。"
 
-#: ../developer/operations.md:4540
+#: ../developer/operations.md:4546
 msgid "Things to know when operating it:"
 msgstr "运维时需要知道的几件事："
 
-#: ../developer/operations.md:4542
+#: ../developer/operations.md:4548
 msgid ""
 "**A new key closes nothing.** No process holds the key, so the next "
 "request uses the new one. A new Base URL, disabling and deleting close "
@@ -9208,7 +9208,7 @@ msgstr ""
 "**换密钥不会关闭任何进程。** 没有进程持有密钥，所以下一个请求就用新的。换 Base "
 "URL、停用和删除，会关闭这个连接上的每个成员进程，和所有者自己的连接一样。"
 
-#: ../developer/operations.md:4545
+#: ../developer/operations.md:4551
 msgid ""
 "**The relay is on the path.** Requests and answers of provided models "
 "pass through the control plane; nothing of them is stored or logged. A "
@@ -9224,7 +9224,7 @@ msgstr ""
 "`model-relay` 服务（控制平面每次发布都会重启）会中断进行中的应答，agent CLI "
 "会重试，被中断的每个应答按估算计费。所有者自己的连接上的轮次不经过它。"
 
-#: ../developer/operations.md:4553
+#: ../developer/operations.md:4559
 msgid ""
 "**A cost that could not be written.** If the database is away when an "
 "answer ends, the answer is still relayed and its cost is kept: it counts "
@@ -9237,9 +9237,13 @@ msgid ""
 "after the statement was sent may have landed and is not written again: "
 "`agent_model_relay_charge_unknown`, with the amount."
 msgstr ""
-"**费用没能记下来。** 应答结束时数据库不可用的话，应答照常传回，费用留着：它计入所有者的额度，并在 1、2、5、10、30、60、120 秒后依次重写，之后每 5 分钟一次，直到写进去为止（`agent_model_relay_charge_retry`，写进去后是 `agent_model_relay_charged_late`）。中继进程停止前，会把还留着的每笔费用再试一次，仍然失败的写一条带金额的 `agent_model_relay_charge_lost` 日志。语句发出后连接才断开的写入可能已经记上了，不再重写，记一条带金额的 `agent_model_relay_charge_unknown`。"
+"**费用没能记下来。** 应答结束时数据库不可用的话，应答照常传回，费用留着：它计入所有者的额度，并在 1、2、5、10、30、60、120 "
+"秒后依次重写，之后每 5 分钟一次，直到写进去为止（`agent_model_relay_charge_retry`，写进去后是 "
+"`agent_model_relay_charged_late`）。中继进程停止前，会把还留着的每笔费用再试一次，仍然失败的写一条带金额的 "
+"`agent_model_relay_charge_lost` 日志。语句发出后连接才断开的写入可能已经记上了，不再重写，记一条带金额的 "
+"`agent_model_relay_charge_unknown`。"
 
-#: ../developer/operations.md:4563
+#: ../developer/operations.md:4569
 msgid ""
 "**A refused key.** If the provider answers `401` to the deployment's key,"
 " the relay answers `502` to the agent, logs "
@@ -9251,20 +9255,20 @@ msgstr ""
 "`agent_model_relay_key_refused` "
 "日志，管理页面显示从什么时候开始。等服务商下一次接受请求，或者密钥被更换后，这个状态就会清除。"
 
-#: ../developer/operations.md:4568
+#: ../developer/operations.md:4574
 msgid ""
 "**Nothing falls back.** A turn on a provided model never moves to the "
 "owner's own connection, or the reverse. A disabled or deleted connection "
 "refuses its turns with that reason."
 msgstr "**不会回退。** 跑在部署提供的模型上的轮次，永远不会换到所有者自己的连接上，反过来也一样。连接被停用或删除后，它的轮次会以这个原因被拒绝。"
 
-#: ../developer/operations.md:4571
+#: ../developer/operations.md:4577
 msgid ""
 "**`AGENT_MODEL_CONNECTIONS_ENABLED`** switches provided models off "
 "together with owners' connections."
 msgstr "**`AGENT_MODEL_CONNECTIONS_ENABLED`** 会把部署提供的模型和所有者的连接一起关掉。"
 
-#: ../developer/operations.md:4573
+#: ../developer/operations.md:4579
 msgid ""
 "**Rolling back.** Downgrading `0120` drops prices, budgets and recorded "
 "costs; a release from before it limits requests per model instead, and "
@@ -9278,7 +9282,7 @@ msgstr ""
 "会删除价格、额度和记下的费用；它之前的版本改为限制每个模型的请求次数，在那之后才定价的模型要等设了请求次数上限才向人提供。只要还存在部署提供的连接，或者有轮次、排队消息指向它，降级"
 " `0118` 就会拒绝执行。再往前的版本会把这种轮次的来源当成一个找不到的连接，并拒绝它的下一条消息。"
 
-#: ../developer/operations.md:4579
+#: ../developer/operations.md:4585
 msgid ""
 "**Claude Code and the first-party host.** Claude Code decides some "
 "features from the host name it is pointed at. Through the relay it sees "
@@ -9288,11 +9292,11 @@ msgstr ""
 "**Claude Code 和它自家的主机名。** Claude Code "
 "会根据它被指向的主机名决定一些功能。经过中继后，它看到的是中继的名字，所以即使部署提供的连接指向它厂商自己的 API，行为也和任何第三方端点一样。"
 
-#: ../developer/operations.md:4584
+#: ../developer/operations.md:4590
 msgid "Reusable cloud environments"
 msgstr "可复用的云环境"
 
-#: ../developer/operations.md:4586
+#: ../developer/operations.md:4592
 msgid ""
 "Migration `0065_environments` adds owner configuration, immutable "
 "encrypted versions, fixed workspace bindings, isolated test leases and "
@@ -9308,7 +9312,7 @@ msgstr ""
 "variable/v1` 域下加密。这把密钥要和现有的凭据存储一起备份；不经重新加密就换掉它，旧的绑定就读不出来了。Secrets "
 "无法通过所有者的读取或历史 API 拿到。"
 
-#: ../developer/operations.md:4593
+#: ../developer/operations.md:4599
 msgid ""
 "Repository environments are a standard product feature, available without"
 " an admin switch. Settings, task selection and the Environment tab are "
@@ -9324,7 +9328,7 @@ msgstr ""
 "`AGENT_REPOSITORY_ENVIRONMENTS_ENABLED`，都会被忽略，也不再出现在设置编辑器里。没有配置环境的任务，仍按基础环境运行，不做准备；配置了环境的工作区，仍然要求"
 " runner 和 sandbox manager 实际支持 `environment-v1`。"
 
-#: ../developer/operations.md:4601
+#: ../developer/operations.md:4607
 msgid ""
 "Upgrade every control-plane replica before creating any new environment-"
 "bound workspace; mixed old/new admission, Fork and terminal handlers may "
@@ -9336,7 +9340,7 @@ msgstr ""
 "在创建任何新的、绑定了环境的工作区之前，先把每一个控制平面副本都升级好；如果新旧版本混着处理准入、Fork "
 "和终端请求，绑定信息可能会悄悄丢失。一旦出现了第一个绑定，就不要再回滚到读不懂它的二进制版本。如果非要回滚：先关掉这些执行入口，把环境测试和环境准备都排空，并让已绑定的工作区留在兼容的主机上，或者隔离起来。"
 
-#: ../developer/operations.md:4607
+#: ../developer/operations.md:4613
 msgid ""
 "Roll out the environment-capable runner and sandbox manager together. A "
 "claiming replica must attest `environment-v1`, and the actual "
@@ -9353,7 +9357,7 @@ msgstr ""
 "attempt；它绝不能在缺少变量的情况下运行这些任务。环境测试同样遵守部署固定、计算资源准入、副本证明和主机槽位的限制，并且只拿到只读的源码凭据，拿不到推理、MCP"
 " 或仓库写入的授权。"
 
-#: ../developer/operations.md:4615
+#: ../developer/operations.md:4621
 msgid ""
 "Preparation receipts live in the host credential directory under "
 "`environment-preparation`, outside container mounts and source archives. "
@@ -9368,7 +9372,7 @@ msgstr ""
 "重启时，这份主机状态要保留。安装在每个固定的工作区上只会成功一次；startup 在每次实际启动时运行一次。失败的步骤会一直显示在 "
 "Environment 标签页里，可以针对原来的绑定重试。"
 
-#: ../developer/operations.md:4622
+#: ../developer/operations.md:4628
 msgid ""
 "Manual-action receipts live next to preparation state under `environment-"
 "actions`. They reserve the run before launching a command and retain its "
@@ -9386,7 +9390,7 @@ msgstr ""
 " "
 "`unknown`，绝不会自动重放。换一个幂等键开始新的运行之前，先检查一下它在外部已经造成了哪些影响。这些回执并不能保证外部服务里的副作用恰好只发生一次。"
 
-#: ../developer/operations.md:4631
+#: ../developer/operations.md:4637
 msgid ""
 "The output of a test, a preparation or an action is stored masked and "
 "bounded, with each NUL and unpaired surrogate replaced by U+FFFD: "
@@ -9396,7 +9400,7 @@ msgstr ""
 "测试、准备步骤或操作的输出，会经过遮蔽、限制长度后存储，其中每个 NUL 和落单的代理项都会替换为 U+FFFD：这两种字符 Postgres "
 "都存不了，而拒绝这段输出，会让测试或命令一直完不成。"
 
-#: ../developer/operations.md:4635
+#: ../developer/operations.md:4641
 msgid ""
 "Empty bindings still pin the original task's selection, but require "
 "neither `environment-v1` nor preparation. Each environment test reserves "
@@ -9408,7 +9412,7 @@ msgstr ""
 "上占用一个本地槽位，这样其他空闲槽位还能继续认领编码任务。主机上的孤儿查询是只读的，并且限流；租约过期和历史记录的维护，由控制平面的 reaper"
 " 负责。"
 
-#: ../developer/operations.md:4641
+#: ../developer/operations.md:4647
 msgid ""
 "Cancellation fences the result immediately but keeps the leased slot "
 "until cleanup is confirmed or the lease expires. An expired orphan no "
@@ -9426,7 +9430,7 @@ msgstr ""
 "ID，并在确认清理之前，删掉那些确切的、带标签的容器。不要为了腾容量去删无关的沙箱组，也不要绕过租约和容器身份的检查。已经归档、并且没人再引用的版本，30"
 " 天后回收；已有的工作区和测试绑定，会保留它们当时的加密值，用于遮蔽。"
 
-#: ../developer/operations.md:4650
+#: ../developer/operations.md:4656
 msgid ""
 "Owner-provided credentials can be read and sent outside by user code "
 "through the existing network. Known-value masking does not cover encoded "
@@ -9437,7 +9441,7 @@ msgstr ""
 "所有者提供的凭据，可以被用户代码读取，并通过现有的网络发送出去。按已知值做的遮蔽覆盖不到编码过的 secret、所有者原始的终端和文件，也覆盖不到"
 " Git 推送；平台也不会扫描推送的内容。平台持有的长期凭据、保留的变量名，以及固定的出口规则，仍然受保护。"
 
-#: ../developer/operations.md:4655
+#: ../developer/operations.md:4661
 msgid ""
 "Environment setup, startup and actions share executable package data in "
 "`/workspace/.cloud-agent-tools`, excluded through Git's local exclude "
@@ -9452,11 +9456,11 @@ msgstr ""
 "目录仍然是私有的。显式刷新运行时会保留安装时的输入，并从下一轮开始生效；已经在运行的服务继续用旧值。startup "
 "恢复只是明确放行接下来的一次人工轮次，绝不是一张永久的成功回执。"
 
-#: ../developer/operations.md:4662
+#: ../developer/operations.md:4668
 msgid "Team environments"
 msgstr "团队环境"
 
-#: ../developer/operations.md:4664
+#: ../developer/operations.md:4670
 msgid ""
 "A team's owner and admins can create environments for the team: in "
 "Settings → Environments, **New environment** or **Copy** offers the teams"
@@ -9474,7 +9478,7 @@ msgstr ""
 " 403。创建、编辑和移除团队环境，都会记在团队的审计日志里。设计见[团队](../agents/specs/2026-10-15-team-"
 "shared-workspace-design.zh-CN.md) §6。"
 
-#: ../developer/operations.md:4673
+#: ../developer/operations.md:4679
 msgid ""
 "**Each member's own container.** A team environment is shared "
 "configuration, not a shared workspace. A member's task runs in that "
@@ -9488,7 +9492,7 @@ msgstr ""
 "团队环境共享的是配置，而不是工作区。成员的任务在这个成员自己的容器里运行，用的是团队的变量和脚本、这个成员自己的模型连接和 MCP "
 "连接；这个成员个人的全局变量只在运行时使用（只用于安装的那些会被排除；如果名字相同，以团队的定义为准）。所以安装结果对每位成员都一样，团队才能共享快照。"
 
-#: ../developer/operations.md:4680
+#: ../developer/operations.md:4686
 msgid ""
 "**Secrets are shared.** Every member who can run a task with a team "
 "environment can read its Secrets from inside that task; the dialog says "
@@ -9498,7 +9502,7 @@ msgstr ""
 "**Secrets 是共享的。** 只要能用团队环境运行任务，成员就能在任务里读到它的 "
 "Secrets，对话框里也会说明这一点。请把它们当作整个团队都知道的内容；如果某位成员离开后不应该再持有某个 Secret，就把它轮换掉。"
 
-#: ../developer/operations.md:4684
+#: ../developer/operations.md:4690
 msgid ""
 "**Leaving.** A binding records the team and the member's access "
 "generation. When a member leaves, is removed, or the team is deleted, "
@@ -9517,14 +9521,14 @@ msgstr ""
 " "
 "409；遮蔽仍然会读取它的值。重新加入团队也不会让旧对话恢复，因为代次已经往前走了。如果成员的仓库默认设置指向一个他已经不能再用的团队环境，下次他开始任务时，这个默认设置会被清掉。"
 
-#: ../developer/operations.md:4694
+#: ../developer/operations.md:4700
 msgid ""
 "**Removal.** Removing a team environment clears every member's default "
 "that names it. Conversations already bound keep their fixed "
 "configuration, as with a personal environment."
 msgstr "**移除环境。** 移除一个团队环境，会清掉所有指向它的成员默认设置。已经绑定的对话，和个人环境一样，保持它们固定下来的配置。"
 
-#: ../developer/operations.md:4697
+#: ../developer/operations.md:4703
 msgid ""
 "**Rollback.** Downgrading below `0082_team_environments` is refused while"
 " any team environment exists, archived ones included."
@@ -9832,4 +9836,49 @@ msgstr "**回滚。** 只要还存在任何团队环境（包括已归档的）�
 #~ msgstr ""
 #~ "**费用没能记下来。** 应答结束时数据库不可用的话，应答照常传回，中继写一条带金额的 "
 #~ "`agent_model_relay_charge_failed` 日志，这次请求不计入所有者的花费。"
+
+#~ msgid ""
+#~ "On the control plane, add `model-"
+#~ "relay` to `COMPOSE_PROFILES`. The `model-"
+#~ "relay` service binds `127.0.0.1:8002` "
+#~ "(`AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT`); "
+#~ "keep it off the public edge."
+#~ msgstr ""
+#~ "在控制平面上，把 `model-relay` 加进 `COMPOSE_PROFILES"
+#~ "`。`model-relay` 服务绑定在 "
+#~ "`127.0.0.1:8002`（`AGENT_MODEL_RELAY_BIND` / "
+#~ "`AGENT_MODEL_RELAY_PORT`）；不要把它放到公网入口后面。"
+
+#~ msgid ""
+#~ "On each host that should run these"
+#~ " turns, add `model-relay` to "
+#~ "`COMPOSE_PROFILES`, set "
+#~ "`AGENT_SANDBOX_MODEL_RELAY_URL=http://agent-models:8000` "
+#~ "and give the `model-tunnel` an SSH"
+#~ " key of its own (`AGENT_MODEL_TUNNEL_*`),"
+#~ " on an account of its own on"
+#~ " the control-plane machine, allowed "
+#~ "that one forward and nothing else:"
+#~ msgstr ""
+#~ "在每台要运行这类轮次的主机上，把 `model-relay` 加进 "
+#~ "`COMPOSE_PROFILES`，设置 `AGENT_SANDBOX_MODEL_RELAY_URL=http"
+#~ "://agent-models:8000`，并给 `model-tunnel` 单独一把 "
+#~ "SSH "
+#~ "密钥（`AGENT_MODEL_TUNNEL_*`）。这把密钥在控制平面机器上用一个专门的账号，只允许这一条转发，别的都不允许："
+
+#~ msgid ""
+#~ "The host then advertises `model-"
+#~ "relay-v1`; a host without it is "
+#~ "never handed a turn on a provided"
+#~ " model, and the admin page warns "
+#~ "while no host advertises it."
+#~ msgstr ""
+#~ "之后这台主机会通告 `model-"
+#~ "relay-v1`；没有通告的主机永远领不到跑在部署提供的模型上的轮次，而且只要没有任何主机通告它，管理页面就会给出警告。"
+
+#~ msgid ""
+#~ "Roll hosts before the control plane, "
+#~ "as always ([rolling deployment order"
+#~ "](#rolling-deployment-order))."
+#~ msgstr "和平时一样，先发布主机，再发布控制平面（[滚动部署顺序](#rolling-deployment-order)）。"
 
