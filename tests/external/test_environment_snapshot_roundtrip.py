@@ -56,7 +56,7 @@ def cleanup():
     images: list[str] = []
     yield containers, images
     for container in containers:
-        _docker("rm", "--force", container, check=False)
+        _docker("rm", "--force", "--volumes", container, check=False)
     for image in images:
         _docker("image", "rm", "--force", image, check=False)
 

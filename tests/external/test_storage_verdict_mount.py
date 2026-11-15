@@ -109,4 +109,4 @@ def test_a_running_replica_observes_verdict_unlink_recreation_and_replacement(tm
         replacement.replace(verdict_file)
         assert sample() == {"reason": "unsupported"}
     finally:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=20, check=False)
+        subprocess.run(["docker", "rm", "-fv", name], capture_output=True, timeout=20, check=False)

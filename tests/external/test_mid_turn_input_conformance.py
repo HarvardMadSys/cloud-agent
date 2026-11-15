@@ -281,7 +281,7 @@ class _Sandbox:
         )
 
     def close(self) -> None:
-        subprocess.run(["docker", "rm", "-f", self.container], capture_output=True, timeout=60)
+        subprocess.run(["docker", "rm", "-fv", self.container], capture_output=True, timeout=60)
 
     def context(self, model: _Model) -> LaunchContext:
         host = os.environ.get("STEER_TEST_HOST", "host.docker.internal")

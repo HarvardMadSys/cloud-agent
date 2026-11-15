@@ -297,7 +297,9 @@ class Container:
         )
 
     def stop(self) -> None:
-        run("docker", "rm", "-f", self.name, check=False)
+        # `-v`: postgres declares its data directory a volume, which plain
+        # `rm -f` leaves behind on a persistent runner.
+        run("docker", "rm", "-fv", self.name, check=False)
 
 
 @dataclass

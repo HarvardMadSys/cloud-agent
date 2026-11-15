@@ -505,7 +505,7 @@ def teardown(project: str) -> None:
         "ps", "-aq", "--filter", f"label=com.docker.compose.project={project}", check=False
     ).split()
     if containers:
-        docker("rm", "-f", *containers, check=False)
+        docker("rm", "-fv", *containers, check=False)
     for volume in docker("volume", "ls", "-q", "--filter", f"name={project}", check=False).split():
         docker("volume", "rm", "-f", volume, check=False)
     # By label and by name: the stack's network carries a name of this run's

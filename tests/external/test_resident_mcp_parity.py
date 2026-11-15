@@ -808,7 +808,7 @@ async def test_resident_mcp_call_followup_resume_and_fork(
             with contextlib.suppress(asyncio.CancelledError):
                 await approver
         if container:
-            await asyncio.to_thread(_docker, "rm", "-f", container)
+            await asyncio.to_thread(_docker, "rm", "-fv", container)
         server.should_exit = True
         await serving
         upstream.stop()
