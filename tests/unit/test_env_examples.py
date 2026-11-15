@@ -21,6 +21,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.support.env_suppliers import EXPORTED_BY_DEPLOYER, written_by_server_setup
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -109,16 +110,6 @@ HOST = REPO / "deploy/host/docker-compose.sandbox.yml"
 #: `${VAR:?message}` — the form that refuses to render when unset.
 _REQUIRED = re.compile(r"\$\{([A-Z_][A-Z0-9_]*):\?")
 
-#: Required by a compose file, but exported by the script that runs it rather
-#: than written by an operator: deploy.sh exports the commit it deploys, and
-#: the release deployer the one its manifest names. A Compose command run by
-#: hand still fails on it with its own message.
-EXPORTED_BY_DEPLOYER = {"AGENT_DEPLOYMENT_SHA"}
-
-#: The two relays a host reaches, each spelled as a prefix in server setup.
-_TUNNELS = ("AGENT_MCP_TUNNEL", "AGENT_CONTROL_PLANE_TUNNEL")
-
-
 def test_a_new_control_plane_needs_no_env_file() -> None:
     """Its keys come from the `keys` service and everything else from Admin, so
     the only thing a first start needs is the commit its deployer exports."""
@@ -136,24 +127,12 @@ def test_the_deployer_exports_what_the_examples_leave_out() -> None:
         assert f"export {name}" in script, name
 
 
-def _written_by_server_setup() -> set[str]:
-    """Every name automatic server setup or the host bootstrap writes into a host's .env."""
-    setup = (REPO / "apps/backend/cloud_agent/application/compute_setup.py").read_text()
-    bootstrap = (REPO / "apps/backend/cloud_agent/providers/compute/host_bootstrap.py").read_text()
-    names = set(re.findall(r'"([A-Z][A-Z0-9_]+)":', setup + bootstrap))
-    suffixes = set(re.findall(r'prefix\s*\+\s*"(_[A-Z_]+)"', setup))
-    assert suffixes, (
-        "server setup no longer spells the tunnel names as prefix + suffix — regex drift?"
-    )
-    return names | {prefix + suffix for prefix in _TUNNELS for suffix in suffixes}
-
-
 def test_server_setup_writes_every_variable_a_host_cannot_start_without() -> None:
     """A host's .env is written by Admin → Servers → Add server, never by hand,
     so a new required variable must be one it writes."""
     required = set(_REQUIRED.findall(HOST.read_text()))
     assert required, "no required variables found — regex drift?"
-    missing = required - _written_by_server_setup() - EXPORTED_BY_DEPLOYER
+    missing = required - written_by_server_setup() - EXPORTED_BY_DEPLOYER
     assert not missing, (
         f"{HOST.name} refuses to start without {sorted(missing)}, which server setup never writes"
     )
