@@ -614,7 +614,9 @@ class AutomaticComputeSetup:
         )
         control_hosts = await self.resolver.resolve(control.known_hosts_ref or "")
         reserved = await self._reserved_ports(endpoint.gateway_ip)
-        reserved.update({endpoint.main_port, endpoint.mcp_port, endpoint.model_port} - {None})
+        reserved.update({endpoint.main_port, endpoint.mcp_port})
+        if endpoint.model_port is not None:
+            reserved.add(endpoint.model_port)
         # A release that was published has its sandbox image in the registry.
         # Name it by the commit placeholder the bootstrap fills in, not by
         # this commit's digest: stored profiles advance with each release and

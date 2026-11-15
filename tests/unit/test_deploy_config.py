@@ -1989,9 +1989,7 @@ def test_the_tunnel_refuses_to_skip_host_verification():
     assert re.search(r'\[ -s "\$KNOWN_HOSTS" \] \|\| die', script)
 
 
-def test_only_the_model_tunnel_may_wait_idle_without_a_destination(
-    remote_compose: dict, tmp_path
-):
+def test_only_the_model_tunnel_may_wait_idle_without_a_destination(remote_compose: dict, tmp_path):
     """Its service is on every host and used only by one that names the relay,
     so it waits instead of restarting forever; every other tunnel still fails."""
     optional = {

@@ -178,9 +178,7 @@ class SshTunnelSetup:
                 "setup_configuration", "The sandbox manager requires an unprivileged reverse port"
             )
         if len(set(keys)) != len(keys) or len(set(ports)) != len(ports):
-            raise ProviderError(
-                "setup_configuration", "Each tunnel requires its own key and port"
-            )
+            raise ProviderError("setup_configuration", "Each tunnel requires its own key and port")
         if reverse_port in ports:
             raise ProviderError(
                 "setup_configuration", "The sandbox manager needs a separate reverse port"
