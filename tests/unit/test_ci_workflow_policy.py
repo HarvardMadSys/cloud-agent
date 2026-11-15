@@ -514,11 +514,33 @@ def test_the_test_database_leaves_no_volume_on_a_persistent_runner() -> None:
     assert "--tmpfs /var/lib/postgresql/data:rw,size=4g" in service["options"]
 
 
+_ROOT = Path(__file__).parents[2]
+
+
 @pytest.mark.parametrize("workflow", ["ci.yml", "publish.yml"])
 def test_removed_containers_take_their_anonymous_volumes(workflow: str) -> None:
     """`docker rm -f` leaves an image's declared volumes behind on a persistent runner."""
-    text = (Path(__file__).parents[2] / ".github" / "workflows" / workflow).read_text()
+    text = (_ROOT / ".github" / "workflows" / workflow).read_text()
     assert not re.findall(r"docker rm -f(?![a-z])", text)
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(
+        str(path.relative_to(_ROOT))
+        for directory in ("deploy/release", "tests/external")
+        for path in (_ROOT / directory).glob("*.py")
+    ),
+)
+def test_what_ci_runs_removes_containers_with_their_volumes(path: str) -> None:
+    """The scripts and live tests CI runs on persistent runners, not just the workflows.
+
+    A forced removal without its volumes is how the smoke job's postgres left a
+    data volume per run on spark2 after the workflows themselves were fixed.
+    """
+    text = (_ROOT / path).read_text()
+    removals = r"""(?<!["']image["'], )(?<!["']volume["'], )["']rm["'],\s*["'](?:-f|--force)["'](?!,\s*["']--volumes)"""
+    assert not re.findall(removals, text)
 
 
 def test_pull_request_builder_is_always_removed_after_the_artifact_job() -> None:

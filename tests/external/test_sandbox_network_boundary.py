@@ -408,13 +408,13 @@ def lab():
 
 def _teardown(lab: Lab) -> None:
     if lab.containers:
-        _docker("rm", "-f", *lab.containers, check=False)
+        _docker("rm", "-fv", *lab.containers, check=False)
     labelled = _docker(
         "ps", "-aq", "--filter", f"label={CHAT_NAMESPACE_LABEL}={lab.network.namespace}",
         check=False,
     ).stdout.split()  # fmt: skip
     if labelled:
-        _docker("rm", "-f", *labelled, check=False)
+        _docker("rm", "-fv", *labelled, check=False)
     groups = _docker(
         "network", "ls", "-q", "--filter",
         f"label={CHAT_NAMESPACE_LABEL}={lab.network.namespace}", check=False,

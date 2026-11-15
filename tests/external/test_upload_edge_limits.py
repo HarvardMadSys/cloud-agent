@@ -135,7 +135,7 @@ def edge(request, tmp_path: Path, nginx_network):
             assert "test is successful" in syntax.stderr
             yield client, origin + prefix
     finally:
-        docker("rm", "-f", name, check=False)
+        docker("rm", "-fv", name, check=False)
 
 
 def test_shipped_edges_accept_advertised_uploads_and_enforce_bounded_limits(edge):

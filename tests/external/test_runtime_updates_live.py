@@ -149,7 +149,7 @@ def test_an_update_downloads_checks_offers_and_runs_in_a_chat(namespace, runtime
         )
         assert ran.returncode == 0, ran.stderr
     finally:
-        subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
+        subprocess.run(["docker", "rm", "-fv", container], capture_output=True, check=False)
 
 
 def test_a_version_that_is_not_installed_fails_its_check():

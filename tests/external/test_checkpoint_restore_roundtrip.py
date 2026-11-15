@@ -60,7 +60,7 @@ def cleanup():
     images: list[str] = []
     yield containers, images
     for container in containers:
-        _docker("rm", "--force", container, check=False)
+        _docker("rm", "--force", "--volumes", container, check=False)
     for image in images:
         _docker("image", "rm", "--force", image, check=False)
 
@@ -215,7 +215,7 @@ def test_a_restored_chat_starts_on_its_new_host_with_its_files(docker_ready, cle
     # The new host is another deployment and has only the object: neither the
     # container nor its image.
     manager, controller = _host(ARRIVING)
-    _docker("rm", "--force", first.container_name)
+    _docker("rm", "--force", "--volumes", first.container_name)
     _docker("image", "rm", "--force", reference)
     # The download and the checks before ``docker load``, as ``restore`` runs
     # them; its receipt would demand a registry digest this local base lacks.
