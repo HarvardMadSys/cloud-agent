@@ -48,8 +48,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from tests.support import env_inventory as inventory
-from tests.support import env_suppliers
+from tests.support import env_inventory as inventory, env_suppliers
 from tests.support.env_scan import (
     EnvRead,
     TemplateName,

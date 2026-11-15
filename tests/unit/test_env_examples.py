@@ -110,6 +110,7 @@ HOST = REPO / "deploy/host/docker-compose.sandbox.yml"
 #: `${VAR:?message}` — the form that refuses to render when unset.
 _REQUIRED = re.compile(r"\$\{([A-Z_][A-Z0-9_]*):\?")
 
+
 def test_a_new_control_plane_needs_no_env_file() -> None:
     """Its keys come from the `keys` service and everything else from Admin, so
     the only thing a first start needs is the commit its deployer exports."""
