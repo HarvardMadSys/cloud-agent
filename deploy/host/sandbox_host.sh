@@ -37,6 +37,10 @@
 #   AGENT_EGRESS_CHAT_NETWORK_POOL this deployment's own RFC1918 pool for group bridges
 #   AGENT_EGRESS_DNS_SERVER        the one IPv4 resolver sandboxes may reach
 #
+# Optional, and written by server setup: AGENT_SANDBOX_MODEL_RELAY_URL with
+# AGENT_MODEL_TUNNEL_*, which give this host the model relay's tunnel. Set,
+# the tunnel's destination, key and known_hosts are required like the others.
+#
 # Each tunnel key gets its own account on the far host, one authorized_keys
 # line there, and that account's Match block from
 # deploy/host/sshd-tunnels.conf.example; Admin → Servers → Server setup
@@ -200,6 +204,13 @@ for retired in AGENT_AUTH_MODE AGENT_GATEWAY_URL AGENT_GATEWAY_HOSTNAME \
     || die "remove $retired from this host's environment and .env: hosts no longer use a Gateway inference relay or an account mode"
 done
 TUNNEL_PREFIXES=(AGENT_MCP_TUNNEL AGENT_CONTROL_PLANE_TUNNEL)
+# The model relay's tunnel is this host's only when it names the relay; its
+# service otherwise waits idle (deploy/host/agent-ssh-tunnel.sh).
+if [[ -n "$(env_or_dotenv AGENT_SANDBOX_MODEL_RELAY_URL)" ]]; then
+  [[ -n "$(env_or_dotenv AGENT_MODEL_TUNNEL_SSH_DESTINATION)" ]] \
+    || die "AGENT_SANDBOX_MODEL_RELAY_URL is set, so AGENT_MODEL_TUNNEL_SSH_DESTINATION must name the model relay's tunnel account (user@control-plane-host); run server setup again or unset the URL"
+  TUNNEL_PREFIXES+=(AGENT_MODEL_TUNNEL)
+fi
 
 # A function rather than an array, so the check happens when a compose command
 # actually runs. `preflight` and `check` answer questions about this machine and

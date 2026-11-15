@@ -80,13 +80,21 @@ after upgrading, such a connection offers nothing until an administrator
 chooses its daily budget and sets each model's prices. Which accounts a model
 was for is carried over.
 
-The feature needs two new
-services, both behind the `model-relay` Compose profile: `model-relay` on the
-control plane and `model-tunnel` on each host, with
-`AGENT_SANDBOX_MODEL_RELAY_URL` set there. Roll hosts first, as usual. A host
-without the tunnel keeps working and is not handed turns on provided models;
-a host from the previous release does not advertise `model-relay-v1` and is
-not handed them either.
+The feature needs two new services, which every stack now runs with no
+profile: `model-relay` on the control plane and `model-tunnel` on each host.
+Remove `model-relay` from `COMPOSE_PROFILES` if you added it; it no longer
+names anything. A server that **Add server** sets up from this release gets
+its model tunnel and `AGENT_SANDBOX_MODEL_RELAY_URL`; one set up before has
+none, keeps working, and is not handed turns on provided models until it is
+set up again. On such a host, and on one that Add server did not set up, the
+`model-tunnel` waits idle. Roll hosts first, as usual. A host from the
+previous release does not advertise `model-relay-v1` and is not handed them
+either.
+
+A host that Add server set up from this release still names its model relay
+after a rollback, and the previous release starts that host's `model-tunnel`
+only with the `model-relay` profile: add it to that host's `COMPOSE_PROFILES`
+when rolling back, or its turns on provided models fail.
 
 Rolling back to the previous release needs no downgrade while no provided
 connection was created. Once one exists, delete it and let its conversations

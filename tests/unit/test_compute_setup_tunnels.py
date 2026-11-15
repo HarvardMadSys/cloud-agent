@@ -30,7 +30,11 @@ SSH = SshConnection(
     known_hosts_ref="verified-control-host-key",
 )
 ENDPOINT = ControlPlaneEndpoint(
-    main_port=8100, mcp_port=8101, gateway_ip="172.20.0.1", machine_identity=IDENTITY
+    main_port=8100,
+    mcp_port=8101,
+    model_port=8102,
+    gateway_ip="172.20.0.1",
+    machine_identity=IDENTITY,
 )
 
 
@@ -55,8 +59,11 @@ def test_generated_keys_are_distinct_valid_and_redacted():
 
 
 def test_tunnel_accounts_are_stable_distinct_and_never_management_user():
-    names = {tunnel_username("setup-1", role) for role in ("mcp", "control")}
-    assert len(names) == 2
+    names = {tunnel_username("setup-1", role) for role in ("mcp", "control", "model")}
+    assert len(names) == 3
+    # The accounts already provisioned keep their names.
+    assert tunnel_username("setup-1", "mcp").startswith("ca-m-")
+    assert tunnel_username("setup-1", "control").startswith("ca-c-")
     assert all(name.startswith("ca-") and len(name) < 32 and name != "admin" for name in names)
     assert tunnel_username("setup-1", "mcp") == tunnel_username("setup-1", "mcp")
     assert tunnel_username("setup-2", "mcp") not in names
@@ -125,7 +132,16 @@ async def test_control_requires_distinct_keys_ports_and_safe_identifiers():
         await helper.discover_control_plane(SSH, "HEAD")
 
 
-def inventory(namespace, tmp_path, *, ambiguous=False, same_image=True, gateway="172.20.0.1"):
+def inventory(
+    namespace,
+    tmp_path,
+    *,
+    ambiguous=False,
+    same_image=True,
+    gateway="172.20.0.1",
+    model_relay=True,
+    model_image="control-image",
+):
     containers = {
         "main": {
             "id": "main",
@@ -144,6 +160,13 @@ def inventory(namespace, tmp_path, *, ambiguous=False, same_image=True, gateway=
             "ports": {"8001/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8101"}]},
             "networks": {"control-net": {}},
         },
+        "model": {
+            "id": "model",
+            "image": model_image,
+            "labels": {},
+            "ports": {"8002/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8102"}]},
+            "networks": {"control-net": {}},
+        },
     }
     commands = []
 
@@ -153,6 +176,8 @@ def inventory(namespace, tmp_path, *, ambiguous=False, same_image=True, gateway=
             if "label=com.docker.compose.service=control-plane" in args:
                 return "main main" if ambiguous else "main"
             assert "label=com.docker.compose.project=release-project" in args
+            if "label=com.docker.compose.service=model-relay" in args:
+                return "model" if model_relay else ""
             return "relay"
         if args[:3] == ["docker", "container", "inspect"]:
             assert ".Config.Env" not in args[4]
@@ -184,6 +209,7 @@ def test_remote_discovery_selects_exact_release_project_and_reads_no_environment
     result = namespace["discover"]({"deployment_sha": SHA})
     assert result["gateway_ip"] == "172.20.0.1"
     assert result["main_port"] == 8100 and result["mcp_port"] == 8101
+    assert result["model_port"] == 8102
     assert len(result["machine_identity"]) == 64
     assert all(".Config.Env" not in " ".join(args) for args in commands)
     containers["main"]["labels"]["io.hybridinference.deployment.sha"] = "c" * 40
@@ -197,6 +223,8 @@ def test_remote_discovery_selects_exact_release_project_and_reads_no_environment
         ({"ambiguous": True}, "control_plane_ambiguous"),
         ({"same_image": False}, "control_plane_missing"),
         ({"gateway": "0.0.0.0"}, "control_plane_network"),
+        ({"model_relay": False}, "model_relay_missing"),
+        ({"model_image": "foreign-image"}, "model_relay_missing"),
     ],
 )
 def test_remote_discovery_refuses_ambiguous_release_or_wrong_listener(tmp_path, updates, reason):
@@ -234,6 +262,22 @@ def test_remote_role_policies_and_key_options_enforce_separate_audiences():
     assert "8100" not in keys[0] and "permitlisten" not in keys[0]
     assert 'permitlisten="172.20.0.1:18092"' in keys[1]
     assert "8101" not in keys[1]
+    assert len(keys) == 2, "a setup saved before the model tunnel authorizes no third key"
+    keys = namespace["entries"](
+        {
+            "action": "control",
+            "setup_id": "slot-1",
+            "mcp_key": "ssh-ed25519 MCP",
+            "control_key": "ssh-ed25519 CONTROL",
+            "model_key": "ssh-ed25519 MODEL",
+            "endpoint": ENDPOINT.model_dump(),
+            "reverse_port": 18092,
+        }
+    )
+    assert keys[2] == (
+        'command="",restrict,port-forwarding,permitopen="127.0.0.1:8102" ssh-ed25519 MODEL'
+        " cloud-agent-setup:slot-1:model"
+    )
 
 
 def test_remote_provision_is_atomic_idempotent_and_refuses_key_conflicts(tmp_path):
@@ -654,3 +698,58 @@ def test_operator_admission_failure_happens_before_fragment_or_key_authorization
     with pytest.raises(namespace["Blocked"], match="ssh_admission_blocked"):
         namespace["ensure_policy"]("ca-m-test", 8101)
     assert writes == []
+
+
+@pytest.mark.asyncio
+async def test_the_model_tunnel_has_its_own_key_account_and_port():
+    transport = AsyncMock()
+    transport.run.return_value = json.dumps({"ok": True})
+    helper = SshTunnelSetup(transport=transport)
+    mcp, control, model = (generate_tunnel_key().public_key for _ in range(3))
+    await helper.provision_control(SSH, mcp, control, ENDPOINT, 18092, "setup-1", model)
+    params = json.loads(transport.run.call_args.kwargs["stdin"])
+    assert params["model_key"] == model
+    assert params["model_username"] == tunnel_username("setup-1", "model")
+    transport.run.reset_mock()
+    for key, endpoint, reverse in [
+        (mcp, ENDPOINT, 18092),
+        (model, ENDPOINT.model_copy(update={"model_port": None}), 18092),
+        (model, ENDPOINT.model_copy(update={"model_port": 8101}), 18092),
+        (model, ENDPOINT, 8102),
+    ]:
+        with pytest.raises(ProviderError):
+            await helper.provision_control(SSH, mcp, control, endpoint, reverse, "setup-1", key)
+    transport.run.assert_not_awaited()
+    # Without a model key nothing about the model relay is sent.
+    await helper.provision_control(SSH, mcp, control, ENDPOINT, 18092, "setup-1")
+    assert "model_key" not in json.loads(transport.run.call_args.kwargs["stdin"])
+
+
+def test_remote_provision_gives_the_model_key_its_own_account_and_port():
+    namespace = remote()
+    accounts = []
+    namespace["provision_account"] = lambda username, entry, port, reverse=None: accounts.append(
+        (username, port, reverse, entry.split(" ")[-1])
+    )
+    params = {
+        "action": "control",
+        "setup_id": "slot-1",
+        "mcp_key": "ssh-ed25519 MCP",
+        "control_key": "ssh-ed25519 CONTROL",
+        "model_key": "ssh-ed25519 MODEL",
+        "endpoint": ENDPOINT.model_dump(),
+        "reverse_port": 18092,
+        "mcp_username": "ca-m-x",
+        "control_username": "ca-c-x",
+        "model_username": "ca-md-x",
+    }
+    namespace["provision"](params)
+    assert accounts == [
+        ("ca-m-x", 8101, None, "cloud-agent-setup:slot-1:mcp"),
+        ("ca-c-x", 8100, "172.20.0.1:18092", "cloud-agent-setup:slot-1:control"),
+        ("ca-md-x", 8102, None, "cloud-agent-setup:slot-1:model"),
+    ]
+    accounts.clear()
+    del params["model_key"], params["model_username"]
+    namespace["provision"](params)
+    assert [account[0] for account in accounts] == ["ca-m-x", "ca-c-x"]

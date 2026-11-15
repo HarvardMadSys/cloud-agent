@@ -26,8 +26,8 @@ EXPORTED_BY_DEPLOYER = frozenset({"AGENT_DEPLOYMENT_SHA"})
 #: The control-plane keys the ``keys`` service generates and keeps.
 STORED_BY_KEYS = frozenset(STORED)
 
-#: The two relays a host reaches, each spelled as a prefix in server setup.
-SETUP_TUNNELS = ("AGENT_MCP_TUNNEL", "AGENT_CONTROL_PLANE_TUNNEL")
+#: The tunnels server setup gives a host, each spelled as a prefix there.
+SETUP_TUNNELS = ("AGENT_MCP_TUNNEL", "AGENT_CONTROL_PLANE_TUNNEL", "AGENT_MODEL_TUNNEL")
 
 
 def written_by_server_setup() -> set[str]:

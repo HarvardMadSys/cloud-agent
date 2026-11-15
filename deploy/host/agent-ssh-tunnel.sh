@@ -54,6 +54,19 @@ REVERSE_TARGET_PORT="${TUNNEL_REVERSE_TARGET_PORT:-8092}"
 
 die() { printf '[agent-ssh-tunnel] ERROR: %s\n' "$*" >&2; exit 1; }
 
+# An optional tunnel (the model relay's) that this host was not given a
+# destination for waits idle instead of failing: its service is declared on
+# every host, and only a host that names its relay uses it. Exiting would only
+# restart it forever. Every other tunnel is required.
+if [ -z "${TUNNEL_SSH_DESTINATION:-}" ] && [ "${TUNNEL_OPTIONAL:-}" = "1" ]; then
+    printf '[agent-ssh-tunnel] no destination configured; idle\n'
+    trap 'exit 0' TERM INT
+    while :; do
+        sleep 3600 &
+        wait $!
+    done
+fi
+
 [ -n "${TUNNEL_SSH_DESTINATION:-}" ] || die \
     "TUNNEL_SSH_DESTINATION is required (user@far-host)"
 [ -r "$KEY_SRC" ] || die "no readable ssh key at $KEY_SRC (mount one read-only)"

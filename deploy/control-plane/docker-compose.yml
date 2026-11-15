@@ -455,14 +455,13 @@ services:
   # the model relay's one catch-all route and a health check. It resolves a
   # residency placeholder to the running turn it speaks for, counts the
   # request against its owner's allowance, and forwards it to the provider
-  # with the deployment's key, which exists nowhere else. Behind a profile:
-  # `COMPOSE_PROFILES=model-relay` turns it on, together with the hosts'
-  # model-tunnel and AGENT_SANDBOX_MODEL_RELAY_URL.
+  # with the deployment's key, which exists nowhere else. Always started: with
+  # no provided connection saved in Admin → Settings → Models it refuses
+  # every request, and only the hosts' model-tunnel reaches it.
   #
   # In-flight caps are kept per process: one replica, unless a cap enforced
   # per replica is what is wanted.
   model-relay:
-    profiles: [model-relay]
     # The image `keys` builds; see there.
     image: ${COMPOSE_PROJECT_NAME}-control-plane:${AGENT_DEPLOYMENT_SHA:-unknown}
     pull_policy: never
