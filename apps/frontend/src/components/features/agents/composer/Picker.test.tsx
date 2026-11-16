@@ -2,7 +2,7 @@
 import '@testing-library/jest-dom/vitest';
 
 import { useState } from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Picker } from './Picker';
 
@@ -160,36 +160,21 @@ describe('Picker', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('groups options under their headings, and reads a note as part of the option', () => {
+  it('reads a note as part of the option', () => {
     render(
       <Picker
         label="Model"
-        value="house-fast"
-        options={['house-fast', 'house-spent', 'mine']}
-        optionGroups={{
-          'house-fast': 'Provided by this deployment',
-          'house-spent': 'Provided by this deployment',
-          mine: 'Your connections',
-        }}
-        optionNotes={{ 'house-fast': '$3.20 left today', 'house-spent': 'Resets at 8:00 AM' }}
+        value="first"
+        options={['first', 'second']}
+        optionNotes={{ first: 'A quieter line' }}
         onChange={vi.fn()}
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Model' }));
-    const provided = screen.getByRole('group', { name: 'Provided by this deployment' });
-    expect(
-      within(provided)
-        .getAllByRole('option')
-        .map((option) => option.textContent),
-    ).toEqual(['house-fast $3.20 left today', 'house-spent Resets at 8:00 AM']);
-    const own = screen.getByRole('group', { name: 'Your connections' });
-    expect(
-      within(own)
-        .getAllByRole('option')
-        .map((option) => option.textContent),
-    ).toEqual(['mine']);
-    // Without groups the list is flat, as before.
-    expect(screen.getAllByRole('group')).toHaveLength(2);
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'first A quieter line',
+      'second',
+    ]);
   });
 
   it('shows a disabled option without letting the pointer or the keyboard choose it', () => {

@@ -488,32 +488,31 @@ describe('models the deployment provides', () => {
     });
   }
 
-  it('groups them apart from the owner’s connections, with nothing counted beside them', async () => {
+  it('lists them with the owner’s connections as one list, with nothing counted beside them', async () => {
     vi.mocked(getAgentConfig).mockResolvedValue(provided());
     render(<TaskComposer />);
     await chooseRepository();
     choose('Agent', 'Codex');
     fireEvent.click(screen.getByLabelText('Model'));
-    const house = screen.getByRole('group', { name: 'Provided by this deployment' });
+    const listbox = screen.getByRole('listbox', { name: 'Model' });
+    // No heading says where a model comes from.
+    expect(within(listbox).queryByRole('group')).toBeNull();
+    expect(screen.queryByText('Provided by this deployment')).toBeNull();
     expect(
-      within(house)
+      within(listbox)
         .getAllByRole('option')
         .map((option) => option.textContent),
     ).toEqual([
       'house-fast',
-      // Listed by the owner's connection too, so each says where it runs.
+      // Listed by two sources, so each says where it runs.
       'shared · House models',
       'house-spent',
       'house-idle',
+      'shared · My provider',
+      'mine',
     ]);
-    const own = screen.getByRole('group', { name: 'Your connections' });
-    expect(
-      within(own)
-        .getAllByRole('option')
-        .map((option) => option.textContent),
-    ).toEqual(['shared · My provider', 'mine']);
     // Every provided model can be chosen: nothing here holds one back.
-    expect(within(house).getByRole('option', { name: /house-spent/ })).not.toHaveAttribute(
+    expect(within(listbox).getByRole('option', { name: /house-spent/ })).not.toHaveAttribute(
       'aria-disabled',
       'true',
     );

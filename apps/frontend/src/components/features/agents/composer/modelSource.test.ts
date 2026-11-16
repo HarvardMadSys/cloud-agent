@@ -196,23 +196,17 @@ describe('models the deployment provides', () => {
     expect(listedChoices(provided, 'claude-code')).toEqual([]);
   });
 
-  it('groups the picker into provided models and the owner’s connections when both exist', () => {
+  it('lists provided models and the owner’s connections as one flat list', () => {
     const picker = codex();
-    const mine = choiceKey(pick('gpt-5', A));
-    expect(picker.optionGroups).toEqual({
-      [choiceKey(pick('gpt-5'))]: 'Provided by this deployment',
-      'house-fast': 'Provided by this deployment',
-      'house-open': 'Provided by this deployment',
-      'house-spent': 'Provided by this deployment',
-      'house-idle': 'Provided by this deployment',
-      [mine]: 'Your connections',
-    });
-    // One kind of source alone needs no headings.
-    const only = { ...provided, model_connections: [] } as AgentConfigApi;
-    expect(codex(only).optionGroups).toBeUndefined();
-    expect(
-      modelPicker(config, listedChoices(config, 'opencode'), NO_MODEL, () => {}, t).optionGroups,
-    ).toBeUndefined();
+    expect(picker).not.toHaveProperty('optionGroups');
+    expect(picker.options).toEqual([
+      choiceKey(pick('gpt-5')),
+      'house-fast',
+      'house-open',
+      'house-spent',
+      'house-idle',
+      choiceKey(pick('gpt-5', A)),
+    ]);
   });
 
   it('names the source on a model more than one source lists, and only there', () => {

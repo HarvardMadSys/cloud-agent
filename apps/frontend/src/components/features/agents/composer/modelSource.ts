@@ -153,36 +153,13 @@ export interface ModelPickerProps {
   options: string[];
   optionLabels: Record<string, string>;
   onChange: (key: string) => void;
-  /**
-   * Each option's group heading, set only where the list holds both provided
-   * models and the owner's own connections.
-   */
-  optionGroups?: Record<string, string>;
-}
-
-/** The group headings of a list of choices, set where it mixes provided and own sources. */
-function pickerGroups(
-  listed: ModelChoice[],
-  keyOf: (choice: ModelChoice) => string,
-  t: Translator,
-): Pick<ModelPickerProps, 'optionGroups'> {
-  const provided = listed.filter((choice) => isProvidedId(choice.connectionId));
-  if (provided.length === 0 || provided.length === listed.length) return {};
-  const optionGroups: Record<string, string> = {};
-  for (const choice of listed) {
-    optionGroups[keyOf(choice)] = t(
-      isProvidedId(choice.connectionId) ? 'modelSource.providedGroup' : 'modelSource.ownGroup',
-    );
-  }
-  return { optionGroups };
 }
 
 /**
  * The props a `Picker` needs for these choices (`listedChoices`). `kept` is
  * shown first when it is not listed — the turn a follow-up inherits, or a
  * personal pick that can no longer run — so the control never shows one thing
- * while another runs. Provided models and the owner's own are grouped apart
- * when both are listed.
+ * while another runs.
  */
 export function modelPicker(
   config: AgentConfigApi | null,
@@ -221,7 +198,6 @@ export function modelPicker(
       const next = byKey.get(key);
       if (next) onChange(next);
     },
-    ...pickerGroups(listed, keyOf, t),
   };
 }
 
