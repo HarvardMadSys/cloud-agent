@@ -33,7 +33,17 @@ export function effortSummary(efforts: ModelStatus['efforts']): {
  * APIs the provider offers, and how each agent reaches it, are the platform's
  * concern and are not shown here.
  */
-export function ModelStatusList({ statuses }: { statuses: ModelStatus[] }) {
+export function ModelStatusList({
+  statuses,
+  detail,
+  notUsable,
+}: {
+  statuses: ModelStatus[];
+  /** One more line under a model, such as its listed prices; `null` adds none. */
+  detail?: (model: string) => string | null;
+  /** What a model no agent can use says, in place of the owner's own advice. */
+  notUsable?: string;
+}) {
   const t = useT();
   return (
     <ul className="mt-3 divide-y divide-border">
@@ -47,10 +57,13 @@ export function ModelStatusList({ statuses }: { statuses: ModelStatus[] }) {
             >
               {status.runtimes.length
                 ? t('connections.agents', { agents: connectionAgentNames(status.runtimes) })
-                : t('connections.notUsable')}
+                : (notUsable ?? t('connections.notUsable'))}
             </p>
             {status.runtimes.length ? (
               <p className="text-xs text-muted">{t(effort.key, { levels: effort.levels })}</p>
+            ) : null}
+            {detail?.(status.model) ? (
+              <p className="text-xs text-muted">{detail(status.model)}</p>
             ) : null}
           </li>
         );

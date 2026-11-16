@@ -120,9 +120,10 @@ function UsageTable({ usage }: { usage: OperatorModelUsage }) {
 /**
  * What each account used per UTC day and model over a range of days, read on
  * request: the requests the provider served, the tokens each answer said it
- * used, and those tokens at the model's prices at the time. That cost is what
- * a daily budget counts, not what the provider charged. A request whose
- * answer named no usage is charged by estimate, and said to be.
+ * used, and those tokens at the prices the provider listed for the model at
+ * the time. That cost is an estimate, not what the provider charged, and
+ * nothing is limited by it. A request whose answer named no usage is recorded
+ * by estimate, and said to be.
  */
 export function ProvidedModelUsage({
   connection,

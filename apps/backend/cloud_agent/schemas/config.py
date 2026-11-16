@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TC003 — Pydantic resolves annotations at runtime.
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -61,31 +60,17 @@ class ModelConnectionOption(BaseModel):
 
 
 class ProvidedModelSource(BaseModel):
-    """One connection the deployment provides, as the composer offers it to this owner.
+    """One connection the deployment provides, as the composer offers it to every owner.
 
-    The same shape as an owner's own connection option, plus the owner's
-    budget for the current UTC day on its models together. Only the models
-    this owner may use are listed: one withheld from them is absent, as if it
-    were not provided.
+    The same shape as an owner's own connection option. Only the models an
+    agent can use are listed, in the order the provider lists them.
     """
 
     id: str
     name: str
-    #: Whether a new owner with no history starts here.
-    is_default: bool = False
-    #: The model a new owner starts on, when this owner may use it.
-    default_model: str | None = None
     models: list[str]
     model_runtimes: dict[str, list[str]] = Field(default_factory=dict)
     model_efforts: dict[str, dict[str, ModelEffortOffer]] = Field(default_factory=dict)
-    #: What this owner may spend per UTC day on this source's models together,
-    #: in millionths of a US dollar.
-    daily_budget_microusd: int
-    #: What this owner's requests on this source have cost today, in millionths
-    #: of a US dollar: the tokens each used, at its model's prices.
-    spent_today_microusd: int = 0
-    #: When today's spending starts over: the next midnight, UTC.
-    resets_at: datetime
 
 
 class AgentConfigResponse(BaseModel):

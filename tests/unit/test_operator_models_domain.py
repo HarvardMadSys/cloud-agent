@@ -3,75 +3,80 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 
 import pytest
 
-from cloud_agent.domain.model_connections import ModelConnectionInvalid
 from cloud_agent.domain.model_usage import CHAT, MESSAGES, RESPONSES, TokenUsage, UsageReader
 from cloud_agent.domain.operator_models import (
-    Allowance,
     ModelPrices,
-    clean_default_model,
-    clean_end_user_header,
-    effective_allowance,
-    effective_budget,
-    end_user_tag,
+    first_usable_model,
+    listed_prices,
     model_prices,
-    next_reset,
     relay_route,
     request_cost,
 )
 
-_PRICED = {"input_price": 2_800_000, "output_price": 8_800_000, "named_only": False}
-_NAMED = {**_PRICED, "named_only": True}
+
+@pytest.mark.parametrize(
+    ("pricing", "prices"),
+    [
+        # As hybridInference lists them: US dollars per million tokens, as text.
+        (
+            {"prompt": "2.8", "completion": "8.8", "input_cache_reads": "0.8"},
+            ModelPrices(input=2_800_000, output=8_800_000, cache_read=800_000),
+        ),
+        (
+            {"prompt": 0.15, "completion": 0.6, "input_cache_writes": "1.25"},
+            ModelPrices(input=150_000, output=600_000, cache_write=1_250_000),
+        ),
+        # A free model is still a priced one.
+        ({"prompt": "0", "completion": "0"}, ModelPrices(input=0, output=0)),
+        # A cache price of zero is no cache price: those tokens stay at the input price.
+        (
+            {"prompt": "0.3", "completion": "1", "input_cache_reads": "0", "input_cache_writes": 0},
+            ModelPrices(input=300_000, output=1_000_000),
+        ),
+        # Rounded half up to a micro-dollar per million tokens.
+        ({"prompt": "0.0000005", "completion": "1"}, ModelPrices(input=1, output=1_000_000)),
+        # An unreadable cache price is dropped, not the model's prices.
+        (
+            {"prompt": "1", "completion": "2", "input_cache_reads": "cheap"},
+            ModelPrices(input=1_000_000, output=2_000_000),
+        ),
+    ],
+)
+def test_a_listing_gives_prices_in_dollars_per_million_tokens(pricing, prices) -> None:
+    assert listed_prices(pricing) == prices
 
 
 @pytest.mark.parametrize(
-    ("terms", "own_offered", "budget", "offered"),
+    "pricing",
     [
-        # No prices, or no budget chosen: offered to nobody, whatever an account's rows say.
-        (None, True, 5_000_000, False),
-        ({"input_price": None, "output_price": None, "named_only": False}, True, 5_000_000, False),
-        ({"input_price": 1, "output_price": None, "named_only": False}, None, 5_000_000, False),
-        (_PRICED, True, None, False),
-        # Open to every owner with a budget.
-        (_PRICED, None, 5_000_000, True),
-        (_PRICED, None, 0, False),
-        # For named accounts only: an account's own answer opens it.
-        (_NAMED, None, 5_000_000, False),
-        (_NAMED, True, 5_000_000, True),
-        # And an account's own answer withholds a model that is open.
-        (_PRICED, False, 5_000_000, False),
-        # A free model is still a priced one.
-        ({"input_price": 0, "output_price": 0, "named_only": False}, None, 1, True),
+        None,
+        "2.8",
+        [],
+        {},
+        {"prompt": "1"},
+        {"completion": "1"},
+        {"prompt": "-1", "completion": "1"},
+        {"prompt": "nan", "completion": "1"},
+        {"prompt": "inf", "completion": "1"},
+        {"prompt": "1e7", "completion": "1"},
+        {"prompt": True, "completion": "1"},
+        {"prompt": None, "completion": "1"},
+        {"prompt": "one", "completion": "1"},
     ],
 )
-def test_a_model_is_offered_to_an_owner_with_a_budget_it_is_open_to(
-    terms, own_offered, budget, offered
-) -> None:
-    allowance = effective_allowance(terms, own_offered=own_offered, budget_microusd=budget)
-    assert allowance.offered is offered
+def test_a_listing_without_two_readable_prices_gives_none(pricing) -> None:
+    assert listed_prices(pricing) is None
 
 
-def test_an_accounts_own_budget_replaces_the_default() -> None:
-    assert effective_budget(5_000_000, None) == 5_000_000
-    assert effective_budget(5_000_000, 20_000_000) == 20_000_000
-    assert effective_budget(5_000_000, 0) == 0
-    assert effective_budget(0, 1_000_000) == 1_000_000
-    # None chosen, and none of the account's own.
-    assert effective_budget(None, None) is None
-    assert effective_budget(None, 1_000_000) == 1_000_000
-
-
-def test_a_budget_is_used_up_once_what_was_spent_reaches_it() -> None:
-    assert not Allowance(offered=True, budget_microusd=3, spent_microusd=2).exhausted
-    assert Allowance(offered=True, budget_microusd=3, spent_microusd=3).exhausted
-    assert Allowance(offered=True, budget_microusd=3, spent_microusd=9).exhausted
-    assert Allowance(offered=True, budget_microusd=3, spent_microusd=2).remaining_microusd == 1
-    assert Allowance(offered=True, budget_microusd=3, spent_microusd=9).remaining_microusd == 0
-    spent = effective_allowance(_PRICED, budget_microusd=5_000_000, spent_microusd=1_250_000)
-    assert (spent.budget_microusd, spent.spent_microusd) == (5_000_000, 1_250_000)
+def test_a_new_owner_starts_on_the_first_model_an_agent_can_use() -> None:
+    runtimes = {"b": ["codex"], "c": ["claude", "codex"]}
+    assert first_usable_model(["a", "b", "c"], runtimes) == "b"
+    assert first_usable_model(["c", "b"], runtimes) == "c"
+    assert first_usable_model(["a"], {"a": []}) is None
+    assert first_usable_model([], runtimes) is None
 
 
 def test_stored_terms_without_both_prices_have_none() -> None:
@@ -314,12 +319,6 @@ def test_a_request_costs_what_the_gateway_would_count(api, usage, pricing, cost)
     assert request_cost(_catalog(pricing), used) == cost
 
 
-def test_counts_start_over_at_the_next_utc_midnight() -> None:
-    late = datetime(2026, 11, 12, 23, 59, 59, tzinfo=UTC)
-    assert next_reset(late) == datetime(2026, 11, 13, tzinfo=UTC)
-    assert next_reset(datetime(2026, 11, 13, tzinfo=UTC)) == datetime(2026, 11, 14, tzinfo=UTC)
-
-
 @pytest.mark.parametrize(
     ("base_url", "method", "path", "inference", "anthropic"),
     [
@@ -389,42 +388,3 @@ def test_an_inference_route_names_the_api_its_answer_is_read_as() -> None:
 )
 def test_the_relay_forwards_nothing_else(method, path) -> None:
     assert relay_route("https://p.example/v1", method, path) is None
-
-
-def test_an_owner_tag_is_stable_opaque_and_keyed() -> None:
-    tag = end_user_tag("root-key", "01HZXACCOUNT")
-    assert tag == end_user_tag("root-key", "01HZXACCOUNT")
-    assert len(tag) == 24 and all(ch in "0123456789abcdef" for ch in tag)
-    assert "01HZX" not in tag.upper()
-    assert tag != end_user_tag("root-key", "01HZXOTHER")
-    # Not computable without the deployment's key.
-    assert tag != end_user_tag("another-key", "01HZXACCOUNT")
-    with pytest.raises(ValueError, match="needs"):
-        end_user_tag("", "01HZXACCOUNT")
-
-
-@pytest.mark.parametrize("name", ["X-End-User", "x-user-id", "OpenAI-User"])
-def test_an_owner_tag_header_is_a_plain_header_name(name) -> None:
-    assert clean_end_user_header(f"  {name} ") == name
-
-
-@pytest.mark.parametrize("empty", [None, "", "   "])
-def test_no_owner_tag_header_sends_none(empty) -> None:
-    assert clean_end_user_header(empty) is None
-
-
-@pytest.mark.parametrize(
-    "name",
-    ["Authorization", "x-api-key", "Host", "Content-Length", "X End", "X-End:User", "é", "1x"],
-)
-def test_an_owner_tag_header_cannot_be_one_the_relay_sets(name) -> None:
-    with pytest.raises(ModelConnectionInvalid):
-        clean_end_user_header(name)
-
-
-def test_the_default_model_is_one_of_the_listed_models() -> None:
-    assert clean_default_model(" m1 ", ["m1", "m2"]) == "m1"
-    assert clean_default_model("", ["m1"]) is None
-    assert clean_default_model(None, ["m1"]) is None
-    with pytest.raises(ModelConnectionInvalid):
-        clean_default_model("m3", ["m1", "m2"])

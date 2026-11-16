@@ -139,13 +139,16 @@ async def verify_for_save(
 
 
 async def verify_endpoint(
-    *, base_url: str, api_key: str, models: list[str]
+    *, base_url: str, api_key: str, models: list[str], every: bool = True
 ) -> dict[str, dict[str, Any]]:
     """Verify ``models`` at this endpoint, with nothing reserved against anybody.
 
     The provider calls of :func:`verify_for_save`, for a caller whose checks
     are not an owner's to count: an administrator saving a connection the
-    deployment provides. The same bound and the same refusals.
+    deployment provides. The same bound and the same refusals, except that
+    with ``every`` false it refuses only when no model has an agent that can
+    use it: a connection that lists what its key lists keeps the others, each
+    with its facts, and offers none of them.
     """
     try:
         async with asyncio.timeout(SAVE_TIMEOUT_S):
@@ -157,7 +160,8 @@ async def verify_endpoint(
         raise VerificationTimedOut from None
     results = with_efforts(results, efforts)
     statuses = [verification_status(model, results[model]) for model in models]
-    if any(not status["runtimes"] for status in statuses):
+    unusable = [not status["runtimes"] for status in statuses]
+    if any(unusable) if every else all(unusable):
         raise VerificationRefused(statuses)
     return results
 

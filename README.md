@@ -126,9 +126,9 @@ states and their limits.
 Cloud Agent keeps its own accounts and admission; the owner's provider keeps
 the API key's quota and bill, and there is no per-task dollar budget. A
 deployment may also provide models of its own: an administrator saves a
-provider's endpoint and key once, every admitted owner runs on it with no
-setup, within a daily budget that each request is charged against for the
-tokens it used, and that key stays in the control plane. The Usage
+provider's endpoint and key once, every admitted owner runs on the models that
+key lists with no setup, within the key's own budget at the provider, and that
+key stays in the control plane. The Usage
 pages show the tokens agents reported, not a provider bill. A member sandbox
 holds the owner's provider key for the turn it runs (or, on a provided model,
 a placeholder only the model relay accepts), a scoped MCP token, and,

@@ -369,7 +369,7 @@ describe('RunDetails', () => {
     expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull();
   });
 
-  it('says a turn on a provided model counts against the daily budget, not the owner’s provider', async () => {
+  it('says a turn on a provided model ran on the deployment’s key, not the owner’s provider', async () => {
     vi.mocked(getAgentJobUsage).mockResolvedValue({
       ...usage(),
       external_provider: true,
@@ -386,7 +386,7 @@ describe('RunDetails', () => {
       />,
     );
     expect(await screen.findByText(/a model this deployment provides/)).toBeInTheDocument();
-    expect(screen.getByText(/counts against your daily budget/)).toBeInTheDocument();
+    expect(screen.getByText(/on the deployment’s own key/)).toBeInTheDocument();
     expect(screen.queryByText(/your provider bills it/)).toBeNull();
     expect(screen.queryByText(/\$/)).toBeNull();
   });

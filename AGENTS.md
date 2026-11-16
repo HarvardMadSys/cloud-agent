@@ -61,7 +61,7 @@ database stamped with the chain that predates it.
 | `apps/backend/cloud_agent/mcp/`, `api/mcp_connections.py`, `api/mcp_relay.py` | Per-user connections, protocol hosting, authorization and the MCP relay |
 | `apps/backend/cloud_agent/mcp/runtime.py` | Process-local MCP host, fenced session maintenance, and shutdown |
 | `apps/backend/cloud_agent/source_control/` (`github_relay_policy.py`, `source_control.py`), `api/github_relay.py` | The GitHub relay and its policy, and the GitHub/GitLab credentials behind them |
-| `apps/backend/cloud_agent/api/model_relay.py`, `api/admin_operator_models.py`, `domain/operator_models.py`, `domain/model_usage.py` | The model relay, the models a deployment provides, their prices and each owner's daily budget on them |
+| `apps/backend/cloud_agent/api/model_relay.py`, `api/admin_operator_models.py`, `domain/operator_models.py`, `domain/model_usage.py` | The model relay, the models a deployment provides, their listed prices and the use the relay records |
 | `apps/backend/cloud_agent/schemas/admin_observability.py` | The cross-user admin reading surface and its audit |
 | `apps/backend/cloud_agent_host/service/enrollment.py` | Host registration and the persisted host credential |
 | `apps/backend/cloud_agent_host/service/host_service.py`, `turn/turn_child.py` | The host service that claims, heartbeats and drains on SIGTERM, and the child process that executes one turn (`runner.py` is their command line) |
@@ -225,13 +225,11 @@ requirement, and rules 4 and 5 remain permanent service boundaries.
   relay with a separate scoped credential. A chat member's CLI holds its
   residency's MCP credential, which the relay resolves on every call to the
   turn that residency is running, so follow-ups keep the live process.
-  **There is no per-task dollar budget and no billing** — the
-  provider keeps the key's quota and bill. The one local limit is on provided
-  connections: each owner has a budget per UTC day on a provided connection's
-  models, and the model relay charges each request the tokens its answer said
-  it used at the prices the administrator set. That is an allowance, not a
-  bill: nobody is invoiced, and the provider's own account of the key is what
-  the deployment pays. The Usage pages show the
+  **There is no per-task dollar budget, no local quota and no billing** — the
+  provider keeps the key's quota and bill, a provided connection's key
+  included: the model relay records the tokens each answer said it used, and
+  what they cost at the prices the provider's listing gives, but limits
+  nothing. The Usage pages show the
   tokens agents reported for calls attributable to a turn, labelled
   `runtime_reported`; they are not a provider bill and may undercount it. If
   a task seems to need a budget field, stop — the plan's C5 section records
@@ -441,29 +439,24 @@ requirement, and rules 4 and 5 remain permanent service boundaries.
   pinned, no redirect, no proxy); it forwards only the inference and
   model-listing paths an agent CLI calls, matched whole, for a model the
   connection lists; and it refuses any credential that is not its own
-  placeholder, so an owner's key never comes this way. Each owner has a daily
-  budget on a provided connection's models together (a default on the
-  connection, or the account's own amount; zero withholds it), and each model
-  has prices and is open to every owner or to named accounts only. A request
-  is charged when its answer ends: the tokens the answer said it used, at its
-  model's prices, with the inference gateway's formula and rounding; or, when
-  the answer named none or was cut short, an estimate of its input and of the
-  output it had produced. A cost that could not be written is kept, counted
-  against the budget, and written again. The budget is checked on every request and again
-  when a turn is admitted and claimed; requests in flight reserve their
-  estimate of it, and two caps limit how many are in flight. All three are
-  kept per relay process. The cost is the relay's arithmetic on the
-  administrator's prices, not the provider's bill: the provider's own budget
-  on that key remains the limit on what the deployment spends. Accepted: an
-  owner can relay their own running turn's requests to something outside the
-  sandbox, within their own budget and under their own name; an owner can pass
-  a budget by about what their requests in flight cost; a sibling member can
-  cause a member's
-  placeholder to be used, as with the other residency credentials; and the
+  placeholder, so an owner's key never comes this way. A provided connection
+  offers what its provider lists for its key, to every admitted owner alike.
+  A request's use is recorded when its answer ends: the tokens the answer said
+  it used and their cost at the listed prices, with the inference gateway's
+  formula and rounding; or, when the answer named none or was cut short, an
+  estimate of its input and of the output it had produced. A record that could
+  not be written is kept and written again. Nothing is limited per owner:
+  the provider's own budget and limits on that key are what bound what the
+  deployment spends. Accepted: an owner can relay their own running turn's
+  requests to something outside the sandbox, under their own name and up to
+  the key's own limits; one owner's heavy use spends the key's budget for
+  every owner; a sibling member can cause a member's placeholder to be used,
+  as with the other residency credentials; and the
   requests and answers of provided models pass through the control plane,
   which stores and logs none of their content. Nothing falls back between a
-  provided connection and an owner's own. Saving and editing verify like an
-  owner's connection, with the administrator's explicit action, and every
+  provided connection and an owner's own. Saving, editing and reading the
+  listing again verify like an owner's connection, with the administrator's
+  explicit action, and every
   change is in the admin audit trail without the key. See the
   [design](docs/agents/specs/2026-11-12-platform-model-relay.zh-CN.md).
 - Public multi-tenant use requires Kata isolation, non-root, dropped

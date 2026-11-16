@@ -781,6 +781,41 @@ def _models_requests(base_url: str, api_key: str) -> list[tuple[str, dict[str, s
 _TRY_NEXT_LISTING = frozenset({"endpoint_missing", "auth", "invalid_response"})
 
 
+@dataclass(frozen=True)
+class ListedModel:
+    """One model a provider's listing names, and what it says the model costs, if anything."""
+
+    id: str
+    #: The entry's ``pricing`` object as listed; ``None`` when it has none.
+    pricing: dict[str, Any] | None = None
+
+
+async def discover_listing(
+    *,
+    base_url: str,
+    api_key: str,
+    resolve: Callable[[str, int], Awaitable[Iterable[str]]] | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> list[ListedModel]:
+    """What the provider lists for this key, in its order, each with its listed pricing.
+
+    At most two requests, the second only when the first API's listing is
+    missing; the same bounds as verification. Raises ``CheckStop``.
+    """
+    attempts = _models_requests(base_url, api_key)
+    async with asyncio.timeout(_CONNECT_TIMEOUT_S + _READ_TIMEOUT_S):
+        await guard_base_url(base_url, resolve=resolve)
+        for position, (url, headers) in enumerate(attempts):
+            try:
+                return _listed_entries(
+                    await bounded_get(client_transport=transport, url=url, headers=headers)
+                )
+            except CheckStop as stop:
+                if position + 1 == len(attempts) or stop.category not in _TRY_NEXT_LISTING:
+                    raise
+    raise CheckStop("invalid_response")  # pragma: no cover - the loop always returns or raises
+
+
 async def discover_models(
     *,
     base_url: str,
@@ -794,33 +829,26 @@ async def discover_models(
     nothing about whether a model can run an agent. At most two requests, the
     second only when the first API's listing is missing. Raises ``CheckStop``.
     """
-    attempts = _models_requests(base_url, api_key)
-    async with asyncio.timeout(_CONNECT_TIMEOUT_S + _READ_TIMEOUT_S):
-        await guard_base_url(base_url, resolve=resolve)
-        for position, (url, headers) in enumerate(attempts):
-            try:
-                return _listed_models(
-                    await bounded_get(client_transport=transport, url=url, headers=headers)
-                )
-            except CheckStop as stop:
-                if position + 1 == len(attempts) or stop.category not in _TRY_NEXT_LISTING:
-                    raise
-    raise CheckStop("invalid_response")  # pragma: no cover - the loop always returns or raises
+    listed = await discover_listing(
+        base_url=base_url, api_key=api_key, resolve=resolve, transport=transport
+    )
+    return [entry.id for entry in listed]
 
 
-def _listed_models(body: bytes) -> list[str]:
+def _listed_entries(body: bytes) -> list[ListedModel]:
     try:
         listed = json.loads(body).get("data")
     except (ValueError, AttributeError):
         raise CheckStop("invalid_response", http_status=200) from None
     if not isinstance(listed, list):
         raise CheckStop("invalid_response", http_status=200)
-    models: list[str] = []
+    entries: dict[str, ListedModel] = {}
     for entry in listed:
         model = entry.get("id") if isinstance(entry, dict) else None
-        if isinstance(model, str) and MODEL_ID.fullmatch(model) and model not in models:
-            models.append(model)
-    return models[:_MAX_DISCOVERED]
+        if isinstance(model, str) and MODEL_ID.fullmatch(model) and model not in entries:
+            pricing = entry.get("pricing")
+            entries[model] = ListedModel(model, pricing if isinstance(pricing, dict) else None)
+    return list(entries.values())[:_MAX_DISCOVERED]
 
 
 __all__ = [
@@ -828,8 +856,10 @@ __all__ = [
     "CHECK_MESSAGES",
     "CheckResult",
     "CheckStop",
+    "ListedModel",
     "bounded_get",
     "check_connection",
+    "discover_listing",
     "discover_models",
     "guard_base_url",
     "verify_model",

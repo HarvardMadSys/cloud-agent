@@ -1,4 +1,4 @@
-"""Postgres persistence for the models a deployment provides, and owners' budgets on them."""
+"""Postgres persistence for the models a deployment provides, and what the relay records of their use."""
 
 from __future__ import annotations
 
@@ -8,14 +8,7 @@ from typing import TYPE_CHECKING, Any
 import asyncpg
 
 from cloud_agent.domain.model_connections import ModelConnectionConflict
-from cloud_agent.domain.operator_models import (
-    NOT_OFFERED,
-    Allowance,
-    OperatorTermsMissing,
-    effective_allowance,
-    effective_budget,
-    model_prices,
-)
+from cloud_agent.domain.operator_models import model_prices
 from cloud_agent.ports.operator_models import ChargeOutcomeUnknown
 from cloud_agent.storage._sql.accounts import local_access_ended
 from cloud_agent.storage._sql.fences import RESIDENCY_CALLER_FROM, live_residency_caller_sql
@@ -29,55 +22,23 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from datetime import date
 
+    from cloud_agent.domain.operator_models import ModelPrices
+
 _COLUMNS = (
-    "id, name, base_url, models, default_model, is_default, enabled, api_key_ciphertext, "
-    "end_user_header, user_concurrency, user_daily_budget_microusd, model_checks, "
+    "id, name, base_url, models, enabled, api_key_ciphertext, model_checks, "
     "config_revision, credential_revision, key_refused_at, created_at, updated_at, deleted_at"
 )
-#: A model's terms: its prices, who it is open to, and its cap on requests in flight.
-_TERMS = (
-    "input_price, output_price, cache_read_price, cache_write_price, named_only, global_concurrency"
-)
+#: A model's prices, as its provider's listing gave them.
+_PRICES = "input_price, output_price, cache_read_price, cache_write_price"
 #: What an edit may change without a verification: none of these makes the
 #: connection reach a new endpoint or list a model it has no facts for.
-_UNVERIFIED = frozenset(
-    {
-        "name",
-        "models",
-        "default_model",
-        "is_default",
-        "enabled",
-        "end_user_header",
-        "user_concurrency",
-        "user_daily_budget_microusd",
-    }
-)
-#: What a verified edit may change. Enabling and the default flag are not
-#: among them: they have rules of their own (``update_connection``).
-_VERIFIED = frozenset(
-    {
-        "name",
-        "models",
-        "default_model",
-        "end_user_header",
-        "user_concurrency",
-        "user_daily_budget_microusd",
-        "base_url",
-        "api_key_ciphertext",
-    }
-)
+_UNVERIFIED = frozenset({"name", "models", "enabled"})
+#: What a verified edit may change. Enabling is not among them: it is applied
+#: after a verified part committed (``update_connection``).
+_VERIFIED = frozenset({"name", "models", "base_url", "api_key_ciphertext"})
 _ARRAY_COLUMNS = frozenset({"models"})
-#: Today, as every budget counts it.
+#: Today, as the usage table counts it.
 _TODAY = "(clock_timestamp() AT TIME ZONE 'UTC')::date"
-
-
-def _spent_today(connection: str, user: str) -> str:
-    """SQL for what one owner's requests on one connection have cost today."""
-    return (
-        "COALESCE((SELECT sum(u.cost_microusd) FROM agent_operator_model_usage u "
-        f"WHERE u.operator_connection_id = {connection} AND u.user_id = {user} "
-        f"AND u.day = {_TODAY}), 0)"
-    )
 
 
 def _connection(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -98,39 +59,6 @@ async def read_operator_connection(conn: Any, connection_id: str) -> dict[str, A
         f"SELECT {_COLUMNS} FROM agent_operator_model_connections WHERE id = $1", connection_id
     )
     return None if row is None else _connection(row)
-
-
-async def read_operator_allowance(
-    conn: Any, *, connection_id: str, user_id: str, model: str
-) -> Allowance:
-    """One owner's allowance on one provided model, with what they spent today."""
-    row = await conn.fetchrow(
-        f"""
-        SELECT t.input_price, t.output_price, t.named_only, a.offered AS own_offered,
-               c.user_daily_budget_microusd AS default_budget,
-               b.daily_budget_microusd AS own_budget,
-               {_spent_today("c.id", "$2")} AS spent
-        FROM agent_operator_model_connections c
-        LEFT JOIN agent_operator_model_limits t
-               ON t.operator_connection_id = c.id AND t.model = $3
-        LEFT JOIN agent_operator_model_user_access a
-               ON a.operator_connection_id = c.id AND a.model = $3 AND a.user_id = $2
-        LEFT JOIN agent_operator_user_budgets b
-               ON b.operator_connection_id = c.id AND b.user_id = $2
-        WHERE c.id = $1
-        """,
-        connection_id,
-        user_id,
-        model,
-    )
-    if row is None:
-        return NOT_OFFERED
-    return effective_allowance(
-        row,
-        own_offered=row["own_offered"],
-        budget_microusd=effective_budget(row["default_budget"], row["own_budget"]),
-        spent_microusd=int(row["spent"]),
-    )
 
 
 async def bind_operator_residency(
@@ -195,7 +123,7 @@ async def bind_operator_residency(
 
 
 class PostgresOperatorModelRepository:
-    """Provided connections, their limits, and what the model relay reads and counts."""
+    """Provided connections, their models' prices, and what the model relay reads and records."""
 
     def __init__(self, pool: asyncpg.Pool) -> None:
         """Wrap the pool the control plane already owns."""
@@ -229,22 +157,16 @@ class PostgresOperatorModelRepository:
                 row = await conn.fetchrow(
                     f"""
                     INSERT INTO agent_operator_model_connections
-                        (id, name, base_url, models, default_model, api_key_ciphertext,
-                         end_user_header, user_concurrency, model_checks,
-                         user_daily_budget_microusd)
-                    VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9::jsonb, $10)
+                        (id, name, base_url, models, api_key_ciphertext, model_checks)
+                    VALUES ($1, $2, $3, $4::text[], $5, $6::jsonb)
                     RETURNING {_COLUMNS}
                     """,
                     values["id"],
                     values["name"],
                     values["base_url"],
                     values["models"],
-                    values.get("default_model"),
                     values["api_key_ciphertext"],
-                    values.get("end_user_header"),
-                    int(values["user_concurrency"]),
                     json.dumps(checks),
-                    values.get("user_daily_budget_microusd"),
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise ModelConnectionConflict(values["name"]) from exc
@@ -256,24 +178,17 @@ class PostgresOperatorModelRepository:
     ) -> dict[str, Any] | None:
         """Apply an edit that needs no verification; ``None`` when nothing live matched.
 
-        Renames, the default model and flag, the owner tag header, the
-        per-owner concurrency, the default budget, a model list that only
-        shrinks, and enabling or disabling. Enabling is refused
-        (:class:`OperatorTermsMissing`) before the connection has a default
-        budget and every listed model has prices. Disabling raises the
-        credential revision, so the caller's release finds every process
-        started before it. A removed model takes its verification, its terms,
-        accounts' answers on it and, when it was the default model, that
-        choice along. Making a connection the default takes the flag from any
-        other.
+        Renames, a model list that only shrinks, and enabling or disabling.
+        Disabling raises the credential revision, so the caller's release
+        finds every process started before it. A removed model takes its
+        verification and its prices along.
         """
         unknown = set(changes) - _UNVERIFIED
         if unknown:
             raise ValueError(f"a provided connection cannot change {sorted(unknown)} unverified")
         async with self._pool.acquire() as conn, conn.transaction():
             current = await conn.fetchrow(
-                "SELECT models, enabled, user_daily_budget_microusd "
-                "FROM agent_operator_model_connections "
+                "SELECT models FROM agent_operator_model_connections "
                 "WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
                 connection_id,
             )
@@ -284,17 +199,6 @@ class PostgresOperatorModelRepository:
             models = list(changes.get("models", current["models"]))
             if not set(models) <= set(current["models"]):
                 return None
-            if changes.get("enabled") and not current["enabled"]:
-                budget = changes.get(
-                    "user_daily_budget_microusd", current["user_daily_budget_microusd"]
-                )
-                await self._require_terms(conn, connection_id, models, budget)
-            if changes.get("is_default"):
-                await conn.execute(
-                    "UPDATE agent_operator_model_connections SET is_default = FALSE "
-                    "WHERE is_default AND id <> $1",
-                    connection_id,
-                )
             args: list[Any] = [connection_id]
             assignments = _unverified_assignments(changes, args)
             try:
@@ -312,20 +216,6 @@ class PostgresOperatorModelRepository:
             if "models" in changes:
                 await _forget_removed_models(conn, connection_id, models)
         return None if row is None else _connection(row)
-
-    @staticmethod
-    async def _require_terms(
-        conn: Any, connection_id: str, models: list[str], budget: int | None
-    ) -> None:
-        rows = await conn.fetch(
-            "SELECT model FROM agent_operator_model_limits WHERE operator_connection_id = $1 "
-            "AND input_price IS NOT NULL AND output_price IS NOT NULL",
-            connection_id,
-        )
-        priced = {str(row["model"]) for row in rows}
-        missing = [model for model in models if model not in priced]
-        if missing or budget is None:
-            raise OperatorTermsMissing(missing, budget=budget is None)
 
     async def commit_verified_operator_update(
         self,
@@ -394,7 +284,7 @@ class PostgresOperatorModelRepository:
             row = await conn.fetchrow(
                 f"""
                 UPDATE agent_operator_model_connections
-                SET deleted_at = NOW(), enabled = FALSE, is_default = FALSE,
+                SET deleted_at = NOW(), enabled = FALSE,
                     api_key_ciphertext = NULL, key_refused_at = NULL,
                     credential_revision = credential_revision + 1,
                     config_revision = config_revision + 1, model_checks = '{{}}'::jsonb,
@@ -429,183 +319,70 @@ class PostgresOperatorModelRepository:
             )
         return int(count or 0)
 
-    # -- terms, budgets and use ------------------------------------------------
+    # -- prices and use --------------------------------------------------------
 
-    async def operator_terms(
+    async def operator_prices(
         self, *, connection_ids: list[str]
-    ) -> dict[str, dict[str, dict[str, Any]]]:
-        """Each connection's stored terms, per model."""
-        result: dict[str, dict[str, dict[str, Any]]] = {cid: {} for cid in connection_ids}
+    ) -> dict[str, dict[str, ModelPrices]]:
+        """Each connection's models that have prices, with them."""
+        result: dict[str, dict[str, ModelPrices]] = {cid: {} for cid in connection_ids}
         if not connection_ids:
             return result
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                SELECT operator_connection_id, model, {_TERMS}
+                SELECT operator_connection_id, model, {_PRICES}
                 FROM agent_operator_model_limits
                 WHERE operator_connection_id = ANY($1::text[])
                 """,
                 connection_ids,
             )
         for row in rows:
-            terms = dict(row)
-            connection_id, model = str(terms.pop("operator_connection_id")), str(terms.pop("model"))
-            result[connection_id][model] = terms
+            prices = model_prices(row)
+            if prices is not None:
+                result[str(row["operator_connection_id"])][str(row["model"])] = prices
         return result
 
-    async def set_operator_terms(
-        self, *, connection_id: str, model: str, terms: Mapping[str, Any]
-    ) -> bool:
-        """Set one listed model's terms; ``False`` when it is not listed.
+    async def set_operator_prices(
+        self, *, connection_id: str, prices: Mapping[str, ModelPrices | None]
+    ) -> None:
+        """Store each listed model's prices as its provider's listing gave them.
 
-        A new row is written with the request limit ``0``: a previous release,
-        which reads only that, then offers the model to nobody by default
-        rather than without limit.
+        A model given ``None`` has its prices removed: its use is recorded by
+        tokens alone. A model the connection does not list is skipped. A new
+        row is written with the request limit ``0``, as a previous release
+        reads only that and would otherwise offer the model without limit.
         """
-        async with self._pool.acquire() as conn:
-            written = await conn.fetchval(
-                f"""
-                INSERT INTO agent_operator_model_limits
-                    (operator_connection_id, model, user_daily_requests, {_TERMS})
-                SELECT c.id, $2, 0, $3, $4, $5, $6, $7, $8
-                FROM agent_operator_model_connections c
-                WHERE c.id = $1 AND c.deleted_at IS NULL AND $2 = ANY(c.models)
-                ON CONFLICT (operator_connection_id, model) DO UPDATE
-                SET input_price = EXCLUDED.input_price,
-                    output_price = EXCLUDED.output_price,
-                    cache_read_price = EXCLUDED.cache_read_price,
-                    cache_write_price = EXCLUDED.cache_write_price,
-                    named_only = EXCLUDED.named_only,
-                    global_concurrency = EXCLUDED.global_concurrency
-                RETURNING 1
-                """,
-                connection_id,
-                model,
-                terms["input_price"],
-                terms["output_price"],
-                terms.get("cache_read_price"),
-                terms.get("cache_write_price"),
-                bool(terms.get("named_only")),
-                terms.get("global_concurrency"),
-            )
-        return written is not None
-
-    async def set_operator_user_budget(
-        self, *, connection_id: str, user_id: str, daily_budget_microusd: int
-    ) -> bool:
-        """Give one account its own daily budget; ``False`` when the connection is gone."""
-        async with self._pool.acquire() as conn:
-            written = await conn.fetchval(
-                """
-                INSERT INTO agent_operator_user_budgets
-                    (operator_connection_id, user_id, daily_budget_microusd)
-                SELECT c.id, $2, $3 FROM agent_operator_model_connections c
-                WHERE c.id = $1 AND c.deleted_at IS NULL
-                ON CONFLICT (operator_connection_id, user_id) DO UPDATE
-                SET daily_budget_microusd = EXCLUDED.daily_budget_microusd
-                RETURNING 1
-                """,
-                connection_id,
-                user_id,
-                daily_budget_microusd,
-            )
-        return written is not None
-
-    async def clear_operator_user_budget(self, *, connection_id: str, user_id: str) -> bool:
-        """Return one account to the default budget; ``False`` when it had none of its own."""
-        async with self._pool.acquire() as conn:
-            removed = await conn.fetchval(
-                """
-                DELETE FROM agent_operator_user_budgets
-                WHERE operator_connection_id = $1 AND user_id = $2
-                RETURNING 1
-                """,
-                connection_id,
-                user_id,
-            )
-        return removed is not None
-
-    async def set_operator_user_access(
-        self, *, connection_id: str, user_id: str, model: str, offered: bool
-    ) -> bool:
-        """Offer one account a listed model, or withhold it; ``False`` when not listed."""
-        async with self._pool.acquire() as conn:
-            written = await conn.fetchval(
-                """
-                INSERT INTO agent_operator_model_user_access
-                    (operator_connection_id, user_id, model, offered)
-                SELECT c.id, $2, $3, $4 FROM agent_operator_model_connections c
-                WHERE c.id = $1 AND c.deleted_at IS NULL AND $3 = ANY(c.models)
-                ON CONFLICT (operator_connection_id, user_id, model) DO UPDATE
-                SET offered = EXCLUDED.offered
-                RETURNING 1
-                """,
-                connection_id,
-                user_id,
-                model,
-                offered,
-            )
-        return written is not None
-
-    async def clear_operator_user_access(
-        self, *, connection_id: str, user_id: str, model: str
-    ) -> bool:
-        """Return one account to a model's default; ``False`` when it had no answer of its own."""
-        async with self._pool.acquire() as conn:
-            removed = await conn.fetchval(
-                """
-                DELETE FROM agent_operator_model_user_access
-                WHERE operator_connection_id = $1 AND user_id = $2 AND model = $3
-                RETURNING 1
-                """,
-                connection_id,
-                user_id,
-                model,
-            )
-        return removed is not None
-
-    async def list_operator_users(
-        self, *, connection_id: str, cursor: str | None, limit: int
-    ) -> list[dict[str, Any]]:
-        """Accounts with a budget or an answer of their own, or with use today, by account id.
-
-        Each as ``{"user_id", "daily_budget_microusd": n|None, "access":
-        {model: bool}, "spent_today_microusd": n, "requests_today": n}``.
-        """
-        async with self._pool.acquire() as conn:
-            ids = [
-                str(row["user_id"])
-                for row in await conn.fetch(
+        async with self._pool.acquire() as conn, conn.transaction():
+            for model, price in prices.items():
+                if price is None:
+                    await conn.execute(
+                        "DELETE FROM agent_operator_model_limits "
+                        "WHERE operator_connection_id = $1 AND model = $2",
+                        connection_id,
+                        model,
+                    )
+                    continue
+                await conn.execute(
                     f"""
-                    SELECT user_id FROM (
-                        SELECT user_id FROM agent_operator_user_budgets
-                        WHERE operator_connection_id = $1
-                        UNION
-                        SELECT user_id FROM agent_operator_model_user_access
-                        WHERE operator_connection_id = $1
-                        UNION
-                        SELECT user_id FROM agent_operator_model_usage
-                        WHERE operator_connection_id = $1 AND day = {_TODAY} AND requests > 0
-                    ) ids
-                    WHERE $2::text IS NULL OR user_id > $2
-                    ORDER BY user_id LIMIT $3
+                    INSERT INTO agent_operator_model_limits
+                        (operator_connection_id, model, user_daily_requests, {_PRICES})
+                    SELECT c.id, $2, 0, $3, $4, $5, $6
+                    FROM agent_operator_model_connections c
+                    WHERE c.id = $1 AND c.deleted_at IS NULL AND $2 = ANY(c.models)
+                    ON CONFLICT (operator_connection_id, model) DO UPDATE
+                    SET input_price = EXCLUDED.input_price,
+                        output_price = EXCLUDED.output_price,
+                        cache_read_price = EXCLUDED.cache_read_price,
+                        cache_write_price = EXCLUDED.cache_write_price
                     """,
                     connection_id,
-                    cursor,
-                    limit,
+                    model,
+                    price.input,
+                    price.output,
+                    price.cache_read,
+                    price.cache_write,
                 )
-            ]
-            return await _user_rows(conn, connection_id, ids)
-
-    async def operator_user(self, *, connection_id: str, user_id: str) -> dict[str, Any]:
-        """One account as :meth:`list_operator_users` lists it.
-
-        Answered for any account, one with nothing of its own and no use
-        today included: its row then says so.
-        """
-        async with self._pool.acquire() as conn:
-            [row] = await _user_rows(conn, connection_id, [user_id])
-        return row
 
     async def operator_usage(
         self, *, connection_id: str, start: date, end: date, limit: int
@@ -631,71 +408,16 @@ class PostgresOperatorModelRepository:
             )
         return [dict(row) for row in rows]
 
-    async def operator_sources_for_user(self, *, user_id: str) -> list[dict[str, Any]]:
-        """Every enabled connection, each with ``user_id``'s allowance on each listed model.
-
-        A connection row plus ``allowances``: ``{model: Allowance}`` for every
-        listed model, the ones withheld from this owner included; and the
-        owner's budget on the connection and what they spent on it today
-        (``budget_microusd``, ``None`` while none is chosen, and
-        ``spent_microusd``).
-        """
+    async def enabled_operator_connections(self) -> list[dict[str, Any]]:
+        """Every enabled provided connection, oldest first: what owners are offered."""
         async with self._pool.acquire() as conn:
-            connections = [
-                _connection(row)
-                for row in await conn.fetch(
-                    f"""
-                    SELECT {_COLUMNS} FROM agent_operator_model_connections
-                    WHERE deleted_at IS NULL AND enabled ORDER BY created_at, id
-                    """
-                )
-            ]
-            if not connections:
-                return []
-            ids = [connection["id"] for connection in connections]
-            budgets = await conn.fetch(
-                f"""
-                SELECT c.id, b.daily_budget_microusd AS own_budget,
-                       {_spent_today("c.id", "$2")} AS spent
-                FROM agent_operator_model_connections c
-                LEFT JOIN agent_operator_user_budgets b
-                       ON b.operator_connection_id = c.id AND b.user_id = $2
-                WHERE c.id = ANY($1::text[])
-                """,
-                ids,
-                user_id,
-            )
             rows = await conn.fetch(
+                f"""
+                SELECT {_COLUMNS} FROM agent_operator_model_connections
+                WHERE deleted_at IS NULL AND enabled ORDER BY created_at, id
                 """
-                SELECT t.operator_connection_id, t.model, t.input_price, t.output_price,
-                       t.named_only, a.offered AS own_offered
-                FROM agent_operator_model_limits t
-                LEFT JOIN agent_operator_model_user_access a
-                       ON a.operator_connection_id = t.operator_connection_id
-                      AND a.model = t.model AND a.user_id = $2
-                WHERE t.operator_connection_id = ANY($1::text[])
-                """,
-                ids,
-                user_id,
             )
-        own = {str(row["id"]): row for row in budgets}
-        terms = {(str(row["operator_connection_id"]), str(row["model"])): row for row in rows}
-        for connection in connections:
-            mine = own[connection["id"]]
-            budget = effective_budget(connection["user_daily_budget_microusd"], mine["own_budget"])
-            spent = int(mine["spent"])
-            connection["budget_microusd"] = budget
-            connection["spent_microusd"] = spent
-            connection["allowances"] = {}
-            for model in connection["models"]:
-                row = terms.get((connection["id"], model))
-                connection["allowances"][model] = effective_allowance(
-                    row,
-                    own_offered=None if row is None else row["own_offered"],
-                    budget_microusd=budget,
-                    spent_microusd=spent,
-                )
-        return connections
+        return [_connection(row) for row in rows]
 
     # -- residencies -----------------------------------------------------------
 
@@ -712,17 +434,15 @@ class PostgresOperatorModelRepository:
     async def resolve_model_relay_caller(
         self, *, thread_id: str, residency_generation: int, model: str | None
     ) -> dict[str, Any] | None:
-        """Name the running turn a model relay placeholder speaks for, and what it may use.
+        """Name the running turn a model relay placeholder speaks for.
 
         ``None`` unless the residency passes the relays' shared fence
         (:func:`~cloud_agent.storage._sql.fences.live_residency_caller_sql`).
         Otherwise the turn's job, owner and provided connection, with the
         revision this residency's process was bound to (``bound_revision``,
-        ``None`` when it was bound to none) and, for ``model``, the owner's
-        allowance (``allowance``), the model's prices (``prices``, ``None``
-        while it has none) and its deployment-wide concurrency cap.
-        ``connection`` is ``None`` when the turn does not run on a provided
-        connection at all.
+        ``None`` when it was bound to none) and, for ``model``, its prices
+        (``prices``, ``None`` when its listing gave none). ``connection`` is
+        ``None`` when the turn does not run on a provided connection at all.
         """
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -746,25 +466,15 @@ class PostgresOperatorModelRepository:
             caller["connection"] = (
                 await read_operator_connection(conn, str(connection_id)) if connection_id else None
             )
-            caller["allowance"] = None
             caller["prices"] = None
-            caller["global_concurrency"] = None
             if caller["connection"] is not None and model is not None:
-                caller["allowance"] = await read_operator_allowance(
-                    conn,
-                    connection_id=str(connection_id),
-                    user_id=str(caller["user_id"]),
-                    model=model,
-                )
-                terms = await conn.fetchrow(
-                    f"SELECT {_TERMS} FROM agent_operator_model_limits "
-                    "WHERE operator_connection_id = $1 AND model = $2",
-                    str(connection_id),
-                    model,
-                )
-                caller["prices"] = model_prices(terms)
-                caller["global_concurrency"] = (
-                    None if terms is None else terms["global_concurrency"]
+                caller["prices"] = model_prices(
+                    await conn.fetchrow(
+                        f"SELECT {_PRICES} FROM agent_operator_model_limits "
+                        "WHERE operator_connection_id = $1 AND model = $2",
+                        str(connection_id),
+                        model,
+                    )
                 )
         return caller
 
@@ -782,7 +492,7 @@ class PostgresOperatorModelRepository:
         estimated: bool,
         day: date | None = None,
     ) -> None:
-        """Add one served request, its tokens and its cost to the owner's use on ``day``.
+        """Add one served request, its tokens and what they cost to the owner's use on ``day``.
 
         One statement, so requests of one owner on one model that end together
         queue on their own row and none is lost. A failure to get a
@@ -831,55 +541,6 @@ class PostgresOperatorModelRepository:
                 raise ChargeOutcomeUnknown(str(exc)) from exc
 
 
-async def _user_rows(conn: Any, connection_id: str, ids: list[str]) -> list[dict[str, Any]]:
-    """What each of ``ids`` has of its own on a connection, and its use today, in that order."""
-    users: dict[str, dict[str, Any]] = {
-        user_id: {
-            "user_id": user_id,
-            "daily_budget_microusd": None,
-            "access": {},
-            "spent_today_microusd": 0,
-            "requests_today": 0,
-        }
-        for user_id in ids
-    }
-    if not ids:
-        return []
-    for row in await conn.fetch(
-        """
-        SELECT user_id, daily_budget_microusd FROM agent_operator_user_budgets
-        WHERE operator_connection_id = $1 AND user_id = ANY($2::text[])
-        """,
-        connection_id,
-        ids,
-    ):
-        users[str(row["user_id"])]["daily_budget_microusd"] = int(row["daily_budget_microusd"])
-    for row in await conn.fetch(
-        """
-        SELECT user_id, model, offered FROM agent_operator_model_user_access
-        WHERE operator_connection_id = $1 AND user_id = ANY($2::text[])
-        """,
-        connection_id,
-        ids,
-    ):
-        users[str(row["user_id"])]["access"][str(row["model"])] = bool(row["offered"])
-    for row in await conn.fetch(
-        f"""
-        SELECT user_id, sum(requests) AS requests, sum(cost_microusd) AS cost
-        FROM agent_operator_model_usage
-        WHERE operator_connection_id = $1 AND user_id = ANY($2::text[])
-          AND day = {_TODAY} AND requests > 0
-        GROUP BY user_id
-        """,
-        connection_id,
-        ids,
-    ):
-        user = users[str(row["user_id"])]
-        user["requests_today"] = int(row["requests"])
-        user["spent_today_microusd"] = int(row["cost"])
-    return list(users.values())
-
-
 def _unverified_assignments(changes: dict[str, Any], args: list[Any]) -> list[str]:
     """The ``SET`` list of an edit that needs no verification, judged against the stored row."""
     placeholders: dict[str, str] = {}
@@ -898,20 +559,15 @@ def _unverified_assignments(changes: dict[str, Any], args: list[Any]) -> list[st
             "model_checks = (SELECT COALESCE(jsonb_object_agg(key, value), '{}'::jsonb) "
             f"FROM jsonb_each(model_checks) WHERE key = ANY({placeholders['models']}))"
         )
-        if "default_model" not in changes:
-            assignments.append(
-                "default_model = CASE WHEN default_model = "
-                f"ANY({placeholders['models']}) THEN default_model END"
-            )
     return assignments
 
 
 async def _forget_removed_models(conn: Any, connection_id: str, models: list[str]) -> None:
-    """Drop the terms of models a connection no longer lists, and accounts' answers on them.
+    """Drop the prices of models a connection no longer lists, and what earlier releases kept.
 
-    A model listed again later starts with no prices, so it is offered to
-    nobody until its administrator sets them. The last table is the request
-    limits a previous release wrote, which nothing reads any more.
+    A model listed again later has its prices read again from the listing.
+    The other two tables are accounts' answers on a model and the request
+    limits that earlier releases wrote; nothing reads them any more.
     """
     for table in (
         "agent_operator_model_limits",
@@ -928,6 +584,5 @@ async def _forget_removed_models(conn: Any, connection_id: str, models: list[str
 __all__ = [
     "PostgresOperatorModelRepository",
     "bind_operator_residency",
-    "read_operator_allowance",
     "read_operator_connection",
 ]

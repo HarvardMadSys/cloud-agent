@@ -77,20 +77,23 @@ own address, and ends on Admin → Servers.
 ## A deployment can provide models
 
 An administrator can now save a provider's endpoint and key once, under
-**Admin → Settings → Models**, and every admitted owner runs on those models
-with no setup, within a daily budget that each request is charged against for
-the tokens it used, at prices the administrator sets per model
-([Provided models](operations.md#provided-models)). Owners' own model
-connections work as before, and nothing changes for a deployment that adds no
-provided connection.
+**Admin → Settings → Models**, and every admitted owner runs with no setup on
+the models the provider lists for that key
+([Provided models](operations.md#provided-models)). The relay records each
+request's tokens and their cost at the listed prices, and limits nothing: the
+provider's own budget on the key does. Owners' own model connections work as
+before, and nothing changes for a deployment that adds no provided connection.
 
 `0118_operator_model_connections` only adds tables, and
 `0120_operator_model_budgets` adds prices, budgets and recorded costs to them.
-A deployment that set up a provided connection on a build between the two had
-a daily request limit per model instead. Those limits are no longer read:
-after upgrading, such a connection offers nothing until an administrator
-chooses its daily budget and sets each model's prices. Which accounts a model
-was for is carried over.
+Builds since then had an administrator choose the models, a default model, a
+daily budget per account, prices, caps on requests in flight, an end-user
+header and per-account answers. None of that is read any more. A connection
+saved on such a build keeps its model list and verification until it is
+saved again with a new key or Base URL, or its models are read again, which
+replaces the list with the key's; its prices stay until then too. Its
+budgets, caps and per-account answers stay in the database, unread, for a
+later revision to drop.
 
 The feature needs two new services, which every stack now runs with no
 profile: `model-relay` on the control plane and `model-tunnel` on each host.

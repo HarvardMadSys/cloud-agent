@@ -3,22 +3,16 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 import { PasswordInput } from '@/components/features/auth/PasswordInput';
-import { ModelIdsField } from '@/components/features/settings/ModelIdsField';
-import { withModel } from '@/components/features/settings/modelConnectionChanges';
+import { ModelStatusList } from '@/components/features/settings/ModelStatusList';
 import { useT } from '@/components/providers/LocaleProvider';
-import { Select } from '@/components/ui/Select';
 import {
   createOperatorModelConnection,
-  MAX_DAILY_BUDGET_MICROUSD,
-  MAX_USER_CONCURRENCY,
-  OPERATOR_MAX_MODELS,
   OPERATOR_MAX_NAME_CHARS,
   updateOperatorModelConnection,
   type OperatorModelConnection,
 } from '@/lib/api/adminOperatorModels';
 import { refusedModels, type ModelStatus } from '@/lib/api/modelConnections';
 import type { TranslationKey } from '@/lib/i18n/translate';
-import { formatUsd } from '@/lib/money';
 
 import {
   initialFields,
@@ -42,18 +36,11 @@ const PROBLEM_KEYS: Record<ProvidedField, TranslationKey> = {
   name: 'adminModels.invalid.name',
   base_url: 'connections.invalid.url',
   api_key: 'connections.invalid.key',
-  models: 'connections.invalid.model',
-  default_model: 'adminModels.invalid.defaultModel',
-  end_user_header: 'adminModels.invalid.header',
-  user_concurrency: 'adminModels.invalid.userConcurrency',
-  user_daily_budget_microusd: 'adminModels.invalid.budget',
 };
 
-/** What a save answered: the connection, and what could not be done after it was saved. */
+/** What a save answered: the connection as the server holds it now. */
 export interface SavedConnection {
   connection: OperatorModelConnection;
-  /** The connection was saved, but making it the default for new users failed. */
-  problem?: string;
 }
 
 function actionLabel(busy: boolean, verify: boolean, t: Translate): string {
@@ -61,15 +48,10 @@ function actionLabel(busy: boolean, verify: boolean, t: Translate): string {
   return t(verify ? 'connections.verifySave' : 'connections.save');
 }
 
-/**
- * The save itself. A create answers a disabled connection; making it the
- * default for new users is an edit, sent once the create has succeeded, and a
- * failure there keeps the connection and is reported beside it.
- */
+/** The save itself; `null` when an edit changed nothing. */
 async function submit(
   connection: OperatorModelConnection | undefined,
   fields: ProvidedFields,
-  t: Translate,
 ): Promise<SavedConnection | null> {
   if (connection) {
     const changes = providedChanges(connection, fields);
@@ -77,19 +59,7 @@ async function submit(
     if (!Object.keys(changes).length) return null;
     return { connection: await updateOperatorModelConnection(connection.id, changes) };
   }
-  const created = await createOperatorModelConnection(newProvidedConnection(fields));
-  if (!fields.is_default) return { connection: created };
-  try {
-    const updated = await updateOperatorModelConnection(created.id, { is_default: true });
-    return { connection: updated };
-  } catch (cause) {
-    // An ended session is the page's to handle, not a note beside the card.
-    if (isAccessDenied(cause)) throw cause;
-    return {
-      connection: created,
-      problem: t('adminModels.form.defaultFailed', { reason: providedFailure(cause, t) }),
-    };
-  }
+  return { connection: await createOperatorModelConnection(newProvidedConnection(fields)) };
 }
 
 /** A labelled control with its hint and its field-level problem, if any. */
@@ -133,17 +103,16 @@ function Field({
 }
 
 /**
- * Add or edit a provided connection: a name, a Base URL, a write-only key and
- * model IDs, then which model new users start on, what each account may spend
- * on its models a day, whether this connection is where new users start, the
- * header that names an account to the provider, and how many requests one
- * account may have in flight.
+ * Add or edit a provided connection: a name, a Base URL and a write-only key.
+ * Nothing else is asked: the connection offers whatever models the provider
+ * lists for the key, so which models the deployment provides is set on the
+ * key, at the provider.
  *
- * **Verify and save** checks every model with the provider before anything is
- * stored, which can take minutes and cannot be cancelled once sent; a refusal
- * keeps every input, with each model's result on its chip. A new connection is
- * saved disabled: it is enabled from its card once it has a daily budget,
- * which may be chosen here or later, and every model has prices.
+ * **Verify and save** reads the provider's model list with the key and checks
+ * every model before anything is stored, which can take minutes and cannot be
+ * cancelled once sent. A refusal keeps every input and, when no model could
+ * be verified, shows each model's result. A new connection is saved disabled
+ * and enabled from its card.
  */
 export function ProvidedConnectionForm({
   connection,
@@ -159,11 +128,10 @@ export function ProvidedConnectionForm({
 }) {
   const t = useT();
   const [fields, setFields] = useState<ProvidedFields>(() => initialFields(connection));
-  const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [problems, setProblems] = useState<Problems>({});
-  const [results, setResults] = useState<Record<string, ModelStatus>>({});
+  const [results, setResults] = useState<ModelStatus[]>([]);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -172,38 +140,25 @@ export function ProvidedConnectionForm({
     };
   }, []);
 
-  // A model ID still in the line when the form is saved counts too.
-  const models = withModel(fields.models, draft);
   const current: ProvidedFields = {
-    ...fields,
     name: fields.name.trim(),
     base_url: fields.base_url.trim(),
     key: fields.key.trim(),
-    models,
-    default_model: models.includes(fields.default_model) ? fields.default_model : '',
-    end_user_header: fields.end_user_header.trim(),
-    daily_budget: fields.daily_budget.trim(),
   };
   const verify = providedNeedsVerification(connection, current);
-  // A budget that was chosen can be changed, not taken away again.
-  const budgetChosen = (connection?.user_daily_budget_microusd ?? null) !== null;
-  const problem = (field: ProvidedField) =>
-    problems[field] ? t(PROBLEM_KEYS[field], { max: formatUsd(MAX_DAILY_BUDGET_MICROUSD) }) : '';
+  const problem = (field: ProvidedField) => (problems[field] ? t(PROBLEM_KEYS[field]) : '');
 
   /** Any edit after a refusal: its results described the form as it was. */
   function edit(change: Partial<ProvidedFields>) {
     setFields((value) => ({ ...value, ...change }));
-    setResults({});
+    setResults([]);
     setProblems({});
     setError('');
   }
 
   function failed(cause: unknown) {
     if (isAccessDenied(cause)) onAccessDenied?.(cause);
-    const refused = refusedModels(cause) ?? [];
-    setFields((value) => ({ ...value, models }));
-    setDraft('');
-    setResults(Object.fromEntries(refused.map((status) => [status.model, status])));
+    setResults(refusedModels(cause) ?? []);
     setProblems(refusedFields(cause));
     setError(providedFailure(cause, t));
   }
@@ -211,15 +166,15 @@ export function ProvidedConnectionForm({
   async function save(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
-    const found = providedFieldProblems(current, !connection, budgetChosen);
+    const found = providedFieldProblems(current, !connection);
     const invalid = Object.keys(found).length > 0;
     setProblems(found);
-    setResults({});
+    setResults([]);
     setError(invalid ? t('connections.invalid') : '');
     if (invalid) return;
     setBusy(true);
     try {
-      const saved = await submit(connection, current, t);
+      const saved = await submit(connection, current);
       if (mounted.current) onSaved(saved);
     } catch (cause) {
       if (mounted.current) failed(cause);
@@ -228,8 +183,7 @@ export function ProvidedConnectionForm({
     }
   }
 
-  const incomplete =
-    !current.name || !current.base_url || !models.length || (!connection && !current.key);
+  const incomplete = !current.name || !current.base_url || (!connection && !current.key);
 
   return (
     <form
@@ -300,113 +254,6 @@ export function ProvidedConnectionForm({
             />
           )}
         </Field>
-        <ModelIdsField
-          models={fields.models}
-          draft={draft}
-          max={OPERATOR_MAX_MODELS}
-          results={results}
-          invalid={Boolean(problems.models)}
-          disabled={busy}
-          onModels={(next) => edit({ models: next })}
-          onDraft={(next) => {
-            setDraft(next);
-            edit({});
-          }}
-        />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label={t('adminModels.form.defaultModel')}
-            hint={t('adminModels.form.defaultModelHint')}
-            problem={problem('default_model')}
-          >
-            {(inputId, describedBy, invalid) => (
-              <Select
-                id={inputId}
-                className={inputClass}
-                value={current.default_model}
-                onValueChange={(value) => edit({ default_model: value })}
-                options={[
-                  { value: '', label: t('adminModels.form.noDefaultModel') },
-                  ...models.map((model) => ({ value: model, label: model })),
-                ]}
-                aria-invalid={invalid}
-                aria-describedby={describedBy}
-              />
-            )}
-          </Field>
-          <Field
-            label={t('adminModels.form.budget')}
-            hint={t('adminModels.form.budgetHint')}
-            problem={problem('user_daily_budget_microusd')}
-          >
-            {(inputId, describedBy, invalid) => (
-              <input
-                id={inputId}
-                className={inputClass}
-                inputMode="decimal"
-                value={fields.daily_budget}
-                onChange={(event) => edit({ daily_budget: event.target.value })}
-                maxLength={20}
-                autoComplete="off"
-                aria-invalid={invalid}
-                aria-describedby={describedBy}
-              />
-            )}
-          </Field>
-          <Field
-            label={t('adminModels.form.userConcurrency')}
-            hint={t('adminModels.form.userConcurrencyHint', { max: MAX_USER_CONCURRENCY })}
-            problem={problem('user_concurrency')}
-          >
-            {(inputId, describedBy, invalid) => (
-              <input
-                id={inputId}
-                className={inputClass}
-                inputMode="numeric"
-                value={fields.user_concurrency}
-                onChange={(event) => edit({ user_concurrency: event.target.value })}
-                maxLength={3}
-                autoComplete="off"
-                aria-invalid={invalid}
-                aria-describedby={describedBy}
-              />
-            )}
-          </Field>
-        </div>
-        <Field
-          label={t('adminModels.form.header')}
-          hint={t('adminModels.form.headerHint')}
-          problem={problem('end_user_header')}
-        >
-          {(inputId, describedBy, invalid) => (
-            <input
-              id={inputId}
-              className={inputClass}
-              value={fields.end_user_header}
-              onChange={(event) => edit({ end_user_header: event.target.value })}
-              maxLength={64}
-              placeholder="X-End-User"
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={invalid}
-              aria-describedby={describedBy}
-            />
-          )}
-        </Field>
-        <label className="flex min-h-11 items-start gap-3 text-sm">
-          <input
-            type="checkbox"
-            className="mt-1 h-4 w-4 shrink-0"
-            checked={fields.is_default}
-            onChange={(event) => edit({ is_default: event.target.checked })}
-          />
-          <span>
-            <span className="font-medium">{t('adminModels.form.isDefault')}</span>
-            <span className="block text-xs leading-5 text-muted">
-              {t('adminModels.form.isDefaultHint')}
-            </span>
-          </span>
-        </label>
       </fieldset>
       <div role="status" aria-live="polite">
         {busy && verify ? (
@@ -417,6 +264,9 @@ export function ProvidedConnectionForm({
         <p role="alert" className="text-sm text-status-error">
           {error}
         </p>
+      ) : null}
+      {results.length ? (
+        <ModelStatusList statuses={results} notUsable={t('adminModels.form.notVerified')} />
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <button
