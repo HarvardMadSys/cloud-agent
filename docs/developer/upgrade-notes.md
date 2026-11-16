@@ -19,6 +19,37 @@ After migrating, start the main control-plane listener with its existing
 complete environment: it imports newly registered settings once, as described
 in [Admin Settings](operations.md#admin-settings).
 
+## One destination for every sandbox archive
+
+**Archive to S3 and delete** now archives to the **Sandbox archives** policy
+under **Admin → Settings → Sandbox**, the one sandbox managers already use:
+its bucket and region, under `cloud-agent/sandbox/deletion`, and its saved
+access key when it has one
+([how](operations.md#sandbox-archive-storage)). The four settings it had of its
+own under **Admin → Settings → Application → Sandbox archives**
+(`sandbox_archive.bucket`, `.region`, `.endpoint` and `.prefix`) and their
+`AGENT_SANDBOX_ARCHIVE_S3_*` imports are gone. Their stored values are no longer
+read; a later release removes them.
+
+Before upgrading, check what this changes for a deployment:
+
+- Deletion with an archive is available only while the policy is enabled.
+  With it disabled, an administrator can only discard a sandbox, and a deleted
+  chat's sandbox is retired without an archive, as with no bucket before. A
+  deployment that archived deletions to a bucket of its own enables the policy
+  first, with that bucket if it should stay the destination.
+- There is no S3-compatible endpoint any more: the policy names an AWS bucket.
+- With a saved access key, the control plane needs no AWS credentials of its
+  own, so a Compose override that only provided them
+  (`AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE`) can be removed once this
+  release runs. That key needs `s3:PutObject` and `s3:GetObject` on
+  `cloud-agent/sandbox/deletion/*`, which the documented lifecycle grant on
+  `cloud-agent/sandbox/*` already includes.
+
+Completed deletions keep their receipts, each naming the full `s3://` location
+it was verified at. A request not yet archived is archived to the policy's
+destination when it next runs.
+
 ## Drain a host without `ADMIN_TOKEN`
 
 A deployment that drains a host around its rollout can now do it with

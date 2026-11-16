@@ -242,15 +242,6 @@ const SETTING_GROUPS: SettingGroup[] = [
     title: 'Captcha',
     keys: ['accounts.turnstile_site_key', 'accounts.turnstile_secret_key'],
   },
-  {
-    title: 'Deletion archive storage',
-    keys: [
-      'sandbox_archive.bucket',
-      'sandbox_archive.region',
-      'sandbox_archive.prefix',
-      'sandbox_archive.endpoint',
-    ],
-  },
 ];
 
 const SETTINGS_BY_KEY = new Map<string, string>(
@@ -262,7 +253,6 @@ const SETTINGS_BY_KEY = new Map<string, string>(
  * because that tab already describes what they configure.
  */
 export const HOSTED_CATEGORIES: ReadonlyMap<string, { tab: string; section: string }> = new Map([
-  ['Sandbox archives', { tab: 'sandbox', section: 'Sandbox' }],
   ['Agent versions', { tab: 'versions', section: 'Agent versions' }],
 ]);
 

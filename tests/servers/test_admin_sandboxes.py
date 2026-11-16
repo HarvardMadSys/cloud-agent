@@ -30,6 +30,7 @@ from cloud_agent.schemas.admin_sandboxes import (
     sandbox_cursor_scope,
     sandbox_trajectory_cursor_scope,
 )
+from cloud_agent_shared.sandbox_archive_settings import SandboxArchivePolicy
 
 PREFIX = "/admin/agent/sandboxes"
 
@@ -1525,7 +1526,7 @@ async def test_delete_without_archive_configuration_does_not_fence_sandbox(setup
             },
         )
     assert response.status_code == 503
-    assert "S3 bucket" in response.json()["detail"]
+    assert "Enable Sandbox archives" in response.json()["detail"]
     commands.request_admin_delete.assert_not_awaited()
 
 
@@ -1719,3 +1720,18 @@ def test_sandboxes_are_only_on_the_main_listener():
     assert PREFIX + "/{sandbox_id}/restore" not in create_mcp_app().openapi()["paths"]
     assert PREFIX + "/{sandbox_id}/delete" in create_app().openapi()["paths"]
     assert PREFIX + "/{sandbox_id}/delete" not in create_mcp_app().openapi()["paths"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("enabled", "available"), [(True, True), (False, False)])
+async def test_deletion_with_an_archive_follows_the_sandbox_archive_policy(enabled, available):
+    stored = SandboxArchivePolicy(
+        enabled=enabled,
+        region="us-east-2",
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    )
+    store = SimpleNamespace(
+        host_pool=SimpleNamespace(sandbox_archive_policy=AsyncMock(return_value=stored))
+    )
+    assert await admin_sandboxes.admin_sandbox_deletion_available(store) is available

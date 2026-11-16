@@ -576,28 +576,6 @@ function SettingsView() {
             hidden={selectedTab !== 'sandbox'}
             tabIndex={0}
           >
-            {(applicationSettings.groups.has('Sandbox archives') ||
-              (!applicationSettings.snapshot &&
-                (applicationSettings.loading || applicationSettings.error))) && (
-              <section
-                className="ui-card mt-6 p-4 sm:p-6"
-                aria-label="Deletion archive destination"
-              >
-                <ApplicationSettingsHeader
-                  settings={applicationSettings}
-                  title="Deletion archive destination"
-                />
-                <ApplicationSettingsFeedback settings={applicationSettings} />
-                {applicationSettings.groups.has('Sandbox archives') && (
-                  <ApplicationSettingsCategory
-                    settings={applicationSettings}
-                    category="Sandbox archives"
-                    active={selectedTab === 'sandbox'}
-                    showHeading={false}
-                  />
-                )}
-              </section>
-            )}
             {pool &&
               (definitions.length > 0 ? (
                 <GlobalSettingsCard

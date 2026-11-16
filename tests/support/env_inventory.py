@@ -157,14 +157,10 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         "admin",
-        "Sandbox archives and database tools (MIGRATED_SETTINGS). A saved pgAdmin URL is "
+        "Database tools (MIGRATED_SETTINGS). A saved pgAdmin URL is "
         "proxied only when the deployment also names that service "
         "(AGENT_PGADMIN_URL/AGENT_PGADMIN_BOOTSTRAP_URL, read raw as the allowlist).",
         names=(
-            "AGENT_SANDBOX_ARCHIVE_S3_BUCKET",
-            "AGENT_SANDBOX_ARCHIVE_S3_REGION",
-            "AGENT_SANDBOX_ARCHIVE_S3_ENDPOINT",
-            "AGENT_SANDBOX_ARCHIVE_S3_PREFIX",
             "AGENT_PGADMIN_URL",
             "AGENT_PGADMIN_PUBLIC_URL",
         ),

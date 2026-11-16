@@ -31,9 +31,6 @@ from cloud_agent.setting_definition import (
     _gitlab_redirect_uri,
     _numeric,
     _package_registry_url,
-    _s3_bucket,
-    _s3_prefix,
-    _s3_region,
 )
 from cloud_agent_shared.sandbox_manager_compat import (
     manager_env,
@@ -536,47 +533,6 @@ _MIGRATED_DEFINITIONS: tuple[Setting, ...] = (
             "https://agent.example.com/api. MCP sign-in callbacks and compute node "
             "registration are built from it unless they have their own address."
         ),
-    ),
-    Setting(
-        "sandbox_archive.bucket",
-        "Sandbox archive S3 bucket",
-        "Sandbox archives",
-        "",
-        env="AGENT_SANDBOX_ARCHIVE_S3_BUCKET",
-        check=_s3_bucket,
-        hint=(
-            "Use a bucket name such as my-archive-bucket; set cloud-agent/sandbox "
-            "in Sandbox archive S3 prefix."
-        ),
-        description="Enter a bucket name, or paste an S3 URI such as s3://my-archive-bucket/cloud-agent/sandbox to save the bucket and prefix together. Required for sandbox deletion; the completed archive is verified before removal. Empty disables deletion.",
-    ),
-    Setting(
-        "sandbox_archive.region",
-        "Sandbox archive S3 region",
-        "Sandbox archives",
-        "",
-        env="AGENT_SANDBOX_ARCHIVE_S3_REGION",
-        check=_s3_region,
-        description="Optional AWS region. Empty uses the control plane's standard AWS SDK configuration.",
-    ),
-    Setting(
-        "sandbox_archive.endpoint",
-        "Sandbox archive S3 endpoint",
-        "Sandbox archives",
-        "",
-        env="AGENT_SANDBOX_ARCHIVE_S3_ENDPOINT",
-        url=True,
-        https_only=True,
-        description="Optional HTTPS S3-compatible endpoint supporting conditional PUT and full-object SHA-256 checksums. Empty uses AWS S3.",
-    ),
-    Setting(
-        "sandbox_archive.prefix",
-        "Sandbox archive S3 prefix",
-        "Sandbox archives",
-        "sandbox-archives",
-        env="AGENT_SANDBOX_ARCHIVE_S3_PREFIX",
-        check=_s3_prefix,
-        description="Object key prefix for new deletion requests. Each request has an immutable object; completed receipts retain their original bucket and key.",
     ),
     Setting(
         "pgadmin_url",

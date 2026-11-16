@@ -126,7 +126,7 @@ def setup(monkeypatch, *, state="pending"):
 async def run(store, archives):
     return await worker.delete_one_archived_sandbox(
         store,
-        archive_factory=lambda: archives,  # type: ignore[arg-type,return-value]
+        archive_factory=AsyncMock(return_value=archives),
     )
 
 

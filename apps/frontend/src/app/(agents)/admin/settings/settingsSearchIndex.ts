@@ -73,7 +73,7 @@ const ARCHIVE_FIELDS: StaticSearchField[] = [
     key: 'enabled',
     label: 'Enable sandbox archives',
     description:
-      'With an access key, uploads use that key. Without one, sandbox managers use their workload identity and need the bucket owner and KMS key. Bucket versioning is required either way.',
+      'With an access key, uploads use that key. Without one, sandbox managers use their workload identity and need the bucket owner and KMS key. Bucket versioning is required either way. Archive to S3 and delete works only while archives are enabled. While they are off, sandboxes of deleted chats are removed without an archive.',
   },
   {
     key: 'checkpoints',

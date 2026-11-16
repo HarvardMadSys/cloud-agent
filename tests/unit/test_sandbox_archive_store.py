@@ -12,9 +12,9 @@ import pytest
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from cloud_agent import settings
 from cloud_agent.sandbox_archive import sandbox_archive
 from cloud_agent.sandbox_archive.sandbox_archive import (
+    DELETION_ARCHIVE_PREFIX,
     MAX_ARCHIVE_BYTES,
     UPLOAD_EXPIRES_SECONDS,
     S3SandboxArchiveStore,
@@ -23,21 +23,42 @@ from cloud_agent.sandbox_archive.sandbox_archive import (
     SandboxArchiveUnavailable,
     SandboxArchiveVerificationError,
 )
+from cloud_agent_shared.sandbox_archive_settings import (
+    SandboxArchivePolicy,
+    SandboxArchivePolicyError,
+)
 
 DIGEST = hashlib.sha256(b"archive").hexdigest()
 CHECKSUM = base64.b64encode(bytes.fromhex(DIGEST)).decode("ascii")
 SIZE = 7
-KEY = "sandbox-archives/sandbox-one/request-one/archive.tar"
+KEY = "cloud-agent/sandbox/deletion/sandbox-one/request-one/archive.tar"
+ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
 
-@pytest.fixture(autouse=True)
-def isolated_settings(monkeypatch):
-    settings.reset_settings()
-    for setting in settings.SETTINGS:
-        if setting.key.startswith("sandbox_archive.") and setting.env:
-            monkeypatch.delenv(setting.env, raising=False)
-    yield
-    settings.reset_settings()
+def policy(**values) -> SandboxArchivePolicy:
+    return SandboxArchivePolicy(
+        **{
+            "enabled": True,
+            "bucket": "archive-bucket",
+            "region": "us-east-2",
+            "aws_access_key_id": ACCESS_KEY_ID,
+            "aws_secret_access_key": SECRET_ACCESS_KEY,
+            **values,
+        }
+    )
+
+
+class PolicySource:
+    """The one host-pool read the store makes."""
+
+    def __init__(self, stored: SandboxArchivePolicy | Exception):
+        self.stored = stored
+
+    async def sandbox_archive_policy(self) -> SandboxArchivePolicy:
+        if isinstance(self.stored, Exception):
+            raise self.stored
+        return self.stored
 
 
 def store(**configuration):
@@ -80,7 +101,7 @@ async def test_upload_binds_one_immutable_object_complete_checksum_and_byte_leng
     )
     assert archives.key_for("sandbox-one", "request-two") != upload.key
     assert archives.key_for("sandbox/two", "request/three") == (
-        "sandbox-archives/sandbox%2Ftwo/request%2Fthree/archive.tar"
+        f"{DELETION_ARCHIVE_PREFIX}/sandbox%2Ftwo/request%2Fthree/archive.tar"
     )
 
 
@@ -132,7 +153,7 @@ async def test_upload_requires_an_actual_sha256_digest(digest):
 async def test_missing_configuration_is_unavailable_without_sdk_or_credential_lookup(monkeypatch):
     sdk = MagicMock(side_effect=AssertionError("SDK creation must stay lazy"))
     monkeypatch.setattr(sandbox_archive.boto3, "client", sdk)
-    archives = S3SandboxArchiveStore.from_settings()
+    archives = S3SandboxArchiveStore(SandboxArchiveConfiguration())
     assert not archives.available
     with pytest.raises(SandboxArchiveUnavailable):
         archives.key_for("sandbox-one", "request-one")
@@ -143,25 +164,63 @@ async def test_missing_configuration_is_unavailable_without_sdk_or_credential_lo
     sdk.assert_not_called()
 
 
-async def test_client_uses_only_the_control_planes_standard_aws_chain(monkeypatch):
-    monkeypatch.setenv("AGENT_SANDBOX_ARCHIVE_S3_BUCKET", "archive-bucket")
-    monkeypatch.setenv("AGENT_SANDBOX_ARCHIVE_S3_REGION", "us-east-2")
-    monkeypatch.setenv("AGENT_SANDBOX_ARCHIVE_S3_ENDPOINT", "https://s3.example")
+async def test_the_deployment_archive_policy_is_the_destination_and_credential(monkeypatch):
+    archives = await S3SandboxArchiveStore.for_deployment(
+        PolicySource(policy(expected_bucket_owner="123456789012"))
+    )
+    assert archives.available
+    configuration = archives.configuration
+    assert (
+        configuration.bucket,
+        configuration.region,
+        configuration.expected_bucket_owner,
+        configuration.prefix,
+    ) == ("archive-bucket", "us-east-2", "123456789012", DELETION_ARCHIVE_PREFIX)
+    assert SECRET_ACCESS_KEY not in repr(configuration)
+
     client = MagicMock()
     client.generate_presigned_url.return_value = "https://s3.example/scoped-upload"
     sdk = MagicMock(return_value=client)
     monkeypatch.setattr(sandbox_archive.boto3, "client", sdk)
-    archives = S3SandboxArchiveStore.from_settings()
-    assert archives.available
-    sdk.assert_not_called()
     await archives.prepare_upload("sandbox-one", "request-one", DIGEST, SIZE)
     assert sdk.call_args.args == ("s3",)
     kwargs = sdk.call_args.kwargs
-    assert set(kwargs) == {"region_name", "endpoint_url", "config"}
+    assert set(kwargs) == {"region_name", "config", "aws_access_key_id", "aws_secret_access_key"}
     assert kwargs["region_name"] == "us-east-2"
-    assert kwargs["endpoint_url"] == "https://s3.example"
+    assert kwargs["aws_access_key_id"] == ACCESS_KEY_ID
+    assert kwargs["aws_secret_access_key"] == SECRET_ACCESS_KEY
     assert kwargs["config"].signature_version == "s3v4"
-    assert kwargs["config"].s3["addressing_style"] == "path"
+
+
+async def test_a_policy_without_an_access_key_uses_the_standard_aws_chain(monkeypatch):
+    workload = policy(
+        aws_access_key_id="",
+        aws_secret_access_key="",
+        kms_key_arn="arn:aws:kms:us-east-2:123456789012:key/example-key",
+        expected_bucket_owner="123456789012",
+    )
+    archives = S3SandboxArchiveStore(SandboxArchiveConfiguration.from_policy(workload))
+    client = MagicMock()
+    client.generate_presigned_url.return_value = "https://s3.example/scoped-upload"
+    sdk = MagicMock(return_value=client)
+    monkeypatch.setattr(sandbox_archive.boto3, "client", sdk)
+    await archives.prepare_upload("sandbox-one", "request-one", DIGEST, SIZE)
+    assert set(sdk.call_args.kwargs) == {"region_name", "config"}
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        policy(enabled=False),
+        SandboxArchivePolicy(),
+        # A stored policy that does not parse, or whose key does not open.
+        SandboxArchivePolicyError("stored AWS secret access key could not be decrypted"),
+    ],
+)
+async def test_a_disabled_or_unreadable_policy_leaves_deletion_archives_unavailable(stored):
+    archives = await S3SandboxArchiveStore.for_deployment(PolicySource(stored))
+    assert not archives.available
+    assert archives.configuration == SandboxArchiveConfiguration()
 
 
 async def test_head_attests_checksum_and_size_and_returns_a_durable_receipt():
@@ -212,9 +271,10 @@ async def test_head_failure_cannot_return_a_receipt_or_echo_provider_sensitive_t
     "key",
     [
         "other-prefix/sandbox-one/request-one/archive.tar",
-        "sandbox-archives/sandbox-one/request-one/other-object",
-        "sandbox-archives/sandbox-one/extra/request-one/archive.tar",
-        "sandbox-archives/../request-one/archive.tar",
+        "cloud-agent/sandbox/sandbox-one/request-one/archive.tar",
+        f"{DELETION_ARCHIVE_PREFIX}/sandbox-one/request-one/other-object",
+        f"{DELETION_ARCHIVE_PREFIX}/sandbox-one/extra/request-one/archive.tar",
+        f"{DELETION_ARCHIVE_PREFIX}/../request-one/archive.tar",
         "s3://user:secret@archive-bucket/sandbox-one/request-one/archive.tar",
         f"s3://archive-bucket/{KEY}?secret=value",
         f"s3://archive-bucket/{KEY}#fragment",
@@ -238,63 +298,18 @@ async def test_persisted_receipt_keeps_original_bucket_and_key_when_settings_cha
     assert receipt.bucket == "original-bucket"
 
 
-@pytest.mark.parametrize(
-    ("key", "value"),
-    [
-        ("sandbox_archive.bucket", "s3://archive-bucket"),
-        ("sandbox_archive.bucket", "127.0.0.1"),
-        ("sandbox_archive.bucket", "invalid..bucket"),
-        ("sandbox_archive.region", "region with spaces"),
-        ("sandbox_archive.endpoint", "http://s3.example"),
-        ("sandbox_archive.endpoint", "https://s3.example?secret=value"),
-        ("sandbox_archive.prefix", "prefix/../elsewhere"),
-        ("sandbox_archive.prefix", "prefix//elsewhere"),
-    ],
-)
-def test_archive_settings_refuse_unsafe_or_unusable_values(key, value):
-    with pytest.raises(ValueError, match="Invalid value for"):
-        settings.encode_changes({key: value})
-
-
-def test_bucket_uri_error_explains_separate_settings_without_echoing_the_input():
-    uri = "s3://archive-bucket/private-prefix?credential=sensitive-value"
-    with pytest.raises(ValueError, match="Use a bucket name") as error:
-        settings.encode_changes({"sandbox_archive.bucket": uri})
-    assert "Sandbox archive S3 prefix" in str(error.value)
-    assert uri not in str(error.value)
-    assert "sensitive-value" not in str(error.value)
-
-
-async def test_canonical_destination_patch_preserves_bucket_and_prefix_through_verification():
-    destination = {
-        "sandbox_archive.bucket": "freeinference",
-        "sandbox_archive.prefix": "cloud-agent/sandbox",
-    }
-    encoded = settings.encode_changes(destination)
-    settings.apply_settings(1, encoded)
-    assert all(
-        settings.settings_response(1, encoded)["values"][key] == value
-        for key, value in destination.items()
-    )
-    client = MagicMock()
-    client.generate_presigned_url.return_value = "https://s3.example/scoped-upload"
-    client.head_object.return_value = {"ContentLength": SIZE, "ChecksumSHA256": CHECKSUM}
-    archives = S3SandboxArchiveStore(SandboxArchiveConfiguration.from_settings(), client=client)
-    key = "cloud-agent/sandbox/sandbox-one/request-one/archive.tar"
-    upload = await archives.prepare_upload("sandbox-one", "request-one", DIGEST, SIZE)
-    assert upload.key == key
-    assert client.generate_presigned_url.call_args.kwargs["Params"]["Bucket"] == "freeinference"
-    receipt = await archives.verify_archive(upload.key, DIGEST, SIZE)
+async def test_the_policy_bucket_owner_is_asserted_on_its_own_bucket_only():
+    archives, client = store(expected_bucket_owner="123456789012")
+    await archives.verify_archive(KEY, DIGEST, SIZE)
     client.head_object.assert_called_once_with(
-        Bucket="freeinference", Key=key, ChecksumMode="ENABLED"
+        Bucket="archive-bucket",
+        Key=KEY,
+        ChecksumMode="ENABLED",
+        ExpectedBucketOwner="123456789012",
     )
-    assert receipt.archive_uri == f"s3://freeinference/{key}"
-
-
-def test_saved_configuration_wins_over_later_environment_changes(monkeypatch):
-    monkeypatch.setenv("AGENT_SANDBOX_ARCHIVE_S3_BUCKET", "initial-bucket")
-    settings.apply_settings(1, settings.initial_settings())
-    monkeypatch.setenv("AGENT_SANDBOX_ARCHIVE_S3_BUCKET", "later-environment-bucket")
-    assert S3SandboxArchiveStore.from_settings().configuration.bucket == "initial-bucket"
-    settings.apply_settings(2, settings.encode_changes({"sandbox_archive.bucket": "saved-bucket"}))
-    assert S3SandboxArchiveStore.from_settings().configuration.bucket == "saved-bucket"
+    client.head_object.reset_mock()
+    old_key = "sandbox-archives/sandbox-one/request-one/archive.tar"
+    await archives.verify_archive(f"s3://original-bucket/{old_key}", DIGEST, SIZE)
+    client.head_object.assert_called_once_with(
+        Bucket="original-bucket", Key=old_key, ChecksumMode="ENABLED"
+    )

@@ -26,7 +26,7 @@
     },
     {
       "files": ["src/app/(agents)/admin/settings/page.test.tsx"],
-      "rules": { "max-lines": ["error", { "max": 2281 }] }
+      "rules": { "max-lines": ["error", { "max": 2186 }] }
     },
     {
       "files": ["src/app/(agents)/admin/hosts/ComputeResources.test.tsx"],
@@ -55,10 +55,6 @@
     {
       "files": ["src/app/(agents)/admin/hosts/capacity.test.ts"],
       "rules": { "max-lines": ["error", { "max": 1354 }] }
-    },
-    {
-      "files": ["src/app/(agents)/admin/settings/ApplicationSettings.test.tsx"],
-      "rules": { "max-lines": ["error", { "max": 1252 }] }
     },
     {
       "files": ["src/components/features/agents/sidebar/SidebarNavigation.test.tsx"],

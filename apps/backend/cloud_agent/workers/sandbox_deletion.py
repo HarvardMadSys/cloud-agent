@@ -31,7 +31,7 @@ from cloud_agent.sandbox_manager.sandbox_manager_routing import (
 from cloud_agent.schemas.capacity_protocol import FRESH_AFTER_SECONDS
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from cloud_agent.ports import HostPoolRepository, SandboxRepository
     from cloud_agent.ports.sandbox import DeletionFailureDecision
@@ -346,7 +346,7 @@ class _Attempt:
 async def delete_one_archived_sandbox(
     store: _DeletionStorage,
     *,
-    archive_factory: Callable[[], S3SandboxArchiveStore] = S3SandboxArchiveStore.from_settings,
+    archive_factory: Callable[[], Awaitable[S3SandboxArchiveStore]] | None = None,
 ) -> bool:
     """Process one fenced request, retaining archives across interrupted deletion.
 
@@ -368,7 +368,10 @@ async def delete_one_archived_sandbox(
         if attempt.discarding:
             await _discard(attempt)
         else:
-            await _archive_and_delete(attempt, archive_factory)
+            await _archive_and_delete(
+                attempt,
+                archive_factory or (lambda: S3SandboxArchiveStore.for_deployment(store.host_pool)),
+            )
     except BaseException as cause:
         await _record_failure(attempt, cause)
         if not isinstance(cause, Exception):
@@ -429,7 +432,7 @@ async def _discard(attempt: _Attempt) -> None:
 
 
 async def _archive_and_delete(
-    attempt: _Attempt, archive_factory: Callable[[], S3SandboxArchiveStore]
+    attempt: _Attempt, archive_factory: Callable[[], Awaitable[S3SandboxArchiveStore]]
 ) -> None:
     """Archive the container to S3, verify and record the archive, then delete it."""
     store, claim, fence = attempt.store, attempt.claim, attempt.fence
@@ -452,9 +455,9 @@ async def _archive_and_delete(
         attempt.cleanup_outcome = "pending"
         await attempt.reach("cleanup_abort", cleanup_outcome=attempt.cleanup_outcome)
         raise ValueError("Sandbox archive cleanup is waiting for the host.")
-    archives = archive_factory()
+    archives = await archive_factory()
     if not archives.available:
-        raise ValueError("S3 sandbox archive storage is not configured.")
+        raise ValueError("Sandbox archives are not enabled.")
     verified = claim["deletion_state"] == "archived"
     archive_location = claim.get("deletion_archive_key") if verified else None
     key = (
@@ -739,18 +742,22 @@ async def _record_failure(attempt: _Attempt, cause: BaseException) -> None:
 async def retire_deleted_session_sandboxes(
     store: _DeletionStorage,
     *,
-    archive_available: Callable[[], bool] = lambda: S3SandboxArchiveStore.from_settings().available,
+    archive_available: Callable[[], Awaitable[bool]] | None = None,
     limit: int = DELETED_SESSIONS_BATCH,
 ) -> int:
     """Stop, then queue deletion of, each sandbox whose every chat was deleted.
 
     A running sandbox is asked to stop first; a later pass finds it stopped.
     Deletion then takes the administrator's path: archived to S3 first when
-    this deployment has an archive bucket, discarded otherwise. Database
-    records are kept either way. Returns how many requests were accepted.
+    this deployment's sandbox archives are enabled, discarded otherwise.
+    Database records are kept either way. Returns how many requests were
+    accepted.
     """
     accepted = 0
-    discard = not archive_available()
+    if archive_available is None:
+        discard = not (await S3SandboxArchiveStore.for_deployment(store.host_pool)).available
+    else:
+        discard = not await archive_available()
     for row in await store.sandbox.sandboxes_of_deleted_sessions(limit=limit):
         if row["state"] == "running":
             result = await store.sandbox.request_deleted_sessions_stop(

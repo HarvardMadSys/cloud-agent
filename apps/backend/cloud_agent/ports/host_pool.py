@@ -16,6 +16,8 @@ if TYPE_CHECKING:
     from datetime import datetime
     from uuid import UUID
 
+    from cloud_agent_shared.sandbox_archive_settings import SandboxArchivePolicy
+
 
 class HostPoolRepository(Protocol):
     """Port: the runner-host pool and its enrollment."""
@@ -524,6 +526,10 @@ class HostPoolRepository(Protocol):
 
     async def sandbox_archive_settings(self) -> dict[str, Any]:
         """Return the normalized deployment-wide archive policy and its timestamp."""
+        ...
+
+    async def sandbox_archive_policy(self) -> SandboxArchivePolicy:
+        """The stored archive policy, its access key opened; raises on one it cannot read."""
         ...
 
     async def set_sandbox_archive_settings(
