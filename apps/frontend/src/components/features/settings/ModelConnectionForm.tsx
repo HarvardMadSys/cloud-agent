@@ -8,6 +8,7 @@ import {
   invalidFields,
   MAX_MODELS,
   refusedModels,
+  takenModel,
   updateModelConnection,
   type ModelConnection,
   type ModelStatus,
@@ -47,6 +48,9 @@ function failureMessage(cause: unknown, t: Translate): string {
     if (cause.code === 'model_connection_check_limit') return t('connections.limited');
     if (cause.code === 'model_connection_changed') return t('connections.changed');
     if (cause.code === 'model_connection_name_taken') return t('connections.nameTaken');
+    const taken = takenModel(cause);
+    if (cause.code === 'model_connection_model_taken' && taken)
+      return t('connections.modelTaken', { model: taken.model, name: taken.connection });
     if (cause.code === 'model_connection_verification_timeout') return t('connections.timedOut');
   }
   return t('connections.error');

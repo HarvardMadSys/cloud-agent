@@ -77,6 +77,8 @@ export const modelConnectionsEn = {
   'connections.changed':
     'The connection changed while this was being saved. Nothing was saved; try again.',
   'connections.nameTaken': 'You already have a connection with this name.',
+  'connections.modelTaken':
+    '{model} is already on your connection {name}. A model can be on only one of your connections; remove it there first.',
   'connections.enabled': 'Enabled',
   'connections.disabled': 'Disabled',
   'connections.enable': 'Enable',
@@ -195,6 +197,8 @@ export const modelConnectionsZhCN: Record<keyof typeof modelConnectionsEn, strin
   'connections.limited': '过去一小时内验证次数过多，未保存任何内容，请稍后再试。',
   'connections.changed': '保存期间连接已被修改，未保存任何内容，请重试。',
   'connections.nameTaken': '已有同名的连接。',
+  'connections.modelTaken':
+    '{model} 已经在你的连接「{name}」里了。同一个模型只能放在一个连接里，请先从那边删掉。',
   'connections.enabled': '已启用',
   'connections.disabled': '已停用',
   'connections.enable': '启用',

@@ -101,6 +101,15 @@ export function refusedModels(cause: unknown): ModelStatus[] | null {
   return Array.isArray(models) ? (models as ModelStatus[]) : null;
 }
 
+/** The model a refused save named as already listed elsewhere, and where; `null` otherwise. */
+export function takenModel(cause: unknown): { model: string; connection: string } | null {
+  if (!(cause instanceof APIError)) return null;
+  const taken = cause.details?.taken as { model?: unknown; connection?: unknown } | undefined;
+  return typeof taken?.model === 'string' && typeof taken.connection === 'string'
+    ? { model: taken.model, connection: taken.connection }
+    : null;
+}
+
 /** The fields a refused request named (`base_url`, `models.0`…); `null` for other failures. */
 export function invalidFields(cause: unknown): string[] | null {
   if (!(cause instanceof APIError)) return null;
@@ -112,13 +121,15 @@ interface ErrorBody {
   models?: unknown;
   fields?: { field?: unknown }[];
   budget?: unknown;
+  taken?: { model?: unknown; connection?: unknown };
 }
 
 /**
  * `jsonOrThrow`, keeping what a refusal adds: each model's result from a
  * refused verification, which fields an invalid request named (never the
- * values), and what a provided connection that could not be enabled still
- * lacks (the `models` without prices, and whether its `budget`). The shared
+ * values), which model a save found already listed elsewhere (`taken`), and
+ * what a provided connection that could not be enabled still lacks (the
+ * `models` without prices, and whether its `budget`). The shared
  * error parser keeps only the type and the message.
  */
 export async function connectionJson<T>(resp: Response): Promise<T> {
@@ -143,6 +154,9 @@ export async function connectionJson<T>(resp: Response): Promise<T> {
         extra.fields = error.fields.map((item) => String(item?.field ?? ''));
       }
       if (typeof error.budget === 'boolean') extra.budget = error.budget;
+      if (typeof error.taken?.model === 'string' && typeof error.taken.connection === 'string') {
+        extra.taken = { model: error.taken.model, connection: error.taken.connection };
+      }
       cause.details = { ...(cause.details ?? {}), ...extra };
     }
     throw cause;

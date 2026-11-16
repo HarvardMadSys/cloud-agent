@@ -225,6 +225,23 @@ def clean_models(values: list[str]) -> list[str]:
     return models
 
 
+def taken_model(
+    models: list[str], others: list[dict[str, Any]], *, other_than: str = ""
+) -> tuple[str, str] | None:
+    """The first of ``models`` another connection already lists, with that connection's name.
+
+    A model id is listed once among an owner's own connections, and once among
+    the connections a deployment provides, so a picker never shows one name
+    twice. ``others`` are the live connections of the same kind; ``other_than``
+    is the one being edited.
+    """
+    for model in models:
+        for row in others:
+            if row["id"] != other_than and model in (row.get("models") or []):
+                return model, str(row["name"])
+    return None
+
+
 def is_connection_id(value: object) -> bool:
     """Whether ``value`` has the shape of a connection id."""
     return isinstance(value, str) and CONNECTION_ID.fullmatch(value) is not None
@@ -368,6 +385,7 @@ __all__ = [
     "model_paths",
     "require_usable",
     "supported_protocols",
+    "taken_model",
     "usable_runtimes",
     "verified_protocols",
 ]

@@ -4474,6 +4474,15 @@ and, optionally, `input_cache_reads` and `input_cache_writes`, in US dollars
 per million tokens, as an inference gateway of the hybridInference family
 lists them. A model listed without them is recorded by its tokens alone.
 
+**One model, one source.** A model ID is offered by one provided connection at
+most: a save, a new key or **Read models again** whose listing adds a model
+another provided connection already lists is refused, and nothing changes.
+Limit the keys at the provider so that they do not overlap. An owner's own
+connections follow the same rule among themselves. Where an owner's enabled
+connection of their own offers a model the deployment also provides, the
+owner chose their own key for it: the composer lists theirs, and the
+deployment's copy is not offered to that owner. Other owners still see it.
+
 **What a request records.** When an answer ends, the relay reads the usage
 record the provider put in it (the three inference APIs each carry one, in a
 stream on its last events) and adds the tokens, and what they cost at the

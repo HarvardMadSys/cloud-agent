@@ -5,10 +5,13 @@ import { findSource, isProvidedId, ownConnections, providedSources } from './pro
 // Where a model runs is part of the choice, not a detail of it.
 //
 // Each of the owner's connections is a separate source, and so is each
-// connection the deployment provides. The same model id may be offered by
-// several of them: `gpt-5` on two keys bills two accounts, and on a provided
-// source it is the deployment's key instead. So a choice is always
-// the pair, and two choices are equal only when both halves are. Drafts,
+// connection the deployment provides. A model id is listed once: a save that
+// would put one on two of the owner's connections, or on two provided ones,
+// is refused, and a provided model the owner also has on their own connection
+// is not offered to them. Connections saved before that rule may still list
+// one id twice (`gpt-5` on two keys bills two accounts), so a choice is still
+// the pair, and two choices are equal only when both halves are; the label
+// names the source only then. Drafts,
 // requests and API state keep the two fields as they are; the encoded key
 // below exists only so a picker, which deals in strings, can tell two
 // same-named options apart.

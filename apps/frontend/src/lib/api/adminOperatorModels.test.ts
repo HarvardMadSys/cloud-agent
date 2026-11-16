@@ -12,7 +12,7 @@ import {
   updateOperatorModelConnection,
 } from './adminOperatorModels';
 import * as client from './client';
-import { invalidFields, refusedModels } from './modelConnections';
+import { invalidFields, refusedModels, takenModel } from './modelConnections';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -172,6 +172,28 @@ describe('admin provided-model connections client', () => {
     expect(cause).toBeInstanceOf(APIError);
     expect(refusedModels(cause)).toEqual(models);
     expect(invalidFields(cause)).toBeNull();
+  });
+
+  it('keeps which model a refused save found already provided, and where', async () => {
+    answer(
+      {
+        detail: {
+          error: {
+            type: 'operator_model_model_taken',
+            message: 'glm is already provided by Campus.',
+            taken: { model: 'glm', connection: 'Campus' },
+          },
+        },
+      },
+      409,
+    );
+    const cause = await createOperatorModelConnection({
+      name: 'House models',
+      base_url: 'https://api.example.com/v1',
+      api_key: 'sk-test',
+    }).catch((error: unknown) => error);
+    expect(takenModel(cause)).toEqual({ model: 'glm', connection: 'Campus' });
+    expect(takenModel(new APIError('other', 'raw', 409))).toBeNull();
   });
 
   it('keeps which fields an invalid request named, never their values', async () => {

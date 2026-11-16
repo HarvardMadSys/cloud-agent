@@ -29,7 +29,10 @@ from tests.unit.test_model_connection_compat_check import _KEY as PROVIDER_KEY, 
 
 from cloud_agent.app import create_app
 from cloud_agent.application import model_connection_check
-from cloud_agent.application.model_connections import model_connection_cipher
+from cloud_agent.application.model_connections import (
+    model_connection_cipher,
+    new_connection_id,
+)
 from cloud_agent.bootstrap.identity import attach_owner_directory, bind_identity_source
 from cloud_agent.settings import reset_settings
 from cloud_agent.storage.assembly import Storage
@@ -217,6 +220,32 @@ async def _connect(state, *, client=None, name="My FreeInference", base_url=_BAS
     assert len(calls) == 2, "Readiness must include the streamed tool result round trip"
     assert all(str(request.url) == view["base_url"] + "/chat/completions" for request in calls)
     return view
+
+
+async def _saved_before_one_name_rule(state, source: dict[str, Any], *, name: str, base_url: str):
+    """A second connection listing ``source``'s model, as one saved before that was refused.
+
+    A save now refuses a model another of the owner's connections lists, but
+    rows from before that rule can still list one id twice. Copied in the
+    database, with its verification, so the composer treats it as ready.
+    """
+    connection_id = new_connection_id()
+    async with state.pool.acquire() as db:
+        await db.execute(
+            """
+            INSERT INTO agent_model_connections
+                (id, user_id, name, base_url, models, api_key_ciphertext,
+                 credential_revision, config_revision, enabled, model_checks)
+            SELECT $2, user_id, $3, $4, models, api_key_ciphertext,
+                   credential_revision, config_revision, enabled, model_checks
+            FROM agent_model_connections WHERE id = $1
+            """,
+            source["id"],
+            connection_id,
+            name,
+            base_url,
+        )
+    return {"id": connection_id, "name": name}
 
 
 async def _config(client):
@@ -430,7 +459,9 @@ async def test_unusable_selected_source_never_falls_back_to_another_same_name_mo
     owner = await _login(state)
     await _approve(state, owner)
     selected = await _connect(state)
-    alternative = await _connect(state, name="Same model elsewhere", base_url=_OTHER_BASE)
+    alternative = await _saved_before_one_name_rule(
+        state, selected, name="Same model elsewhere", base_url=_OTHER_BASE
+    )
     created = await _create_job(client, selected["id"])
     assert created.status_code == 201, created.text
     if unavailable == "disabled":

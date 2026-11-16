@@ -238,6 +238,22 @@ describe('adding a connection', () => {
     expect(screen.getByLabelText('API key')).toHaveValue('private-provider-key');
   });
 
+  it('names the model another of the owner’s connections already lists', async () => {
+    vi.mocked(api.createModelConnection).mockRejectedValue(
+      new APIError('model_connection_model_taken', 'raw', 409, {
+        taken: { model: 'm1', connection: 'Work key' },
+      }),
+    );
+    renderSettings();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add connection' }));
+    fillNew(['m1']);
+    fireEvent.click(screen.getByRole('button', { name: 'Verify and save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'm1 is already on your connection Work key.',
+    );
+    expect(screen.getByLabelText('API key')).toHaveValue('private-provider-key');
+  });
+
   it('adds model IDs from the keyboard and caps them at the server limit', async () => {
     vi.mocked(api.listModelConnections).mockResolvedValue({
       configured: true,
