@@ -1728,8 +1728,8 @@ async def test_deletion_with_an_archive_follows_the_sandbox_archive_policy(enabl
     stored = SandboxArchivePolicy(
         enabled=enabled,
         region="us-east-2",
-        aws_access_key_id="AKIAEXAMPLEEXAMPLE00",
-        aws_secret_access_key="example/secret+access/key=example0000000",
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
     )
     store = SimpleNamespace(
         host_pool=SimpleNamespace(sandbox_archive_policy=AsyncMock(return_value=stored))

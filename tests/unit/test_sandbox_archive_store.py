@@ -32,8 +32,8 @@ DIGEST = hashlib.sha256(b"archive").hexdigest()
 CHECKSUM = base64.b64encode(bytes.fromhex(DIGEST)).decode("ascii")
 SIZE = 7
 KEY = "cloud-agent/sandbox/deletion/sandbox-one/request-one/archive.tar"
-ACCESS_KEY_ID = "AKIAEXAMPLEEXAMPLE00"
-SECRET_ACCESS_KEY = "example/secret+access/key=example0000000"
+ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
 
 def policy(**values) -> SandboxArchivePolicy:
