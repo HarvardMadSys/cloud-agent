@@ -87,6 +87,7 @@ export function AccountMenu({ variant }: { variant: 'sidebar' | 'header' }) {
   const submenuPanel = useRef<HTMLDivElement>(null);
   const submenuParents = useRef<Partial<Record<Submenu, HTMLButtonElement | null>>>({});
   const [open, setOpen] = useState(false);
+  const focusFirstOnOpen = useRef(false);
   const [submenu, setSubmenu] = useState<Submenu | null>(null);
   // Whether opening the submenu should move focus into it: yes from the
   // keyboard, no when the pointer merely passes over its parent.
@@ -129,7 +130,13 @@ export function AccountMenu({ variant }: { variant: 'sidebar' | 'header' }) {
     let top = above ? anchor.top - height - 6 : anchor.bottom + 6;
     top = Math.max(EDGE, Math.min(top, window.innerHeight - height - EDGE));
     setMenuPosition({ left, top });
-    menu.current.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    // Pointer opening gives the panel keyboard control without highlighting a
+    // row the pointer has never visited. Keyboard opening starts on a row.
+    if (focusFirstOnOpen.current) {
+      menu.current.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    } else {
+      menu.current.focus({ preventScroll: true });
+    }
   }, [open]);
 
   // Beside its parent item: to the right when it fits, else to the left, else
@@ -221,7 +228,11 @@ export function AccountMenu({ variant }: { variant: 'sidebar' | 'header' }) {
         ? 0
         : key === 'End'
           ? items.length - 1
-          : (current + (key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+          : current < 0
+            ? key === 'ArrowDown'
+              ? 0
+              : items.length - 1
+            : (current + (key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
     items[next].focus();
   }
 
@@ -290,10 +301,18 @@ export function AccountMenu({ variant }: { variant: 'sidebar' | 'header' }) {
         aria-expanded={open}
         aria-label={label ? `${t('nav.account')}: ${label}` : t('nav.account')}
         title={t('nav.account')}
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={(event) => {
+          if (open) {
+            close();
+          } else {
+            focusFirstOnOpen.current = event.detail === 0;
+            setOpen(true);
+          }
+        }}
         onKeyDown={(event) => {
           if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
             event.preventDefault();
+            focusFirstOnOpen.current = true;
             setOpen(true);
           }
         }}
@@ -317,12 +336,13 @@ export function AccountMenu({ variant }: { variant: 'sidebar' | 'header' }) {
             <div
               ref={menu}
               role="menu"
+              tabIndex={-1}
               aria-label={t('nav.account')}
               style={{
                 width: Math.min(MENU_WIDTH, window.innerWidth - EDGE * 2),
                 ...(menuPosition ?? { left: -9999, top: -9999 }),
               }}
-              className={PANEL}
+              className={`${PANEL} outline-none`}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') {
                   event.preventDefault();

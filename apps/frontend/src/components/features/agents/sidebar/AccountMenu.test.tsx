@@ -338,6 +338,25 @@ describe('account menu', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it('focuses the panel on a pointer click, then lets the keyboard enter either end', async () => {
+    renderMenu();
+    const trigger = await screen.findByRole('button', { name: 'Account menu: Ada Lovelace' });
+    fireEvent.click(trigger, { detail: 1 });
+    const menu = screen.getByRole('menu', { name: 'Account menu' });
+    expect(menu).toHaveFocus();
+    expect(within(menu).getByRole('menuitem', { name: 'My Settings' })).not.toHaveFocus();
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(within(menu).getByRole('menuitem', { name: 'My Settings' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger, { detail: 1 });
+    const reopened = screen.getByRole('menu', { name: 'Account menu' });
+    fireEvent.keyDown(reopened, { key: 'ArrowUp' });
+    expect(within(reopened).getByRole('menuitem', { name: 'Log out' })).toHaveFocus();
+  });
+
   it('moves focus into a submenu clicked after the pointer opened it, and no further', async () => {
     localStorage.setItem(THEME_STORAGE_KEY, 'dark');
     renderMenu();
