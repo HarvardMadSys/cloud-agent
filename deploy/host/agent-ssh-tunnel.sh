@@ -59,8 +59,10 @@ die() { printf '[agent-ssh-tunnel] ERROR: %s\n' "$*" >&2; exit 1; }
 # every host, and only a host that names its relay uses it. Exiting would only
 # restart it forever. Every other tunnel is required.
 if [ -z "${TUNNEL_SSH_DESTINATION:-}" ] && [ "${TUNNEL_OPTIONAL:-}" = "1" ]; then
-    printf '[agent-ssh-tunnel] no destination configured; idle\n'
+    # The handler goes first: a stop that arrives as soon as the line below is
+    # read must still end the wait cleanly, not kill the shell with SIGTERM.
     trap 'exit 0' TERM INT
+    printf '[agent-ssh-tunnel] no destination configured; idle\n'
     while :; do
         sleep 3600 &
         wait $!
