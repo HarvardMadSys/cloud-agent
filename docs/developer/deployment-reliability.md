@@ -53,6 +53,29 @@ never killed or replayed. Migration `0051_host_drain_fence_epoch` and the
 activation. The V1 marker remains only for an older orchestrator performing the
 bridge upgrade.
 
+### Reaching the fence without a credential
+
+The orchestrator can read the pool and acquire and release the fence through
+the admin API (`GET /admin/agent/runner-hosts`, `POST …/<host>/drain` and
+`…/undrain`), which needs `ADMIN_TOKEN`. On the control-plane machine it can
+instead run the same three operations in the control-plane container, which
+already holds the database credential, so the deployment needs no static
+administrator credential:
+
+```bash
+docker exec <project>-control-plane-1 python -m cloud_agent.deployment.host_fence snapshot
+docker exec -i <project>-control-plane-1 python -m cloud_agent.deployment.host_fence drain <host> < acquire.json
+docker exec -i <project>-control-plane-1 python -m cloud_agent.deployment.host_fence undrain <host> < release.json
+```
+
+`drain` and `undrain` read the API's request body on standard input, never as
+arguments, since any process on the machine can read those. Every command
+prints the document `GET /admin/agent/runner-hosts` returns. A refusal prints
+`{"status", "code", "detail"}` on standard error, with the status the API
+would answer, and exits 2. The audit trail records `agent.runner_host.drain`
+and `agent.runner_host.undrain` with the actor `service:deployment-drain`, as
+automation rather than break-glass access.
+
 ## Before stopping a serving runner
 
 Source and artifact deployments resolve the candidate runner image through

@@ -32,6 +32,7 @@ from tests.support.storage import AllCapabilities
 
 from cloud_agent.api import admin_hosts, hosts
 from cloud_agent.api.deps import get_storage, verify_admin_access
+from cloud_agent.application import host_pool_view
 from cloud_agent.domain.host_pool import (
     HOST_DISABLED,
     HOST_DRAINING,
@@ -2534,7 +2535,7 @@ async def test_the_pool_listing_carries_the_new_fields(client):
     ],
 )
 def test_a_row_without_optional_pool_columns_still_renders(row):
-    item = admin_hosts._to_item(row)
+    item = host_pool_view.host_item(row)
 
     assert item.status == HOST_ONLINE
     assert item.enrolled is False

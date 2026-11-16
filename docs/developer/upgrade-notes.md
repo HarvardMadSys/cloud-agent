@@ -19,6 +19,18 @@ After migrating, start the main control-plane listener with its existing
 complete environment: it imports newly registered settings once, as described
 in [Admin Settings](operations.md#admin-settings).
 
+## Drain a host without `ADMIN_TOKEN`
+
+A deployment that drains a host around its rollout can now do it with
+`python -m cloud_agent.deployment.host_fence` in the control-plane container
+instead of the admin API, so it no longer needs `ADMIN_TOKEN`
+([how](deployment-reliability.md#reaching-the-fence-without-a-credential)).
+The running control plane is the one that answers a drain, so switch an
+orchestrator to the command only once every control plane it drains through
+runs this release. Then `ADMIN_TOKEN` can be removed, unless it is kept as the
+recovery door; without it, `python -m cloud_agent.accounts.bootstrap_admin`
+in the same container restores an administrator.
+
 ## No `.env` needed
 
 A control plane no longer needs a `.env`, and releases no longer ship
