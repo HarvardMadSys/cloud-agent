@@ -193,34 +193,34 @@ appear on the page with hidden values. See [the environment inventory](../../ENV
 
 ## Sandbox archive storage
 
-This section configures the archive required by the explicit **Archive to S3
-and delete** control. Automatic lifecycle archives use the separate policy
-under **Admin → Settings → Sandbox**, described in [Sandbox archives](#sandbox-archives).
+This section covers the archive the explicit **Archive to S3 and delete**
+control takes. It goes to the destination of the deployment's archive policy,
+the **Sandbox archives** card under **Admin → Settings → Sandbox** described in
+[Sandbox archives](#sandbox-archives), so one card configures both it and the
+automatic lifecycle archives. Deletion with an archive is available while that
+policy is enabled. While it is disabled, an administrator can only discard a
+sandbox, and a deleted chat's sandbox is retired without an archive.
 
-Configure **Admin → Settings → Application → Sandbox archives** before enabling stopped
-sandbox deletion. Set the S3 bucket and, optionally, its region, HTTPS
-S3-compatible endpoint and object prefix. The matching
-`AGENT_SANDBOX_ARCHIVE_S3_*` environment variables import once when these fields
-are first introduced; later environment changes do not override saved settings.
-An empty bucket leaves deletion unavailable.
+Each request's archive is one object,
+`s3://<bucket>/cloud-agent/sandbox/deletion/<sandbox>/<request>/archive.tar`,
+in the policy's bucket and region, next to the lifecycle archives under the
+same fixed prefix. The control plane signs its upload and verifies it with the
+policy's access key when one is saved. Without a saved key it uses the main
+control plane's standard AWS SDK credential chain, preferably an IAM workload
+role. That identity needs `s3:PutObject` and `s3:GetObject` on
+`arn:aws:s3:::<bucket>/cloud-agent/sandbox/deletion/*`; `HeadObject` uses
+`s3:GetObject`. The lifecycle grant on `cloud-agent/sandbox/*` in
+[Sandbox archives](#sandbox-archives) already includes both, so a saved access
+key that holds it needs nothing more. If the bucket applies SSE-KMS by default,
+also grant `kms:GenerateDataKey` and `kms:Decrypt` on its key, so the
+checksum-enabled `HeadObject` can verify the object. The policy's expected
+bucket owner, when set, is asserted on that `HeadObject`. The application does
+not need `s3:DeleteObject` for archive storage.
 
-The bucket field also accepts an S3 URI in the browser. Saving
-`s3://example-bucket/cloud-agent/sandbox` sets the bucket to `example-bucket`
-and the prefix to `cloud-agent/sandbox` in one update. A bucket-root URI clears the
-prefix; entering only a bucket name leaves the prefix unchanged. Direct API
-updates and initial environment imports require the bucket name and prefix in
-their separate settings.
-
-Provision the main control plane's AWS SDK credential chain, preferably with an
-IAM workload role. Its archive role needs `s3:PutObject` and `s3:GetObject` on the
-configured archive prefix; `HeadObject` uses `s3:GetObject`. If SSE-KMS is applied
-by the bucket, also grant the required KMS permissions, including
-`kms:GenerateDataKey` and `kms:Decrypt` so checksum-enabled HEAD can verify the
-object. The application does not need `s3:DeleteObject` for archive storage.
-Provision these manual-deletion credentials only on the main control plane;
-the owning sandbox manager receives a request-specific presigned upload URL. The base Compose
-does not forward AWS credential variables. For environment credentials, create
-a private override restricted to the main service, for example:
+A workload role is the preferred identity without a saved key. For environment
+or shared-profile credentials instead, the base Compose does not forward AWS
+credential variables: create a private override restricted to the main
+service, for example:
 
 ```yaml
 services:
@@ -235,15 +235,12 @@ Keep the override outside the checkout and set its absolute path as
 `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` in the deployment root's private
 `.env`. The deployer validates that it is a readable regular file and appends
 it after release-owned overlays for every stack operation in both source and
-artifact modes. Leaving the setting empty uses only the reviewed deployment
-files. For shared profiles, mount the credentials and configuration files read-only
-in this service and set `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE` and
-`AWS_PROFILE` to their container paths and selected profile. Use the saved
-archive region setting or provision `AWS_DEFAULT_REGION` in the same override.
-Apply these manual-deletion credential mounts and variables only to the main
-control plane. The automatic lifecycle archive policy separately uses the
-trusted sandbox manager's workload identity; neither path provides AWS
-credentials to sandbox containers, the web application or the MCP relay.
+artifact modes. For shared profiles, mount the credentials and configuration
+files read-only in this service and set `AWS_SHARED_CREDENTIALS_FILE`,
+`AWS_CONFIG_FILE` and `AWS_PROFILE` to their container paths and selected
+profile. A deployment whose policy has a saved access key needs no override.
+Neither path provides AWS credentials to sandbox containers, the web
+application or the MCP relay.
 
 The host receives a 15-minute presigned PUT for exactly one request object, with
 a fixed byte length, full-object SHA-256 checksum and `If-None-Match: *`. The
@@ -252,8 +249,7 @@ A retry may encounter HTTP 412 if the upload already succeeded. The control
 plane independently reads `HeadObject` with `ChecksumMode=ENABLED` and requires
 the exact service-verified SHA-256 and byte length before deletion can proceed.
 ETags, supplied metadata, missing checksums and composite checksums cannot
-substitute for that verification. S3-compatible storage must implement these
-conditional PUT and checksum semantics.
+substitute for that verification.
 
 Use a private bucket, block public access, and configure encryption, retention
 and recovery access for these archives. Conditional PUT prevents the issued
@@ -263,7 +259,8 @@ conditional writes, and versioning/Object Lock provide stronger protection
 against later administrative changes. Do not expire an archive while deletion
 or recovery may still depend on it. Persisted receipts include its original
 S3 URI, SHA-256, byte length and object version when available, so changing
-settings does not redirect verification of an existing deletion request.
+the policy's bucket does not redirect verification of an existing deletion
+request.
 
 ## Database browser
 
@@ -627,10 +624,11 @@ an offline host cannot complete it. New turns wait while the stop is pending.
 This action does not delete the container or reclaim its retained disk space.
 
 **Archive to S3 and delete** removes a stopped or dead, idle container after its
-complete retained filesystem has been uploaded and verified in S3. Configure
-the bucket, region, optional S3 endpoint, and object prefix under **Admin →
-Settings → Application → Sandbox archives**. [S3 storage setup](#sandbox-archive-storage)
-describes permissions, credential provisioning and compatible storage requirements.
+complete retained filesystem has been uploaded and verified in S3. It is
+available while the **Sandbox archives** policy under **Admin → Settings →
+Sandbox** is enabled, and archives to that policy's bucket.
+[S3 storage setup](#sandbox-archive-storage) describes the object key,
+permissions and credentials.
 
 Deletion blocks new turns, Fork, and workspace operations while the owning
 sandbox manager prepares the archive. The archive contains `manifest.json` and
@@ -2207,8 +2205,9 @@ flagged.
 #### Sandbox archives
 
 This policy captures automatic initial and final lifecycle archives. The
-explicit **Archive to S3 and delete** control has its own control-plane storage
-configuration, documented in [Sandbox archive storage](#sandbox-archive-storage).
+explicit **Archive to S3 and delete** control archives to the same bucket while
+the policy is enabled, under `cloud-agent/sandbox/deletion`; its upload and
+verification are described in [Sandbox archive storage](#sandbox-archive-storage).
 
 Use the **Sandbox archives** card under **Admin → Settings → Sandbox** to store
 the deployment-wide archive policy in the Agent database. Archives go to

@@ -15,7 +15,6 @@ from urllib.parse import SplitResult, urlsplit
 
 from pydantic import AnyHttpUrl, ValidationError
 
-from cloud_agent_shared.s3_bucket_name import is_s3_bucket_name
 from cloud_agent_shared.sandbox_manager_compat import STORED_SETTING_KEYS
 
 if TYPE_CHECKING:
@@ -207,25 +206,6 @@ def _web_url(value: str) -> SplitResult | None:
     ):
         return None
     return parsed
-
-
-def _s3_bucket(value: str) -> bool:
-    """Empty, or a name S3 accepts for a general purpose bucket."""
-    return not value or is_s3_bucket_name(value)
-
-
-def _s3_region(value: str) -> bool:
-    """Empty, or the shape of an AWS region name."""
-    return not value or bool(re.fullmatch(r"[a-z0-9-]{1,64}", value))
-
-
-def _s3_prefix(value: str) -> bool:
-    """Empty, or an object key prefix of plain, non-relative path segments."""
-    return not value or (
-        len(value.encode()) <= 512
-        and bool(re.fullmatch(r"[a-zA-Z0-9_./-]+", value))
-        and all(part and part not in {".", ".."} for part in value.split("/"))
-    )
 
 
 def _package_registry_url(value: str) -> bool:

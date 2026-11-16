@@ -8,8 +8,8 @@ queries with the row ``set_sandbox_archive_settings`` writes.
 
 A policy whose key opens is read as stored. One that does not parse, or whose
 key no longer opens, gets each reader's own answer: the claim, the autoscaler,
-queue health, move-out and environment snapshots refuse what the policy would
-allow; the heartbeat answer reads it again once the beat's own work is done and
+queue health, move-out, environment snapshots and deletion archives refuse what
+the policy would allow; the heartbeat answer reads it again once the beat's own work is done and
 fails there, as the admin read and write do.
 """
 
@@ -30,6 +30,7 @@ from tests.unit.test_autoscaling_archive_policy import (
     _observe,
 )
 
+from cloud_agent.sandbox_archive.sandbox_archive import S3SandboxArchiveStore
 from cloud_agent.sandbox_archive.sandbox_archive_credentials import (
     seal_archive_storage,
     stored_archive_policy,
@@ -280,6 +281,29 @@ async def test_environment_snapshots_are_on_only_under_a_policy_they_can_read(
 
     snapshots = PostgresEnvironmentSnapshotRepository(_pool(connection))
     assert await snapshots.enabled() is stored.readable
+
+
+async def test_the_store_read_opens_only_a_policy_it_can_read(stored: _Stored) -> None:
+    connection = SimpleNamespace(fetchrow=AsyncMock(return_value=stored.row))
+    read = PostgresHostPoolRepository(_pool(connection)).sandbox_archive_policy()
+
+    if stored.readable:
+        policy = await read
+        assert policy.equivalent(_POLICY)
+        assert policy.aws_secret_access_key == _SECRET
+    else:
+        with pytest.raises(SandboxArchivePolicyError):
+            await read
+
+
+async def test_deletion_archives_only_under_a_policy_it_can_read(stored: _Stored) -> None:
+    connection = SimpleNamespace(fetchrow=AsyncMock(return_value=stored.row))
+
+    archives = await S3SandboxArchiveStore.for_deployment(
+        PostgresHostPoolRepository(_pool(connection))
+    )
+    # A policy it cannot read leaves deletion with an archive unavailable.
+    assert archives.available is stored.readable
 
 
 #: Where the control plane parses a policy mapping, and why each may.

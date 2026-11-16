@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: HybridInference Cloud Agent \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-15 04:11-0500\n"
+"POT-Creation-Date: 2026-11-16 03:57-0500\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: The HybridInference contributors\n"
 "Language: zh_CN\n"
@@ -292,7 +292,7 @@ msgstr "给这台服务器单独保存的覆盖值；"
 msgid "the global value saved by an administrator;"
 msgstr "管理员保存的全局值；"
 
-#: ../../ENVIRONMENT.md:105 ../../ENVIRONMENT.md:473
+#: ../../ENVIRONMENT.md:105 ../../ENVIRONMENT.md:468
 msgid "the built-in default."
 msgstr "内置默认值。"
 
@@ -316,9 +316,8 @@ msgid ""
 "Configure automatic lifecycle archives only in **Admin → Settings → "
 "Sandbox**. Cloud Agent stores them as one revisioned policy in the Agent "
 "database, and no environment variable sets that policy or its "
-"destination. The `AGENT_SANDBOX_ARCHIVE_S3_*` variables under *Sandbox "
-"deletion archives* are a one-time import for the separate archive the "
-"**Archive to S3 and delete** control takes, and "
+"destination. The **Archive to S3 and delete** control uses the same "
+"policy: its bucket, region and saved access key. "
 "`AGENT_SANDBOX_ARCHIVE_STATE_DIR` is where a Sandbox Manager keeps the "
 "local state of both, restorable checkpoints included. Lifecycle archives "
 "go to `s3://<bucket>/cloud-agent/sandbox`, and the bucket defaults to "
@@ -331,20 +330,9 @@ msgid ""
 "through the standard AWS SDK credential chain. See [Sandbox "
 "archives](docs/developer/operations.md#sandbox-archives) for IAM, bucket "
 "versioning, rollout, and lifecycle semantics."
-msgstr ""
-"自动的生命周期归档只能在 **Admin → Settings → Sandbox** 里配置。Cloud Agent "
-"把它作为一份带修订号的策略存在 Agent 数据库里，这份策略和它的存放位置都没有环境变量可以设置。*沙箱删除前的归档* 下的 "
-"`AGENT_SANDBOX_ARCHIVE_S3_*` 变量只做一次性导入，用于另一种归档，也就是 **Archive to S3 and "
-"delete** 操作所做的那份；`AGENT_SANDBOX_ARCHIVE_STATE_DIR` 是 sandbox manager "
-"存放这两种归档本地状态的地方，可恢复的检查点也在其中。生命周期归档存放在 `s3://<bucket>/cloud-"
-"agent/sandbox`，桶默认是 `freeinference`。保存的策略包括：是否开启、桶、区域、上传大小的上限，以及一组 AWS "
-"访问密钥，或者 workload identity 相关的字段（客户自管的 KMS 密钥 ARN 和预期的桶所有者）。secret access "
-"key 用设置加密密钥加密保存，管理 API 不会返回它。不配置访问密钥时，sandbox manager 会通过标准的 AWS SDK "
-"凭据链，用部署本身的 workload identity "
-"认证。IAM、桶版本控制、上线步骤和生命周期规则，见[沙箱归档](docs/developer/operations.md#sandbox-"
-"archives)。"
+msgstr "自动的生命周期归档只能在 **Admin → Settings → Sandbox** 里配置。Cloud Agent 把它作为一份带修订号的策略存在 Agent 数据库里，这份策略和它的存放位置都没有环境变量可以设置。**Archive to S3 and delete** 操作用的也是这份策略：它的桶、区域和保存的访问密钥。`AGENT_SANDBOX_ARCHIVE_STATE_DIR` 是 sandbox manager 存放这两种归档本地状态的地方，可恢复的检查点也在其中。生命周期归档存放在 `s3://<bucket>/cloud-agent/sandbox`，桶默认是 `freeinference`。保存的策略包括：是否开启、桶、区域、上传大小的上限，以及一组 AWS 访问密钥，或者 workload identity 相关的字段（客户自管的 KMS 密钥 ARN 和预期的桶所有者）。secret access key 用设置加密密钥加密保存，管理 API 不会返回它。不配置访问密钥时，sandbox manager 会通过标准的 AWS SDK 凭据链，用部署本身的 workload identity 认证。IAM、桶版本控制、上线步骤和生命周期规则，见[沙箱归档](docs/developer/operations.md#sandbox-archives)。"
 
-#: ../../ENVIRONMENT.md:133
+#: ../../ENVIRONMENT.md:132
 msgid ""
 "The database also stores the control-plane runtime identity, "
 "signing/encryption keys, sandbox manager credentials, cookie/proxy "
@@ -360,7 +348,7 @@ msgstr ""
 "execution "
 "profile。升级时，主监听器只导入这次迁移新增、且当前缺失的字段，绝不覆盖已有的值（哪怕是被重置成空的值），中继会等导入完成。数据库始终绑定在账号系统上。已有的用户加密密钥和计算资源加密密钥，不能直接在设置编辑器里替换或重置，必须走单独的重新加密流程。"
 
-#: ../../ENVIRONMENT.md:142
+#: ../../ENVIRONMENT.md:141
 msgid ""
 "The Settings page identifies missing required fields and incomplete "
 "optional integrations. A new deployment's first administrator signs in "
@@ -374,7 +362,7 @@ msgstr ""
 "里把它们补齐。没有管理员能登录时，持有 `ADMIN_TOKEN` 的运维人员可以改为打开 `/setup`。setup "
 "页面用的是同一个带认证、带审计的设置 API。恢复令牌只保存在页面内存里，绝不会写进浏览器存储。"
 
-#: ../../ENVIRONMENT.md:150
+#: ../../ENVIRONMENT.md:149
 msgid ""
 "A new installation has no `.env` and no keys to invent. The values every "
 "control-plane process needs before it can read a setting — "
@@ -392,7 +380,7 @@ msgstr ""
 "中，每个值一个文件，只有读取它的用户可读。Compose 的 `keys` "
 "服务（`cloud_agent.deployment.deployment_keys`）先于任何需要这些值的服务运行："
 
-#: ../../ENVIRONMENT.md:158
+#: ../../ENVIRONMENT.md:157
 msgid ""
 "a value set in the environment or `.env` is stored there, so an existing "
 "deployment can delete those lines after one start on this release. A "
@@ -403,11 +391,11 @@ msgstr ""
 "环境或 `.env` "
 "中设置的值会被存入其中，因此已有部署在这个版本上启动一次之后就可以删掉这些行。设置根密钥例外：与已存的根密钥不同时，启动会停止，因为已存的根密钥可能是每个已保存秘密所需密钥的唯一副本；"
 
-#: ../../ENVIRONMENT.md:162
+#: ../../ENVIRONMENT.md:161
 msgid "a stored value is kept;"
 msgstr "已存的值保持不变；"
 
-#: ../../ENVIRONMENT.md:163
+#: ../../ENVIRONMENT.md:162
 msgid ""
 "a missing value is generated only while the bundled database volume holds"
 " no database. With an existing database, or `AGENT_DATABASE_URL` naming "
@@ -419,7 +407,7 @@ msgstr ""
 "指向别的数据库，启动会停下并指出需要设置什么；它绝不编造一个值。缺少设置根密钥只给出警告，因为老部署的 "
 "`AGENT_SESSION_SECRET` 可能由别处提供。"
 
-#: ../../ENVIRONMENT.md:169
+#: ../../ENVIRONMENT.md:168
 msgid ""
 "Every control-plane process fills each of those variables the environment"
 " leaves empty from its file when it imports `cloud_agent`, so `docker "
@@ -448,7 +436,7 @@ msgstr ""
 " 和 `AGENT_SANDBOX_MANAGER_TOKEN` 创建它的设置（server setup "
 "会把这个沙箱管理器凭据写入它部署的每台主机）；已有的设置行永远不会被赋予新值。"
 
-#: ../../ENVIRONMENT.md:183
+#: ../../ENVIRONMENT.md:182
 msgid ""
 "Keep bootstrap configuration in deployment files: database access; the "
 "settings encryption root (`AGENT_SETTINGS_ENCRYPTION_KEY`, with the "
@@ -464,11 +452,11 @@ msgstr ""
 " `AGENT_SESSION_SECRET`）；管理员的应急恢复访问（`ADMIN_TOKEN`）；主机注册和 sandbox manager "
 "的开通；网络；隧道和监听器；主机实际使用的隔离方式；镜像和构建的来源；挂载路径；以及受信任的计算资源部署配置。它们要么用来连上数据库，要么用来配置控制平面以外的进程。设置页面上会列出它们的名字，但不显示值。"
 
-#: ../../ENVIRONMENT.md:191
+#: ../../ENVIRONMENT.md:190
 msgid "The one rule"
 msgstr "唯一的硬性规定"
 
-#: ../../ENVIRONMENT.md:193
+#: ../../ENVIRONMENT.md:192
 msgid ""
 "The HybridInference Gateway's `API_KEY_SECRET` and `JWT_SECRET_KEY`, and "
 "its database credentials, must never appear in this repository, in its "
@@ -477,7 +465,7 @@ msgstr ""
 "HybridInference Gateway 的 `API_KEY_SECRET`、`JWT_SECRET_KEY` "
 "及其数据库凭据，绝不能出现在这个仓库里、它的配置里，或者任何运行它的主机上。"
 
-#: ../../ENVIRONMENT.md:197
+#: ../../ENVIRONMENT.md:196
 msgid ""
 "Cloud Agent keeps its own accounts and signs its own tokens with "
 "independent secrets; it has no Gateway dependency. A mail transport "
@@ -487,11 +475,11 @@ msgstr ""
 "Cloud Agent 维护自己的账号，用独立的密钥签发自己的令牌；它不依赖 "
 "Gateway。运维人员选择复用的邮件传输凭据（SMTP）属于配置，保存在运维人员的密钥存储中，绝不放进这个仓库。"
 
-#: ../../ENVIRONMENT.md:202
+#: ../../ENVIRONMENT.md:201
 msgid "Provisioning status"
 msgstr "开通状态"
 
-#: ../../ENVIRONMENT.md:204
+#: ../../ENVIRONMENT.md:203
 msgid ""
 "The original extraction provisioned staging on 2026-08-06 and production "
 "on 2026-08-07; [the cutover record](docs/agents/specs/cutover.md) "
@@ -501,7 +489,7 @@ msgstr ""
 "最初拆分仓库时，staging 在 2026-08-06 开通，production 在 2026-08-07 开通，这段历史记在 "
 "[cutover 记录](docs/agents/specs/cutover.md)里。这些日期说明不了现在的某套部署是否就绪。"
 
-#: ../../ENVIRONMENT.md:208
+#: ../../ENVIRONMENT.md:207
 msgid ""
 "This repository publishes neutral releases. As a downstream operator, you"
 " own your configuration, provisioning status, rollout record, and "
@@ -511,11 +499,11 @@ msgstr ""
 "这个仓库发布的是不绑定任何部署的中立版本。作为下游的运维方，你自己负责配置、开通状态、上线记录和恢复用的证据。secret 不要放进 "
 "Git，并且要和它保护的数据一起备份。"
 
-#: ../../ENVIRONMENT.md:212
+#: ../../ENVIRONMENT.md:211
 msgid "Local development tools"
 msgstr "本地开发工具"
 
-#: ../../ENVIRONMENT.md:214
+#: ../../ENVIRONMENT.md:213
 msgid ""
 "These values are read by local tooling and are not saved application "
 "settings."
@@ -543,15 +531,15 @@ msgstr ""
 "可选的输出目录，由运行 `scripts/ci-local.sh` 的开发者设置。默认每次运行都在仓库里新建一个 `.local-"
 "ci/<tier>.XXXXXX` 目录，已被 git 忽略。里面是检查日志和数据库测试的 JUnit 报告，不需要任何应用 secret。"
 
-#: ../../ENVIRONMENT.md:220
+#: ../../ENVIRONMENT.md:219
 msgid "Control plane (`cloud_agent`)"
 msgstr "控制平面（`cloud_agent`）"
 
-#: ../../ENVIRONMENT.md:222
+#: ../../ENVIRONMENT.md:221
 msgid "Local and CI permission regression"
 msgstr "本地和 CI 的权限回归测试"
 
-#: ../../ENVIRONMENT.md:224
+#: ../../ENVIRONMENT.md:223
 msgid ""
 "`AGENT_PERMISSION_TEST_IMAGE` enables the opt-in Linux UID regression in "
 "`tests/external/test_shared_member_permissions.py`. It names an already-"
@@ -563,7 +551,7 @@ msgstr ""
 "回归测试。它的值是一个已经拉取好的 Docker 镜像，里面要有 Python 3 和 GNU 的 `find`/`stat`，例如 "
 "`python:3.12-slim`。拉好镜像后运行："
 
-#: ../../ENVIRONMENT.md:234
+#: ../../ENVIRONMENT.md:233
 msgid ""
 "The test uses disposable containers without network access or mounts and "
 "runs the production normalizer as separate member UIDs without "
@@ -573,11 +561,11 @@ msgstr ""
 "测试用的是没有网络、没有挂载的一次性容器，以不同的成员 UID、不带任何 capability 的方式运行生产环境的权限规范化程序。CI "
 "会在部署前跑它；它不需要模型 API 密钥，也不依赖任何已部署服务的设置。"
 
-#: ../../ENVIRONMENT.md:238
+#: ../../ENVIRONMENT.md:237
 msgid "Local and CI restore regression"
 msgstr "本地和 CI 的恢复回归测试"
 
-#: ../../ENVIRONMENT.md:240
+#: ../../ENVIRONMENT.md:239
 msgid ""
 "`AGENT_RESTORE_TEST_IMAGE` names the base image for "
 "`tests/external/test_checkpoint_restore_roundtrip.py`, `python:3.12-slim`"
@@ -592,13 +580,13 @@ msgstr ""
 "那样停掉一个对话容器、存下检查点，再把检查点作为更新的一代加载出来，经过归档的启动栅栏把容器启动起来，全程用真实的 Docker，只有 S3 "
 "换成了本地文件。运行："
 
-#: ../../ENVIRONMENT.md:251
+#: ../../ENVIRONMENT.md:250
 msgid ""
 "CI runs it before deployment; it needs no S3 bucket, model API key or "
 "deployed-service setting."
 msgstr "CI 会在部署前跑它；它不需要 S3 桶、模型 API 密钥，也不依赖任何已部署服务的设置。"
 
-#: ../../ENVIRONMENT.md:254
+#: ../../ENVIRONMENT.md:253
 msgid "Database"
 msgstr "数据库"
 
@@ -664,11 +652,11 @@ msgstr ""
 "`postgres`。数据库名必须包含 `_test_`，否则夹具会拒绝。用 xdist 并行时，每个 worker 会在名字后面加上自己的 "
 "ID，并需要一个事先建好的数据库。CI 用 `-n 4` 跑，会建好 `<TEST_DB_NAME>_gw0`…`_gw3`。"
 
-#: ../../ENVIRONMENT.md:262
+#: ../../ENVIRONMENT.md:261
 msgid "pgAdmin database administration"
 msgstr "用 pgAdmin 管理数据库"
 
-#: ../../ENVIRONMENT.md:264
+#: ../../ENVIRONMENT.md:263
 msgid ""
 "The optional `pgadmin` Compose profile adds **Admin → Database → Open "
 "pgAdmin**. The private service has no published port. Every request "
@@ -815,7 +803,7 @@ msgstr ""
 "`False`。不管这个值如何，代理都会把 pgAdmin 的 cookie 限定在它的公开路由下，加上 HttpOnly 和 "
 "SameSite=Lax，并在 HTTPS 下要求 Secure。"
 
-#: ../../ENVIRONMENT.md:280
+#: ../../ENVIRONMENT.md:279
 msgid "Public addresses"
 msgstr "公开地址"
 
@@ -852,11 +840,11 @@ msgstr ""
 "新增。本 API 的公开基础地址，包括前缀，例如 `https://agents.example.org/api`。OAuth 回调（MCP "
 "登录、计算资源注册）都基于它构造。它取代了以前由 `AGENT_SESSION_REDIRECT_URI` 提供的地址。"
 
-#: ../../ENVIRONMENT.md:287
+#: ../../ENVIRONMENT.md:286
 msgid "Retired Gateway variables"
 msgstr "已退役的 Gateway 变量"
 
-#: ../../ENVIRONMENT.md:289
+#: ../../ENVIRONMENT.md:288
 msgid ""
 "HybridInference Gateway sign-in, admission and inference were removed. "
 "Each of these is refused: the control plane stops at startup naming it, "
@@ -952,7 +940,7 @@ msgstr "~~`IDENTITY_JWT_RETIRING_PUBLIC_KEYS`~~"
 msgid "~~`IDENTITY_ALLOWED_REDIRECTS`~~"
 msgstr "~~`IDENTITY_ALLOWED_REDIRECTS`~~"
 
-#: ../../ENVIRONMENT.md:316
+#: ../../ENVIRONMENT.md:315
 msgid "Own secrets"
 msgstr "本服务自己的 secret"
 
@@ -1102,11 +1090,11 @@ msgstr ""
 "的后门；新部署用不着它。不设置就不开放任何令牌访问；管理员通过会话登录是另一条独立的授权途径。请至少用 32 个随机字节；值太短的话，启动时会记录"
 " `agent_weak_credential`。"
 
-#: ../../ENVIRONMENT.md:329
+#: ../../ENVIRONMENT.md:328
 msgid "Accounts"
 msgstr "账号"
 
-#: ../../ENVIRONMENT.md:331
+#: ../../ENVIRONMENT.md:330
 msgid ""
 "`AGENT_LOCAL_SESSION_SECRET` is read from the process environment only, "
 "never from Admin Settings, by both listeners. Every other variable here "
@@ -1423,60 +1411,9 @@ msgstr ""
 "账号邮件的发件地址，例如 `Cloud Agent <no-reply@example.org>`。邮件链接只根据 "
 "`AGENT_WEB_BASE_URL` 构建。"
 
-#: ../../ENVIRONMENT.md:364
+#: ../../ENVIRONMENT.md:363
 msgid "Sandbox deletion archives"
 msgstr "沙箱删除前的归档"
-
-#: ../developer/configuration.md:1
-msgid "`AGENT_SANDBOX_ARCHIVE_S3_BUCKET`"
-msgstr ""
-
-#: ../developer/configuration.md:1
-msgid ""
-"*Optional initial import.* S3 bucket for stopped sandbox archives. Empty "
-"disables sandbox deletion. Saved as `sandbox_archive.bucket` in Admin → "
-"Settings → Application → Sandbox archives."
-msgstr ""
-"*可选，仅用于初始导入。* 存放已停止沙箱归档的 S3 桶。留空就不能删除沙箱。保存后对应 Admin → Settings → "
-"Application → Sandbox archives 里的 `sandbox_archive.bucket`。"
-
-#: ../developer/configuration.md:1
-msgid "`AGENT_SANDBOX_ARCHIVE_S3_REGION`"
-msgstr ""
-
-#: ../developer/configuration.md:1
-msgid ""
-"*Optional initial import.* AWS region for the archive bucket. Empty uses "
-"the standard SDK region configuration."
-msgstr "*可选，仅用于初始导入。* 归档桶所在的 AWS 区域。留空就用 SDK 标准的区域配置。"
-
-#: ../developer/configuration.md:1
-msgid "`AGENT_SANDBOX_ARCHIVE_S3_ENDPOINT`"
-msgstr ""
-
-#: ../developer/configuration.md:1
-msgid ""
-"*Optional initial import.* Optional HTTPS S3-compatible endpoint. It must"
-" support conditional `PutObject` and full-object SHA-256 checksum "
-"retrieval through `HeadObject`; an ETag or user-supplied metadata alone "
-"never permits deletion. Empty selects AWS S3."
-msgstr ""
-"*可选，仅用于初始导入。* 可选的、兼容 S3 的 HTTPS 端点。它必须支持带条件的 `PutObject`，并能通过 "
-"`HeadObject` 取回整个对象的 SHA-256 校验和；光有 ETag 或用户自填的元数据，绝不足以允许删除。留空就用 AWS S3。"
-
-#: ../developer/configuration.md:1
-msgid "`AGENT_SANDBOX_ARCHIVE_S3_PREFIX`"
-msgstr ""
-
-#: ../developer/configuration.md:1
-msgid ""
-"*Optional initial import.* Object prefix for new archive requests, "
-"default `sandbox-archives`. Each sandbox/request pair receives its own "
-"immutable object. Completed receipts retain their original bucket and key"
-" after configuration changes."
-msgstr ""
-"*可选，仅用于初始导入。* 新归档请求使用的对象前缀，默认 `sandbox-archives`。每个\"沙箱 + "
-"请求\"的组合都对应一个独立的、不可变的对象。配置改了之后，已完成的回执仍保留原来的桶和键。"
 
 #: ../developer/configuration.md:1
 msgid "`AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE`"
@@ -1500,20 +1437,17 @@ msgstr "标准 AWS SDK 凭据"
 
 #: ../developer/configuration.md:1
 msgid ""
-"*Deployment infrastructure.* Provision only on the main control plane "
-"through the standard SDK chain, preferably an IAM workload role. For "
-"environment or shared-profile credentials, set "
-"`AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` to a private override for the"
-" main `control-plane` service; the base Compose does not forward AWS "
-"credential variables. No long-lived AWS credential is sent to a runner "
-"host, sandbox, web application or MCP listener."
-msgstr ""
-"*部署基础设施。* 只在主控制平面上通过标准的 SDK 凭据链提供，最好用 IAM workload role。如果用环境变量或共享 "
-"profile 里的凭据，就把 `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` 指向一个只作用于主 "
-"`control-plane` 服务的私有覆盖文件；基础 Compose 不会转发 AWS 凭据相关的变量。任何长期有效的 AWS 凭据都不会发给"
-" runner 主机、沙箱、Web 应用或 MCP 监听器。"
+"*Deployment infrastructure, only without a saved access key.* When the "
+"Sandbox archives policy has no access key, the main control plane signs "
+"and verifies deletion archives through the standard SDK chain, preferably"
+" an IAM workload role. For environment or shared-profile credentials, set"
+" `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` to a private override for "
+"the main `control-plane` service; the base Compose does not forward AWS "
+"credential variables. A policy with a saved access key needs neither. No "
+"AWS credential is sent to a sandbox, web application or MCP listener."
+msgstr "*部署基础设施，只在没有保存访问密钥时需要。* Sandbox archives 策略里没有访问密钥时，主控制平面通过标准的 SDK 凭据链签发和核实删除前的归档，最好用 IAM workload role。如果用环境变量或共享 profile 里的凭据，就把 `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` 指向一个只作用于主 `control-plane` 服务的私有覆盖文件；基础 Compose 不会转发 AWS 凭据相关的变量。策略里保存了访问密钥的话，这两样都不需要。任何 AWS 凭据都不会发给沙箱、Web 应用或 MCP 监听器。"
 
-#: ../../ENVIRONMENT.md:375
+#: ../../ENVIRONMENT.md:370
 msgid ""
 "See [sandbox archive storage](docs/developer/operations.md#sandbox-"
 "archive-storage) for permissions, retention and verification "
@@ -1522,7 +1456,7 @@ msgstr ""
 "权限、保留期和校验方面的要求，见[沙箱归档存储](docs/developer/operations.md#sandbox-archive-"
 "storage)。"
 
-#: ../../ENVIRONMENT.md:378
+#: ../../ENVIRONMENT.md:373
 msgid "Behaviour switches read by the control plane"
 msgstr "控制平面读取的行为开关"
 
@@ -1584,7 +1518,11 @@ msgid ""
 "the deployment's provider key to requests that carry a running turn's "
 "placeholder. Keep it off the public edge. See [Provided "
 "models](docs/developer/operations.md#provided-models)."
-msgstr "新增。Compose 里模型中继的绑定地址，默认 `127.0.0.1` / `8002`。`model-relay` 服务总是在运行；没有部署提供的连接时，它拒绝所有请求。只应该让各主机的 `model-tunnel` 访问它：凡是带着运行中轮次的占位凭据的请求，它都会加上部署的服务商密钥。不要把它放到公网入口后面。见[部署提供的模型](docs/developer/operations.md#provided-models)。"
+msgstr ""
+"新增。Compose 里模型中继的绑定地址，默认 `127.0.0.1` / `8002`。`model-relay` "
+"服务总是在运行；没有部署提供的连接时，它拒绝所有请求。只应该让各主机的 `model-tunnel` "
+"访问它：凡是带着运行中轮次的占位凭据的请求，它都会加上部署的服务商密钥。不要把它放到公网入口后面。见[部署提供的模型](docs/developer/operations.md"
+"#provided-models)。"
 
 #: ../developer/configuration.md:1
 msgid "`AGENT_WEB_BIND` / `AGENT_WEB_PORT`"
@@ -1753,7 +1691,7 @@ msgstr ""
 "导出；上线过程中不要手动改。新的保留沙箱组要被认领，发起轮询的那个副本必须声明一个对应的、已完成的主机标记，所以还在部署中或部署失败的主机，没法借助一个冷启动的"
 " API 认领任务。本地环境会生成一个只属于它自己的标记。"
 
-#: ../../ENVIRONMENT.md:398
+#: ../../ENVIRONMENT.md:393
 msgid "Source control"
 msgstr "代码托管"
 
@@ -1936,17 +1874,17 @@ msgstr ""
 "中继推送和开 pull request。匹配不区分大小写。留空就不通过白名单授予任何访问；用户仍可以使用通过自己的 GitHub "
 "连接授权过的仓库。"
 
-#: ../../ENVIRONMENT.md:416
+#: ../../ENVIRONMENT.md:411
 msgid "MCP"
 msgstr "MCP"
 
-#: ../../ENVIRONMENT.md:418
+#: ../../ENVIRONMENT.md:413
 msgid ""
 "Cloud Agent owns MCP discovery, per-user credentials, authorization and "
 "attempt fencing."
 msgstr "MCP 的发现、每个用户的凭据、授权和 attempt 栅栏，都由 Cloud Agent 负责。"
 
-#: ../../ENVIRONMENT.md:421
+#: ../../ENVIRONMENT.md:416
 msgid ""
 "Users add remote URLs, imported `mcpServers` snippets or stdio launch "
 "specs. Templates only prefill the connection form; environment variables "
@@ -2198,7 +2136,13 @@ msgid ""
 "advertises nothing and is handed none; turns on owners' own connections "
 "are unaffected. See [Provided models](docs/developer/operations.md"
 "#provided-models)."
-msgstr "新增。*仅主机，由 Admin → Servers → Add server 写入。* 这台主机的沙箱访问模型中继的地址：`http://` 加上 `model-tunnel` 的别名和端口（默认是 `http://agent-models:8000`），只能写名字，不能写 IP。设置之后，`sandbox_host.sh` 会要求模型隧道的目标、密钥和 known_hosts 都已配置，每个组桥上都会有这个中继，主机会通告 `model-relay-v1`，并开始领取跑在部署提供的模型连接上的轮次。不设置时，主机不通告这项能力，也领不到这类轮次；所有者自己的连接上的轮次不受影响。见[部署提供的模型](docs/developer/operations.md#provided-models)。"
+msgstr ""
+"新增。*仅主机，由 Admin → Servers → Add server 写入。* 这台主机的沙箱访问模型中继的地址：`http://` 加上"
+" `model-tunnel` 的别名和端口（默认是 `http://agent-models:8000`），只能写名字，不能写 "
+"IP。设置之后，`sandbox_host.sh` 会要求模型隧道的目标、密钥和 known_hosts "
+"都已配置，每个组桥上都会有这个中继，主机会通告 `model-"
+"relay-v1`，并开始领取跑在部署提供的模型连接上的轮次。不设置时，主机不通告这项能力，也领不到这类轮次；所有者自己的连接上的轮次不受影响。见[部署提供的模型](docs/developer/operations.md"
+"#provided-models)。"
 
 #: ../developer/configuration.md:1
 msgid "`AGENT_MODEL_TUNNEL_*`"
@@ -2218,7 +2162,16 @@ msgid ""
 "default). Give it a key of its own, with a `permitopen` for that port "
 "only; Add server does, on an account of its own on the control-plane "
 "machine. Set these by hand only on a host that Add server did not set up."
-msgstr "新增。*由 Add server 写入。* 模型中继的 SSH 隧道。每台主机上都有 `model-tunnel` 服务，没有 `SSH_DESTINATION` 时它空闲等待。设置了 `AGENT_SANDBOX_MODEL_RELAY_URL` 时必须设置 `SSH_DESTINATION`、`SSH_KEY`、`SSH_KNOWN_HOSTS`。`SSH_PORT` / `REMOTE_HOST` / `REMOTE_PORT` / `LISTEN_PORT` 的默认值分别是 `22` / `127.0.0.1` / `8002` / `8000`；`AGENT_MODEL_RELAY_HOSTNAME`（默认 `agent-models`）是它在组桥上使用的名字。它的远端目标必须是模型中继的监听器（控制平面上的 `AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT`，默认是回环地址和 `8002`）。它要有单独一把密钥，`permitopen` 只放行这一个端口；Add server 会这样配，并在控制平面机器上为它单独开一个账号。只有不是由 Add server 配置的主机，才需要手工设置这些值。"
+msgstr ""
+"新增。*由 Add server 写入。* 模型中继的 SSH 隧道。每台主机上都有 `model-tunnel` 服务，没有 "
+"`SSH_DESTINATION` 时它空闲等待。设置了 `AGENT_SANDBOX_MODEL_RELAY_URL` 时必须设置 "
+"`SSH_DESTINATION`、`SSH_KEY`、`SSH_KNOWN_HOSTS`。`SSH_PORT` / `REMOTE_HOST` "
+"/ `REMOTE_PORT` / `LISTEN_PORT` 的默认值分别是 `22` / `127.0.0.1` / `8002` / "
+"`8000`；`AGENT_MODEL_RELAY_HOSTNAME`（默认 `agent-"
+"models`）是它在组桥上使用的名字。它的远端目标必须是模型中继的监听器（控制平面上的 `AGENT_MODEL_RELAY_BIND` / "
+"`AGENT_MODEL_RELAY_PORT`，默认是回环地址和 `8002`）。它要有单独一把密钥，`permitopen` "
+"只放行这一个端口；Add server 会这样配，并在控制平面机器上为它单独开一个账号。只有不是由 Add server "
+"配置的主机，才需要手工设置这些值。"
 
 #: ../developer/configuration.md:1
 msgid "`AGENT_MODEL_CONNECTIONS_ENABLED`"
@@ -2324,7 +2277,7 @@ msgstr ""
 "上游，交给它当密钥的也只是该成员的占位凭据。启动器在变成 CLI 之前读取并移除所有这些变量，所以 CLI "
 "从不持有服务商密钥。手动设置它们不会启动任何东西：启动器只在需要转换的成员前运行。"
 
-#: ../../ENVIRONMENT.md:450
+#: ../../ENVIRONMENT.md:445
 msgid "Web search"
 msgstr "网页搜索"
 
@@ -2359,11 +2312,11 @@ msgstr ""
 "*可选的首次导入。* 内置 `web_search` 工具的提供方密钥，加密保存在 Admin → Settings → Web "
 "search，从不发送到沙箱。导入一次，同上。"
 
-#: ../../ENVIRONMENT.md:457
+#: ../../ENVIRONMENT.md:452
 msgid "Sandbox settings from the admin pages"
 msgstr "在管理页面上设置的沙箱参数"
 
-#: ../../ENVIRONMENT.md:459
+#: ../../ENVIRONMENT.md:454
 msgid ""
 "Host settings can be set from the admin pages instead of in each host's "
 "`.env`, including `AGENT_TIMEOUT_S`, `AGENT_CHAT_IDLE_TIMEOUT_S`, "
@@ -2383,15 +2336,15 @@ msgstr ""
 "/admin/agent/host-settings`）；在 **Servers** 页面某台服务器的详情里设置的值，只对那一台生效（`PUT "
 "/admin/agent/runner-hosts/<host>/settings`）。每一项设置，主机按以下优先级取值，从高到低："
 
-#: ../../ENVIRONMENT.md:471
+#: ../../ENVIRONMENT.md:466
 msgid "the value set for that server;"
 msgstr "单独给这台服务器设置的值；"
 
-#: ../../ENVIRONMENT.md:472
+#: ../../ENVIRONMENT.md:467
 msgid "the value set for every server;"
 msgstr "给所有服务器设置的值；"
 
-#: ../../ENVIRONMENT.md:475
+#: ../../ENVIRONMENT.md:470
 msgid ""
 "The control plane sends complete effective values, including defaults, on"
 " each heartbeat. Host environment values apply only before the first "
@@ -2404,7 +2357,7 @@ msgstr ""
 "控制平面每次心跳都会下发完整的最终生效值，默认值也包括在内。主机上的环境变量只在第一次拿到设置之前生效，之后仍会作为本地的诊断值显示出来。清除单台服务器的值，会退回到全局值或内置默认值；清除全局值，会退回到内置默认值。管理员能设置的上下限写在"
 " `cloud_agent_shared/host_settings.py` 里，它们只是防止手误填错，并不代表机器的实际容量。"
 
-#: ../../ENVIRONMENT.md:482
+#: ../../ENVIRONMENT.md:477
 msgid ""
 "Container CPU, memory, and disk settings apply to new sandbox groups. "
 "Resuming a chat or forking it preserves the group's original limits; all "
@@ -2421,7 +2374,7 @@ msgstr ""
 "`AGENT_SANDBOX_CPU_MILLICORES=2000`、`AGENT_SANDBOX_MEMORY_MIB=4096` 和 "
 "`AGENT_SANDBOX_DISK_MIB=0`。"
 
-#: ../../ENVIRONMENT.md:490
+#: ../../ENVIRONMENT.md:485
 msgid ""
 "A positive disk limit sets Docker's `--storage-opt size=<MiB>M` on the "
 "writable layer, including the workspace, caches, and installed files. It "
@@ -2447,7 +2400,7 @@ msgstr ""
 "的服务器照样接不受信任的任务，只是控制平面和 runner 会记录警告，Servers 页面也会在它旁边显示 **No container "
 "disk quota**。runner 现有的存储证明仍然测量的是主机的文件系统，而不是每个沙箱的配额。"
 
-#: ../../ENVIRONMENT.md:505
+#: ../../ENVIRONMENT.md:500
 msgid ""
 "The same cards also manage workspace and terminal resource limits. These "
 "additional environment names supply initial local values only:"
@@ -2545,7 +2498,7 @@ msgstr ""
 msgid "4 concurrent viewers per terminal."
 msgstr "每个终端最多 4 人同时查看。"
 
-#: ../../ENVIRONMENT.md:522
+#: ../../ENVIRONMENT.md:517
 msgid ""
 "Workspace commands and Git inspection are also bounded in number, by the "
 "Sandbox Manager rather than by a setting: at most 16 run at once on one "
@@ -2555,7 +2508,7 @@ msgstr ""
 "工作区命令和 Git 查看的并发数量也有上限，这个上限由 Sandbox Manager 自己决定，不是设置项：一台主机上最多同时跑 16 "
 "个，一个对话最多 4 个，用的是它们专用的线程池；再多一个就直接返回 429，不会排队等着。"
 
-#: ../../ENVIRONMENT.md:527
+#: ../../ENVIRONMENT.md:522
 msgid ""
 "The values ride the heartbeat answer, so a host applies a change within "
 "one heartbeat (about 30 seconds) with no redeploy. Nothing running is "
@@ -2574,11 +2527,11 @@ msgstr ""
 "`.env` 里的值；主机确认之前，页面上会把这个值显示为 *applying*。更早版本的 runner（没有声明 `host-"
 "settings-v1`）在重新部署之前，会一直用自己 `.env` 里的值，页面上也会注明这一点。"
 
-#: ../../ENVIRONMENT.md:536
+#: ../../ENVIRONMENT.md:531
 msgid "Optional compute-resource management"
 msgstr "可选：计算资源管理"
 
-#: ../../ENVIRONMENT.md:538
+#: ../../ENVIRONMENT.md:533
 msgid ""
 "These values belong only to the stable main control plane, not its MCP-"
 "only listener, any Host, or any sandbox. See [the compute "
@@ -2701,18 +2654,18 @@ msgstr ""
 "`/v1/compute/node-registrations`，并且只有该地址是 HTTPS 时才使用。只走 "
 "HTTPS：节点发送一次性令牌之前，会先检查控制平面的证书。两个都没有时，就无法创建“自己登记密钥”的节点。"
 
-#: ../../ENVIRONMENT.md:552
+#: ../../ENVIRONMENT.md:547
 msgid ""
 "Without this configuration the existing Host management remains "
 "available; resource creation requires configured credentials and "
 "deployment profiles."
 msgstr "没有这些配置时，现有的 Host 管理功能照样能用；只是要新建资源，必须先配好凭据和部署配置。"
 
-#: ../../ENVIRONMENT.md:555
+#: ../../ENVIRONMENT.md:550
 msgid "Repository environments"
 msgstr "仓库环境"
 
-#: ../../ENVIRONMENT.md:557
+#: ../../ENVIRONMENT.md:552
 msgid ""
 "Reusable repository environments are available by default. There is no "
 "feature switch or initial environment-variable import. A legacy "
@@ -2727,7 +2680,7 @@ msgstr ""
 "这个值，都会被忽略。设置页面、创建任务时的选择，以及工作区的 Environment 标签页，始终都会出现。`/config` "
 "也始终会返回环境相关的限制。"
 
-#: ../../ENVIRONMENT.md:559
+#: ../../ENVIRONMENT.md:554
 msgid ""
 "A task with no configured variables or scripts uses the base environment "
 "without environment preparation. Configured workspaces still require an "
@@ -2737,15 +2690,15 @@ msgstr ""
 "没有配置任何变量或脚本的任务，直接用基础环境，不做环境准备。配置过的工作区仍然需要支持环境功能的 runner 和 sandbox "
 "manager；所有者授权、加密和执行隔离照常生效。"
 
-#: ../../ENVIRONMENT.md:561
+#: ../../ENVIRONMENT.md:556
 msgid "Host agent (`cloud_agent_host`)"
 msgstr "主机 agent（`cloud_agent_host`）"
 
-#: ../../ENVIRONMENT.md:563
+#: ../../ENVIRONMENT.md:558
 msgid "The stack's own identity"
 msgstr "这套主机服务自己的身份"
 
-#: ../../ENVIRONMENT.md:565
+#: ../../ENVIRONMENT.md:560
 msgid ""
 "Read by `deploy/host/deploy.sh` and `deploy/host/sandbox_host.sh` rather "
 "than by compose, because they name the stack rather than configure it."
@@ -2831,7 +2784,7 @@ msgstr ""
 "部署脚本等待两边并行上线完成的时间，默认 900 秒。主机在等待冷启动的推理、MCP 和控制端点时，用的也是这个上限；控制平面部署在等待一次按确切"
 " SHA 的新心跳和反向 sandbox manager 探测时，同样用它。这是防止上线卡死的看门狗，不是对话或会话的超时。"
 
-#: ../../ENVIRONMENT.md:576
+#: ../../ENVIRONMENT.md:571
 msgid "Scheduling"
 msgstr "调度"
 
@@ -2909,7 +2862,7 @@ msgstr ""
 "兑换，这台机器跑的每个轮次都共用它。注册完成后，以凭据为准，再改这个值也不会给环境改名。如果只想在显示时把几个环境归到一组，又不想改变已有的身份，就用"
 " `AGENT_PHYSICAL_HOST`。"
 
-#: ../../ENVIRONMENT.md:585
+#: ../../ENVIRONMENT.md:580
 msgid "Sandbox Manager, runtime and reporting"
 msgstr "Sandbox Manager、运行时与上报"
 
@@ -3706,7 +3659,7 @@ msgstr ""
 "都不读，因为一个自己并不掌握的名字，它们也没法据此做什么。值缺失或格式不对时，会退回到 "
 "`default`，而不是拒绝启动；格式不对时还会记一条警告，写明被拒绝的值，因为退回之后，它就和 `default` 共用同一个命名空间了。"
 
-#: ../../ENVIRONMENT.md:627
+#: ../../ENVIRONMENT.md:622
 msgid ""
 "The control-plane, host and local Compose files pass optional profiling "
 "overrides through to their respective producers. An empty MODE reaches "
@@ -3719,7 +3672,7 @@ msgstr ""
 "为空时，会交给共用的解析器处理，效果和不设置一样：不用任何配置就能使用 Admin 控制。常规的 schema "
 "迁移照常执行。只有互相独立的部署共用一个数据库时，才需要设置部署命名空间。"
 
-#: ../../ENVIRONMENT.md:633
+#: ../../ENVIRONMENT.md:628
 msgid ""
 "Collection starts Disabled on a fresh database. The Admin Enable/Disable "
 "button controls the persisted run without editing configuration or "
@@ -3745,7 +3698,7 @@ msgstr ""
 "execution profile 分开统计。2026-09-18 在本地复测的结果是，每次合成启动，采集器自身大约花 30 "
 "微秒；这个数字不包括真实的容器、sandbox manager、网络或数据库。"
 
-#: ../../ENVIRONMENT.md:647
+#: ../../ENVIRONMENT.md:642
 msgid ""
 "Two benchmarks answer two different questions, and neither substitutes "
 "for the other. `scripts/bench_startup_profiling_overhead.py` measures the"
@@ -3767,11 +3720,11 @@ msgstr ""
 "`max(10 ms, baseline p95 × 1%)` 预算得出的结论。引用其中任何一个的结果之前，先看一下脚本里的 "
 "`what`/`not_what` 说明。"
 
-#: ../../ENVIRONMENT.md:659
+#: ../../ENVIRONMENT.md:654
 msgid "Physical servers and execution environments"
 msgstr "物理服务器和执行环境"
 
-#: ../../ENVIRONMENT.md:661
+#: ../../ENVIRONMENT.md:656
 msgid ""
 "`AGENT_RUNNER_HOST` identifies one enrolled execution environment. When "
 "two stacks on the same physical server talk to one control plane, they "
@@ -3782,7 +3735,7 @@ msgstr ""
 "`AGENT_RUNNER_HOST` 标识一个已注册的执行环境。同一台物理服务器上的两套服务连同一个控制平面时，它们的名字、凭据、状态目录和 "
 "sandbox manager 地址都要不一样。不要为了把某个环境保留的对话并到另一个环境里，去给已有的环境改名或重新注册。"
 
-#: ../../ENVIRONMENT.md:666
+#: ../../ENVIRONMENT.md:661
 msgid ""
 "`AGENT_PHYSICAL_HOST` names the physical server for the admin inventory. "
 "Give all environments on that server the same name, unique within the "
@@ -3797,7 +3750,7 @@ msgstr ""
 " 默认用主机的短主机名；直接用 Compose 部署时，必须显式设置。runner 在注册时和每次心跳中都会带上它，保存为 "
 "`labels.physical_host`。旧版 runner 不带这个值也没关系，已有的元数据不会被清掉。不需要数据库迁移。"
 
-#: ../../ENVIRONMENT.md:673
+#: ../../ENVIRONMENT.md:668
 msgid ""
 "The Servers table shows the executor matching the new-chat execution "
 "policy on each physical server. Production Compose defaults to "
@@ -3811,7 +3764,7 @@ msgstr ""
 "kata-v1`；本地 Compose 的 overlay 明确保持 `trusted-v1`。旧的执行器仍留在 API "
 "里，用于保留会话的归属，但不会再分配给新对话。每台物理服务器只保留一个用于放置新对话的执行器；多出来的旧部署，等它们保留的对话都用不着了，就应该退役。"
 
-#: ../../ENVIRONMENT.md:680
+#: ../../ENVIRONMENT.md:675
 msgid ""
 "The global sandbox location selector is always visible, including with "
 "one server. It shows Automatic or the exact selected Host identity; "
@@ -3834,7 +3787,7 @@ msgstr ""
 " 数量，也不是新旧部署加起来的总数。分组显示绝不会改动凭据、sandbox manager "
 "的路由或保留沙箱的归属。服务器名称来自上报的元数据；系统不会去猜运行时的后缀。"
 
-#: ../../ENVIRONMENT.md:692
+#: ../../ENVIRONMENT.md:687
 msgid ""
 "Set `AGENT_PHYSICAL_HOST` before host activation and use the coordinated "
 "release phases in [the rolling-update "
@@ -3847,7 +3800,7 @@ msgstr ""
 "#rolling-deployment-order)里协调好的发布阶段操作。先让正在跑的轮次结束，完成目标主机这一代的部署，并通过控制平面按确切 "
 "SHA 的就绪栅栏，然后再激活 API 和 Web 的新版本。已有的主机凭据和保留沙箱都原样保留。"
 
-#: ../../ENVIRONMENT.md:698
+#: ../../ENVIRONMENT.md:693
 msgid "Sandbox isolation (host agent reads, sandbox inherits)"
 msgstr "沙箱隔离（由主机 agent 读取，沙箱沿用）"
 
@@ -4164,11 +4117,11 @@ msgstr ""
 "*内部使用。* sandbox manager "
 "传给运行单个仓库环境脚本的包装程序（`environment_process.py`）的两个值：要运行的脚本，以及把退出状态记在哪里。脚本开始运行之前，包装程序会把这两个值从环境里删掉。运维人员不要设置。"
 
-#: ../../ENVIRONMENT.md:723
+#: ../../ENVIRONMENT.md:718
 msgid "Kata runtime qualification generation"
 msgstr "Kata 运行时资格验证的代次"
 
-#: ../../ENVIRONMENT.md:725
+#: ../../ENVIRONMENT.md:720
 #, python-brace-format
 msgid ""
 "The supported host deployment mounts `/var/lib/freeinference/kata-"
@@ -4191,7 +4144,7 @@ msgstr ""
 "`updating`，重新运行安装脚本即可修复。这台主机上的所有部署看到的都是同一个代次，标记文件被原子替换时也一样。`--check` "
 "仍然只做验证，不做改动。"
 
-#: ../../ENVIRONMENT.md:735
+#: ../../ENVIRONMENT.md:730
 msgid ""
 "For an existing host, deployment verifies Kata and initializes only a "
 "missing marker through a short-lived, networkless runc container with "
@@ -4207,11 +4160,11 @@ msgstr ""
 "证据时，要做完整的探测；证据格式不对或正处于更新中时，一律拒绝。如果要原地更新运行时或配置，必须用官方的安装脚本，这样每个 runner "
 "都会在第一个文件被改动之前，就让资格验证失效。"
 
-#: ../../ENVIRONMENT.md:743
+#: ../../ENVIRONMENT.md:738
 msgid "Complete local stack database recovery"
 msgstr "完整本地环境的数据库恢复"
 
-#: ../../ENVIRONMENT.md:745
+#: ../../ENVIRONMENT.md:740
 msgid ""
 "`deploy/local/dev.sh` stores the local Postgres password and matching "
 "`AGENT_DATABASE_URL` in the gitignored `deploy/local/.env.local`. Back up"
@@ -4227,7 +4180,7 @@ msgstr ""
 "postgres`，脚本会拒绝生成新密码：PostgreSQL 只在初始化空的数据目录时才使用 "
 "`POSTGRES_PASSWORD`，所以新密码打不开旧的卷。"
 
-#: ../../ENVIRONMENT.md:753
+#: ../../ENVIRONMENT.md:748
 msgid ""
 "`up` builds the required images first. It and `start` then bring up only "
 "Postgres, wait for readiness, authenticate from the control-plane image "
@@ -4240,11 +4193,11 @@ msgstr ""
 "认证一次，再运行 Alembic，最后才启动其余的服务。如果认证失败，请把原来的 `AGENT_POSTGRES_PASSWORD` 和 "
 "`AGENT_DATABASE_URL` 找回来。脚本绝不会自动删除卷，也不会自动重置密码。"
 
-#: ../../ENVIRONMENT.md:760
+#: ../../ENVIRONMENT.md:755
 msgid "Claude inference retry policy"
 msgstr "Claude 推理请求的重试策略"
 
-#: ../../ENVIRONMENT.md:762
+#: ../../ENVIRONMENT.md:757
 msgid ""
 "The runtime adapter sets `CLAUDE_CODE_MAX_RETRIES=15` and "
 "`CLAUDE_CODE_RETRY_WATCHDOG=0` for each resident Claude Code process. "
@@ -4264,11 +4217,11 @@ msgstr ""
 "`AGENT_TIMEOUT_S`。重试进度会显示在对话里；重试次数用完时，这一轮会失败，但原生上下文会保留下来。重试间隔的上限和上线时的行为，见[运行时边界](docs/developer/operations.md"
 "#runtime-boundaries)。"
 
-#: ../../ENVIRONMENT.md:773
+#: ../../ENVIRONMENT.md:768
 msgid "Agent CLI version pins (image build)"
 msgstr "Agent CLI 的版本固定（构建镜像时）"
 
-#: ../../ENVIRONMENT.md:775
+#: ../../ENVIRONMENT.md:770
 msgid ""
 "The five default versions live in both `deploy/sandbox/Dockerfile.agent-"
 "sandbox` and `apps/backend/cloud_agent_shared/shared_protocol.py`. They "
@@ -4285,7 +4238,7 @@ msgstr ""
 "`shared-sandbox-v1`。所以它们是写在源码里的版本固定，不是每台主机 `.env` "
 "里的设置。有意修改某个默认版本时，两处要一起改，并重新跑一遍 agent 循环的一致性测试。"
 
-#: ../../ENVIRONMENT.md:784
+#: ../../ENVIRONMENT.md:779
 msgid ""
 "The Dockerfile still verifies every exact version against the installed "
 "binary at build time. A dist-tag (`latest`) or range (`^2.1`) fails the "
@@ -4295,7 +4248,7 @@ msgstr ""
 "构建时，Dockerfile 仍会把每个确切的版本号和实际装上的二进制逐一核对。写 dist-"
 "tag（`latest`）或版本范围（`^2.1`）都会让构建失败，这样镜像标签上写的版本，就不可能和镜像里实际的二进制对不上。"
 
-#: ../../ENVIRONMENT.md:788
+#: ../../ENVIRONMENT.md:783
 msgid ""
 "**Updating an agent without a rebuild.** Claude Code, Codex, OpenCode and"
 " pi can also be updated from the admin Settings page (_Agent versions_ → "
@@ -4341,7 +4294,7 @@ msgstr ""
 "下载这一步运行在哪个 Docker 网络上，默认 `bridge`。那里只运行 "
 "npm，并且禁用了安装脚本；软件包自己的脚本和检查，之后在没有网络的环境里运行。只有主机默认的网桥访问不到 npm 仓库时，才需要指定别的网络。"
 
-#: ../../ENVIRONMENT.md:804
+#: ../../ENVIRONMENT.md:799
 msgid ""
 "The image carries exactly these pins: there is no build-time menu of "
 "extra versions (the `*_EXTRA_VERSIONS` build arguments were removed). "
@@ -4351,7 +4304,7 @@ msgstr ""
 "镜像只包含这些固定版本：没有构建时的额外版本菜单（`*_EXTRA_VERSIONS` 构建参数已删除）。Claude "
 "Code、Codex、OpenCode 或 pi 的其他版本按上文从 _Agent versions_ 安装；Kilo 只运行其固定版本。"
 
-#: ../../ENVIRONMENT.md:809
+#: ../../ENVIRONMENT.md:804
 msgid ""
 "Changing a pin is a claim that the new version's event stream is "
 "compatible with its adapter in `cloud_agent_host/runtimes/`. "
@@ -4363,7 +4316,7 @@ msgstr ""
 "中对应适配器兼容。`tests/external/test_runtime_stream_conformance.py` "
 "是这一声明的关卡，让它测试候选版本的方法是**把版本写到 Dockerfile 的 `ARG` 行上**："
 
-#: ../../ENVIRONMENT.md:823
+#: ../../ENVIRONMENT.md:818
 msgid ""
 "The suite derives its parametrization from that `ARG` line "
 "(`test_runtime_stream_conformance.py::_menu`, `_DOCKERFILE`), not from an"
@@ -4378,11 +4331,11 @@ msgstr ""
 " `npx` 按该精确版本获取，并让它对接一个假的模型提供方运行，所以测量的是真实二进制——但测量对象是**仓库里的** "
 "Dockerfile，因此候选版本必须先写到那一行 `ARG` 上。"
 
-#: ../../ENVIRONMENT.md:830
+#: ../../ENVIRONMENT.md:825
 msgid "Interpret a passing conformance run within these limits:"
 msgstr "一致性测试通过时，要在下面这些前提下理解它的意义："
 
-#: ../../ENVIRONMENT.md:832
+#: ../../ENVIRONMENT.md:827
 msgid ""
 "**`claude-code` only.** This is the one runtime with a stream-conformance"
 " suite; the other four have contract fixtures and their adapters' unit "
@@ -4392,7 +4345,7 @@ msgstr ""
 "**仅限 `claude-code`。** 这是唯一有事件流一致性测试套件的运行时；其他四个只有契约 fixture "
 "和适配器的单元测试，没有同等的关卡。修改它们的固定版本目前是评审责任，而不是测试。"
 
-#: ../../ENVIRONMENT.md:836
+#: ../../ENVIRONMENT.md:831
 msgid ""
 "**It proves the parser, not the option.** A pass means the version's "
 "event shape is intelligible to our normalizer. It does not exercise the "
@@ -4401,11 +4354,11 @@ msgstr ""
 "**它证明的是解析器没问题，不是这个选项没问题。** "
 "测试通过，说明这个版本的事件结构能被我们的规范化程序读懂；但它并不会去跑已部署的镜像、沙箱，也不会去点那个下拉菜单。"
 
-#: ../../ENVIRONMENT.md:840
+#: ../../ENVIRONMENT.md:835
 msgid "Web (`apps/frontend/`)"
 msgstr "Web（`apps/frontend/`）"
 
-#: ../../ENVIRONMENT.md:842
+#: ../../ENVIRONMENT.md:837
 msgid ""
 "Frontend configuration is public. Build-time routing settings enter the "
 "downloaded bundle and require a rebuild. Appearance settings are saved "
@@ -4416,11 +4369,11 @@ msgstr ""
 "前端配置都是公开的。构建时的路由设置会打进用户下载的前端包里，改了就要重新构建。外观设置通过 Admin → Settings 保存，Web "
 "服务器每次处理请求时读取。部署时间和发布版本信息仍然是运行时的环境元数据。这些公开的值里不能有 secret。"
 
-#: ../../ENVIRONMENT.md:848
+#: ../../ENVIRONMENT.md:843
 msgid "Build-time: the image variant"
 msgstr "构建时决定：镜像变体"
 
-#: ../../ENVIRONMENT.md:850
+#: ../../ENVIRONMENT.md:845
 msgid ""
 "A `NEXT_PUBLIC_*` variable is substituted into the bundle during `next "
 "build`. Each one must therefore be an `ARG` in `deploy/control-"
@@ -4435,7 +4388,7 @@ msgstr ""
 "下的一个键；这里的某一行如果缺了其中一个，这个变量就是运维人员哪里都能设、却什么都改变不了的摆设。每一行都写明了它对应的 compose "
 "参数，任何一行没写，`test_web_build_arguments_are_wired` 都会失败。改其中任何一个，都要重新构建。"
 
-#: ../../ENVIRONMENT.md:857
+#: ../../ENVIRONMENT.md:852
 msgid ""
 "The web app is served at the root of its own hostname, and the browser "
 "calls the control plane at `/api` on the same origin, where the edge "
@@ -4495,11 +4448,11 @@ msgstr ""
 msgid "Optional build identity."
 msgstr "可选的构建版本信息。"
 
-#: ../../ENVIRONMENT.md:871
+#: ../../ENVIRONMENT.md:866
 msgid "Runtime: the deployment's identity"
 msgstr "运行时决定：部署的身份信息"
 
-#: ../../ENVIRONMENT.md:873
+#: ../../ENVIRONMENT.md:868
 msgid ""
 "The main control plane imports the first eight appearance variables below"
 " when it initializes the settings document. Set them in its deployment "
@@ -4596,7 +4549,7 @@ msgstr ""
 "显示在部署页脚的、带时区的 ISO 时间戳。控制平面的部署脚本会把激活时间以 UTC 写入，健康检查通过后记到 `.deployed-at` "
 "里；再次部署同一个版本时，会保留原来的时间。手动启动 Compose 时，请填写实际的部署时间。留空就显示 `Not available`。"
 
-#: ../../ENVIRONMENT.md:891
+#: ../../ENVIRONMENT.md:886
 msgid ""
 "The web service also receives the existing `AGENT_DEPLOYMENT_SHA` for the"
 " footer's version: the first seven commit characters are visible, with "
@@ -4606,7 +4559,7 @@ msgstr ""
 "Web 服务还会拿到已有的 `AGENT_DEPLOYMENT_SHA`，用来在页脚显示版本：显示 commit 的前七位，鼠标悬停时显示完整的 "
 "commit。这两个值每次请求时都重新读取，和镜像是哪天构建的无关。"
 
-#: ../../ENVIRONMENT.md:896
+#: ../../ENVIRONMENT.md:891
 msgid ""
 "Saved URLs and booleans are validated before an admin update is "
 "committed. The standalone environment fallback validates them when "
@@ -4616,11 +4569,11 @@ msgstr ""
 "管理员提交更新之前，保存的 URL "
 "和布尔值都会先经过校验。单独运行、退回使用环境变量时，则在渲染页面时校验。已保存的公开外观信息，来自本服务自己的接口。"
 
-#: ../../ENVIRONMENT.md:900
+#: ../../ENVIRONMENT.md:895
 msgid "Site content files"
 msgstr "站点内容文件"
 
-#: ../../ENVIRONMENT.md:902
+#: ../../ENVIRONMENT.md:897
 msgid ""
 "A deployment's Terms of Service, Team page and source link are files in "
 "the deployment's own repository, not environment variables or Admin "
@@ -4669,7 +4622,7 @@ msgstr ""
 msgid "`source_url`, the GitHub link in the footer, and `members`, the Team page."
 msgstr "`source_url` 是页脚的 GitHub 链接，`members` 是 Team 页的成员。"
 
-#: ../../ENVIRONMENT.md:915
+#: ../../ENVIRONMENT.md:910
 msgid ""
 "Any Terms file replaces the `AGENT_LOCAL_TERMS_URL` and "
 "`AGENT_LOCAL_TERMS_TEXT` settings, which Admin then shows read-only. "
@@ -4678,7 +4631,7 @@ msgstr ""
 "只要有任何一个条款文件，`AGENT_LOCAL_TERMS_URL` 和 `AGENT_LOCAL_TERMS_TEXT` "
 "这两项设置就以文件为准，Admin 里显示为只读。没有 `site.yaml` 时，页脚不显示 Team 和 GitHub 链接。"
 
-#: ../../ENVIRONMENT.md:930
+#: ../../ENVIRONMENT.md:925
 msgid ""
 "A label is either text or a mapping of `en` and `zh-CN` to text. URLs "
 "must be absolute http(s). An unknown key, an invalid value or a file over"
@@ -4688,15 +4641,15 @@ msgstr ""
 "标签可以是一段文本，也可以是 `en`、`zh-CN` 到文本的映射。URL 必须是绝对的 http(s) 地址。遇到未知的键、无效的值或超过 "
 "256 KiB 的文件，会记一条 `site_content_ignored` 日志，并把这个文件当作不存在，所以部署前要先检查这些文件。"
 
-#: ../../ENVIRONMENT.md:935
+#: ../../ENVIRONMENT.md:930
 msgid "Infrastructure (not environment variables)"
 msgstr "基础设施（不是环境变量）"
 
-#: ../../ENVIRONMENT.md:937
+#: ../../ENVIRONMENT.md:932
 msgid "Recorded here as *what has to be decided*, not as anyone's actual answer."
 msgstr "这里记录的是*需要做出哪些决定*，而不是谁的实际选择。"
 
-#: ../../ENVIRONMENT.md:939
+#: ../../ENVIRONMENT.md:934
 msgid ""
 "**Domains**: one host for the web app and the control-plane API, the API "
 "under `/api` — e.g. `agents.example.org` and a staging sibling. The exact"
@@ -4707,7 +4660,7 @@ msgstr ""
 "`agents.example.org`，再加一个 staging 用的兄弟域名。具体的名字写在 overlay 里，以及 "
 "`AGENT_WEB_BASE_URL` 和 `AGENT_PUBLIC_API_URL` 中。"
 
-#: ../../ENVIRONMENT.md:942
+#: ../../ENVIRONMENT.md:937
 msgid ""
 "**What a sandbox reaches**: its MCP relay, the resolver in "
 "`AGENT_EGRESS_DNS_SERVER` and public IPv4 on TCP 80/443 — the same during"
@@ -4722,29 +4675,29 @@ msgstr ""
 "的监听器。沙箱在运行一轮时持有其所有者的服务商密钥；这一暴露是[已接受的](docs/agents/specs/2026-09-23-agent-"
 "public-egress-design.zh-CN.md)，并且仅限于所有者自己的密钥和配额。"
 
-#: ../../ENVIRONMENT.md:949
+#: ../../ENVIRONMENT.md:944
 msgid ""
 "**Sandbox image registry**: choose where hosts pull `AGENT_SANDBOX_IMAGE`"
 " before deploying them."
 msgstr "**沙箱镜像仓库**：部署主机之前，先定好主机从哪里拉取 `AGENT_SANDBOX_IMAGE`。"
 
-#: ../../ENVIRONMENT.md:951
+#: ../../ENVIRONMENT.md:946
 msgid "Adding a variable"
 msgstr "新增变量时"
 
-#: ../../ENVIRONMENT.md:953
+#: ../../ENVIRONMENT.md:948
 msgid "Add a row here, in the right section."
 msgstr "在这里对应的小节里加一行。"
 
-#: ../../ENVIRONMENT.md:954
+#: ../../ENVIRONMENT.md:949
 msgid "Note who provisions it and whether it differs per environment."
 msgstr "写明由谁提供，以及不同环境之间的值是否不同。"
 
-#: ../../ENVIRONMENT.md:955
+#: ../../ENVIRONMENT.md:950
 msgid "If it is a secret, say where it is stored — never the value itself."
 msgstr "如果是 secret，写明它存在哪里，但绝不要写出它的值。"
 
-#: ../../ENVIRONMENT.md:956
+#: ../../ENVIRONMENT.md:951
 msgid ""
 "The PR checklist enforces this; a new variable without a row is a review "
 "stop."
@@ -4983,4 +4936,60 @@ msgstr "PR 检查清单会检查这一点；新增了变量却没有对应的一
 #~ msgstr ""
 #~ "新增。密钥。推理服务的内部邀请接口所要求的共享令牌（即该服务的 "
 #~ "`GATEWAY_GRANT_DISPATCH_TOKEN`）。加密存储；之后不再显示。"
+
+#~ msgid "`AGENT_SANDBOX_ARCHIVE_S3_BUCKET`"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "*Optional initial import.* S3 bucket for"
+#~ " stopped sandbox archives. Empty disables"
+#~ " sandbox deletion. Saved as "
+#~ "`sandbox_archive.bucket` in Admin → Settings"
+#~ " → Application → Sandbox archives."
+#~ msgstr ""
+#~ "*可选，仅用于初始导入。* 存放已停止沙箱归档的 S3 桶。留空就不能删除沙箱。保存后对应 "
+#~ "Admin → Settings → Application → "
+#~ "Sandbox archives 里的 `sandbox_archive.bucket`。"
+
+#~ msgid "`AGENT_SANDBOX_ARCHIVE_S3_REGION`"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "*Optional initial import.* AWS region "
+#~ "for the archive bucket. Empty uses "
+#~ "the standard SDK region configuration."
+#~ msgstr "*可选，仅用于初始导入。* 归档桶所在的 AWS 区域。留空就用 SDK 标准的区域配置。"
+
+#~ msgid "`AGENT_SANDBOX_ARCHIVE_S3_ENDPOINT`"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "*Optional initial import.* Optional HTTPS "
+#~ "S3-compatible endpoint. It must support "
+#~ "conditional `PutObject` and full-object "
+#~ "SHA-256 checksum retrieval through "
+#~ "`HeadObject`; an ETag or user-supplied"
+#~ " metadata alone never permits deletion. "
+#~ "Empty selects AWS S3."
+#~ msgstr ""
+#~ "*可选，仅用于初始导入。* 可选的、兼容 S3 的 HTTPS "
+#~ "端点。它必须支持带条件的 `PutObject`，并能通过 `HeadObject` 取回整个对象的"
+#~ " SHA-256 校验和；光有 ETag 或用户自填的元数据，绝不足以允许删除。留空就用 "
+#~ "AWS S3。"
+
+#~ msgid "`AGENT_SANDBOX_ARCHIVE_S3_PREFIX`"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "*Optional initial import.* Object prefix "
+#~ "for new archive requests, default "
+#~ "`sandbox-archives`. Each sandbox/request pair "
+#~ "receives its own immutable object. "
+#~ "Completed receipts retain their original "
+#~ "bucket and key after configuration "
+#~ "changes."
+#~ msgstr ""
+#~ "*可选，仅用于初始导入。* 新归档请求使用的对象前缀，默认 `sandbox-"
+#~ "archives`。每个\"沙箱 + "
+#~ "请求\"的组合都对应一个独立的、不可变的对象。配置改了之后，已完成的回执仍保留原来的桶和键。"
 

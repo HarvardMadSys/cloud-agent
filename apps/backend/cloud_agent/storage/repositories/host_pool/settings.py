@@ -85,6 +85,22 @@ class SettingsMixin(HostPoolBase):
             )
         return archive_settings(row)
 
+    async def sandbox_archive_policy(self) -> SandboxArchivePolicy:
+        """The stored archive policy, its access key opened.
+
+        Raises:
+            SandboxArchivePolicyError: The stored policy does not parse, or its
+                key does not open.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT sandbox_archive_settings, sandbox_archive_revision
+                FROM agent_runner_policy WHERE id
+                """
+            )
+        return stored_archive_policy(row)
+
     async def set_sandbox_archive_settings(
         self,
         *,

@@ -33,6 +33,7 @@
     {
       "files": [
         "src/app/(agents)/admin/database/DatabaseExplorer.tsx",
+        "src/app/(agents)/admin/settings/settingValues.ts",
         "src/app/(agents)/admin/usage/page.tsx",
         "src/app/(agents)/layout.tsx",
         "src/components/features/agents/sidebar/ArchiveProjectSection.tsx"
@@ -72,7 +73,6 @@
     {
       "files": [
         "src/app/(agents)/admin/measurements/present.ts",
-        "src/app/(agents)/admin/settings/settingValues.ts",
         "src/components/features/agents/sidebar/AddWorkspace.tsx",
         "src/components/features/agents/agentPush.ts",
         "src/lib/workspaceLink.ts"
@@ -230,6 +230,12 @@
       }
     },
     {
+      "files": ["src/app/(agents)/admin/settings/page.tsx"],
+      "rules": {
+        "complexity": ["error", 38]
+      }
+    },
+    {
       "files": ["src/components/features/agents/adapt/jobAdapter.ts"],
       "rules": {
         "complexity": ["error", 39]
@@ -237,20 +243,12 @@
     },
     {
       "files": [
+        "src/app/(agents)/admin/settings/ApplicationSettingGroup.tsx",
         "src/components/features/agents/goal/GoalBar.tsx",
         "src/components/features/agents/mcp/McpConnectionsSection.tsx"
       ],
       "rules": {
         "complexity": ["error", 41]
-      }
-    },
-    {
-      "files": [
-        "src/app/(agents)/admin/settings/ApplicationSettingGroup.tsx",
-        "src/app/(agents)/admin/settings/page.tsx"
-      ],
-      "rules": {
-        "complexity": ["error", 43]
       }
     },
     {

@@ -215,14 +215,11 @@ services:
       AGENT_RESIDENCY_TTL_S: ${AGENT_RESIDENCY_TTL_S:-1800}
 
       # --- Sandbox deletion archives ---------------------------------------
-      # Imported once; subsequent bucket/endpoint changes use Admin Settings.
-      AGENT_SANDBOX_ARCHIVE_S3_BUCKET: ${AGENT_SANDBOX_ARCHIVE_S3_BUCKET:-}
-      AGENT_SANDBOX_ARCHIVE_S3_REGION: ${AGENT_SANDBOX_ARCHIVE_S3_REGION:-}
-      AGENT_SANDBOX_ARCHIVE_S3_ENDPOINT: ${AGENT_SANDBOX_ARCHIVE_S3_ENDPOINT:-}
-      AGENT_SANDBOX_ARCHIVE_S3_PREFIX: ${AGENT_SANDBOX_ARCHIVE_S3_PREFIX:-sandbox-archives}
-      # The standard SDK credential chain prefers an IAM workload role.
-      # Configure environment or shared-profile credentials in a private
-      # main-service override; never add them to hosts, sandboxes or MCP relay.
+      # Admin → Settings → Sandbox → Sandbox archives sets the destination and,
+      # optionally, an access key. Without a saved key the control plane uses
+      # the standard SDK credential chain, preferably an IAM workload role;
+      # configure environment or shared-profile credentials in a private
+      # main-service override, never on hosts, sandboxes or MCP relay.
 
       # --- Behaviour switches ----------------------------------------------
       # Both default to the safe answer, so an operator who sets neither gets a

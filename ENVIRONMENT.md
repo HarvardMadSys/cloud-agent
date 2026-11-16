@@ -115,10 +115,9 @@ never reactivates an old environment value.
 Configure automatic lifecycle archives only in **Admin → Settings → Sandbox**.
 Cloud Agent stores them as one revisioned policy in the Agent database, and no
 environment variable sets that policy or its destination. The
-`AGENT_SANDBOX_ARCHIVE_S3_*` variables under *Sandbox deletion archives* are a
-one-time import for the separate archive the **Archive to S3 and delete**
-control takes, and `AGENT_SANDBOX_ARCHIVE_STATE_DIR` is where a Sandbox Manager
-keeps the local state of both, restorable checkpoints included. Lifecycle
+**Archive to S3 and delete** control uses the same policy: its bucket, region
+and saved access key. `AGENT_SANDBOX_ARCHIVE_STATE_DIR` is where a Sandbox
+Manager keeps the local state of both, restorable checkpoints included. Lifecycle
 archives go to `s3://<bucket>/cloud-agent/sandbox`, and the bucket defaults to
 `freeinference`. The saved policy contains enablement, the bucket, region,
 bounded upload sizes, and either an AWS access key or the workload
@@ -364,12 +363,8 @@ encrypted and never shown again. See [accounts](docs/developer/local-accounts.md
 
 | Variable | Value / who provisions |
 |---|---|
-| `AGENT_SANDBOX_ARCHIVE_S3_BUCKET` | *Optional initial import.* S3 bucket for stopped sandbox archives. Empty disables sandbox deletion. Saved as `sandbox_archive.bucket` in Admin → Settings → Application → Sandbox archives. |
-| `AGENT_SANDBOX_ARCHIVE_S3_REGION` | *Optional initial import.* AWS region for the archive bucket. Empty uses the standard SDK region configuration. |
-| `AGENT_SANDBOX_ARCHIVE_S3_ENDPOINT` | *Optional initial import.* Optional HTTPS S3-compatible endpoint. It must support conditional `PutObject` and full-object SHA-256 checksum retrieval through `HeadObject`; an ETag or user-supplied metadata alone never permits deletion. Empty selects AWS S3. |
-| `AGENT_SANDBOX_ARCHIVE_S3_PREFIX` | *Optional initial import.* Object prefix for new archive requests, default `sandbox-archives`. Each sandbox/request pair receives its own immutable object. Completed receipts retain their original bucket and key after configuration changes. |
 | `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` | *Optional deployment path.* Absolute path to an operator-owned private Compose override. `deploy.sh` requires a readable regular file and appends it after release-owned overlays in both source and artifact modes. Keep the file outside the checkout and restrict it to the main `control-plane` service. |
-| Standard AWS SDK credentials | *Deployment infrastructure.* Provision only on the main control plane through the standard SDK chain, preferably an IAM workload role. For environment or shared-profile credentials, set `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` to a private override for the main `control-plane` service; the base Compose does not forward AWS credential variables. No long-lived AWS credential is sent to a runner host, sandbox, web application or MCP listener. |
+| Standard AWS SDK credentials | *Deployment infrastructure, only without a saved access key.* When the Sandbox archives policy has no access key, the main control plane signs and verifies deletion archives through the standard SDK chain, preferably an IAM workload role. For environment or shared-profile credentials, set `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` to a private override for the main `control-plane` service; the base Compose does not forward AWS credential variables. A policy with a saved access key needs neither. No AWS credential is sent to a sandbox, web application or MCP listener. |
 
 See [sandbox archive storage](docs/developer/operations.md#sandbox-archive-storage) for
 permissions, retention and verification requirements.

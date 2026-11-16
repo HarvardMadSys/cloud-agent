@@ -20,7 +20,7 @@ import type {
 } from '@/lib/api/adminSettings';
 
 import type { ApplicationSettingsState } from './ApplicationSettings';
-import { ARCHIVE_BUCKET, namedOptions, parseValue, valueLabel } from './settingValues';
+import { namedOptions, parseValue, valueLabel } from './settingValues';
 
 type Changes = Record<string, AdminSettingValue | null>;
 // `snapshot` is what the review shows as current. It applies only at that
@@ -404,23 +404,18 @@ export function ApplicationSettingGroup({
   const prepare = () => {
     if (busy || !changed.length || !snapshot) return;
     const changes: Changes = {};
-    const additional: Changes = {};
     const invalid: Record<string, string> = {};
     for (const field of changed) {
       const parsed = parseValue(field, drafts[field.key]);
       if ('error' in parsed) invalid[field.key] = parsed.error;
-      else {
-        changes[field.key] = parsed.value;
-        Object.assign(additional, parsed.additionalChanges);
-      }
+      else changes[field.key] = parsed.value;
     }
     setErrors(invalid);
     if (Object.keys(invalid).length) {
       document.getElementById(`application-setting-${Object.keys(invalid)[0]}`)?.focus();
       return;
     }
-    // The prefix encoded in an S3 URI takes precedence over a separate prefix draft.
-    setReview({ changes: { ...changes, ...additional }, snapshot });
+    setReview({ changes, snapshot });
   };
 
   const apply = async () => {
@@ -554,9 +549,6 @@ export function ApplicationSettingGroup({
                 <p id={`${id}-help`} className="mt-1 break-words text-xs leading-5 text-muted">
                   {field.description}
                   {keySourceNote(key, configured)}
-                  {editable &&
-                    key === ARCHIVE_BUCKET &&
-                    ' Saving an S3 URI replaces the prefix; a bucket-root URI clears it.'}
                 </p>
                 {editable && !field.secret && (
                   <p className="mt-2 break-words text-xs text-muted">

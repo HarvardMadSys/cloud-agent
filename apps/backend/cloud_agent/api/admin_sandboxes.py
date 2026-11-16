@@ -252,9 +252,12 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
-def admin_sandbox_deletion_available() -> bool:
-    """Check configured archive availability without contacting S3."""
-    return S3SandboxArchiveStore.from_settings().available
+async def admin_sandbox_deletion_available(
+    store: _AdminSandboxesStorage | None = Depends(get_storage),
+) -> bool:
+    """Whether the stored sandbox archive policy is enabled, without contacting S3."""
+    archives = await S3SandboxArchiveStore.for_deployment(require_store(store).host_pool)
+    return archives.available
 
 
 router = APIRouter(
@@ -494,14 +497,17 @@ async def delete_admin_sandbox(
     """Queue deletion, with fail-closed recovery for a stale running or dead container.
 
     The discard query removes the exact stopped or dead container without an S3 upload.
-    The default path still requires a configured archive bucket. A discard of a
+    The default path still requires enabled sandbox archives. A discard of a
     ``cold`` sandbox, which only its checkpoint holds, completes immediately once
     its host is gone: no host holds anything to remove.
     """
     if not archive_available and not discard:
         raise HTTPException(
             status_code=503,
-            detail="Configure a sandbox archive S3 bucket in Admin Settings before deleting sandboxes.",
+            detail=(
+                "Enable Sandbox archives in Admin Settings → Sandbox before deleting "
+                "sandboxes with an archive."
+            ),
         )
     storage = require_store(store)
     sandbox_manager_confirmed_stopped = False
