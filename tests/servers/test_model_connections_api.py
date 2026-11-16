@@ -438,6 +438,33 @@ async def test_a_taken_name_or_too_many_models_is_refused_before_any_check(provi
     assert provider.calls == []
 
 
+async def test_a_model_another_of_the_owners_connections_lists_is_refused(provider):
+    store = _Store()
+    first = await _create(store)
+    provider.calls.clear()
+    async with await _client(_settings_app(store)) as client:
+        again = await client.post(
+            PATH, json={**_CREATE, "name": "Second", "models": ["gpt-5", "openai/gpt-4.1"]}
+        )
+        second = await client.post(PATH, json={**_CREATE, "name": "Second", "models": ["gpt-5"]})
+        moved = await client.patch(
+            f"{PATH}/{second.json()['id']}", json={"models": ["gpt-5", "gpt-4.1"]}
+        )
+    # Refused before any check, naming the model and where it already is.
+    assert again.status_code == 409, again.text
+    error = again.json()["detail"]["error"]
+    assert error["type"] == "model_connection_model_taken"
+    assert error["taken"] == {"model": "openai/gpt-4.1", "connection": first["name"]}
+    assert second.status_code == 201, second.text
+    assert moved.status_code == 409
+    assert moved.json()["detail"]["error"]["taken"]["model"] == "gpt-4.1"
+    assert [call for call in provider.calls if "gpt-4.1" in str(call)] == []
+    # A connection's own models are not "taken" from itself.
+    async with await _client(_settings_app(store)) as client:
+        renamed = await client.patch(f"{PATH}/{first['id']}", json={"name": "Renamed"})
+    assert renamed.status_code == 200, renamed.text
+
+
 async def test_a_manual_api_declaration_is_no_longer_accepted(provider):
     store = _Store()
     async with await _client(_settings_app(store)) as client:
@@ -711,7 +738,7 @@ async def test_a_verification_past_the_save_bound_writes_nothing(provider, monke
     provider.during = hang
     late = await _patch(store, view["id"], {"api_key": "sk-mine-0000"})
     async with await _client(_settings_app(store)) as client:
-        created = await client.post(PATH, json={**_CREATE, "name": "Second"})
+        created = await client.post(PATH, json={**_CREATE, "name": "Second", "models": ["gpt-5"]})
 
     assert late.status_code == 504, late.text
     assert late.json()["detail"]["error"]["type"] == "model_connection_verification_timeout"

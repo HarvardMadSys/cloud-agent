@@ -13,7 +13,7 @@ from tests.servers.test_agent_jobs_api import (  # noqa: F401 -- autouse fixture
     _build_app,
     _FakeOwners,
 )
-from tests.support.owners import CONNECTION_ID, connection_row
+from tests.support.owners import CONNECTION_ID, CONNECTION_MODEL, connection_row
 
 from cloud_agent.api.deps import get_owner_directory
 from cloud_agent.application.operator_models import provided_default, provided_sources
@@ -42,9 +42,13 @@ class _Store(FakeStorage):
         super().__init__()
         self.provided: dict[str, Any] | None = _provided_row()
         self.own_connection = own_connection
+        # None of the provided models, unless a test adds one.
+        self.own_models: tuple[str, ...] = (CONNECTION_MODEL,)
 
     async def list_model_connections(self, *, user_id):
-        return [connection_row(user_id)] if self.own_connection else []
+        if not self.own_connection:
+            return []
+        return [connection_row(user_id, models=self.own_models)]
 
     async def enabled_operator_connections(self):
         if self.provided is None or not self.provided["enabled"]:
@@ -118,7 +122,9 @@ async def test_a_new_task_starts_where_the_last_one_ran_whichever_kind_that_was(
     store = _Store()
 
     async def last_on_own(user_id: str) -> ModelPreferenceView:
-        return ModelPreferenceView(last_model="glm-5.1", last_model_connection_id=CONNECTION_ID)
+        return ModelPreferenceView(
+            last_model=CONNECTION_MODEL, last_model_connection_id=CONNECTION_ID
+        )
 
     store.model_preferences.get_model_preference.side_effect = last_on_own
     config = await _config(store)
@@ -139,6 +145,59 @@ async def test_a_new_task_starts_where_the_last_one_ran_whichever_kind_that_was(
     config = await _config(store)
     assert (config["default_model"], config["default_model_connection_id"]) == (
         "glm-5.1",
+        PROVIDED,
+    )
+
+
+async def test_a_model_the_owner_has_on_their_own_connection_is_listed_once_theirs() -> None:
+    store = _Store()
+    store.own_models = (CONNECTION_MODEL, "glm-5.1")
+    config = await _config(store)
+    [option] = config["model_connections"]
+    assert option["models"] == [CONNECTION_MODEL, "glm-5.1"]
+    # The deployment's copy is not listed for this owner; the rest of it is.
+    [source] = config["provided_sources"]
+    assert source["models"] == ["kimi-x"]
+    assert list(source["model_runtimes"]) == ["kimi-x"]
+    assert set(source["model_efforts"]) <= {"kimi-x"}
+    # Every model it provides is on the owner's own key: the source is not listed.
+    store.own_models = (CONNECTION_MODEL, "glm-5.1", "kimi-x")
+    assert (await _config(store))["provided_sources"] == []
+    # Another owner with no such connection still has the deployment's copy.
+    assert (await _config(_Store()))["provided_sources"][0]["models"] == ["glm-5.1", "kimi-x"]
+
+
+async def test_a_disabled_or_unusable_own_copy_leaves_the_provided_one_listed() -> None:
+    store = _Store()
+
+    async def own_disabled(*, user_id):
+        return [connection_row(user_id, models=("glm-5.1",), enabled=False)]
+
+    store.list_model_connections = own_disabled  # type: ignore[method-assign]
+    assert (await _config(store))["provided_sources"][0]["models"] == ["glm-5.1", "kimi-x"]
+
+    async def own_unusable(*, user_id):
+        row = connection_row(user_id, models=("glm-5.1",))
+        row["model_checks"] = {}
+        return [row]
+
+    store.list_model_connections = own_unusable  # type: ignore[method-assign]
+    assert (await _config(store))["provided_sources"][0]["models"] == ["glm-5.1", "kimi-x"]
+
+
+async def test_a_last_turn_on_a_provided_model_now_the_owners_own_is_not_moved_there() -> None:
+    store = _Store()
+    store.own_models = (CONNECTION_MODEL, "glm-5.1")
+
+    async def last_on_provided(user_id: str) -> ModelPreferenceView:
+        return ModelPreferenceView(last_model="glm-5.1", last_model_connection_id=PROVIDED)
+
+    store.model_preferences.get_model_preference.side_effect = last_on_provided
+    config = await _config(store)
+    # Never swapped for the same name on another source: back to the
+    # deployment's start, among what is still listed for this owner.
+    assert (config["default_model"], config["default_model_connection_id"]) == (
+        "kimi-x",
         PROVIDED,
     )
 

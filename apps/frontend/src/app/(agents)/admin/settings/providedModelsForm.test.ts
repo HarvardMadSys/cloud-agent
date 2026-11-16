@@ -115,6 +115,14 @@ describe('how a refusal reads', () => {
     expect(said('operator_model_connection_name_taken', 409)).toBe(
       'Another provided connection already has this name.',
     );
+    expect(
+      providedFailure(
+        new APIError('operator_model_model_taken', 'raw', 409, {
+          taken: { model: 'glm-5.3-flash', connection: 'Campus' },
+        }),
+        t,
+      ),
+    ).toMatch(/^This key lists glm-5\.3-flash, which Campus already provides\./);
     expect(said('operator_model_connection_not_found', 404)).toMatch(/no longer exists/);
     expect(said('operator_model_listing_failed', 422)).toMatch(/could not be read with this key/);
     expect(said('operator_model_listing_empty', 422)).toBe(

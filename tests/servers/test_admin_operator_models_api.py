@@ -432,6 +432,36 @@ async def test_a_taken_name_is_refused_before_any_provider_call(admin) -> None:
     assert admin.listed == [] and admin.verified == []
 
 
+async def test_a_model_another_provided_connection_lists_is_refused(admin) -> None:
+    first = await _created(admin)
+    admin.verified.clear()
+    admin.listing = _listing("model-9", "model-2")
+    taken = await admin.create(name="Second")
+    # Refused before anything is verified, naming the model and its connection.
+    assert taken.status_code == 409, taken.text
+    error = taken.json()["detail"]["error"]
+    assert error["type"] == "operator_model_model_taken"
+    assert error["taken"] == {"model": "model-2", "connection": first["name"]}
+    assert admin.verified == [] and len(admin.repository.rows) == 1
+
+    admin.listing = _listing("model-9")
+    second = await _created(admin, name="Second")
+    # A refresh, or a new key, that would add a taken model changes nothing.
+    admin.listing = _listing("model-9", "model-1")
+    refreshed = await admin.call("POST", f"/{second['id']}/refresh-models")
+    rotated = await admin.call(
+        "PATCH", f"/{second['id']}", json={"api_key": "sk-other-deployment-key"}
+    )
+    for response in (refreshed, rotated):
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["error"]["taken"]["model"] == "model-1"
+    assert admin.repository.rows[second["id"]]["models"] == ["model-9"]
+    # Its own models are never "taken" from itself.
+    admin.listing = _listing("model-1", "model-2")
+    again = await admin.call("POST", f"/{first['id']}/refresh-models")
+    assert again.status_code == 200, again.text
+
+
 async def test_the_master_switch_stops_saving_and_enabling(admin, monkeypatch) -> None:
     view = await _created(admin)
     monkeypatch.setenv("AGENT_MODEL_CONNECTIONS_ENABLED", "false")

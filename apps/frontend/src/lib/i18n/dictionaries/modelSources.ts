@@ -14,8 +14,6 @@ export const modelSourcesEn = {
   'modelSource.personal': '{model} · {name}',
   'modelSource.personalUnknown': '{model} · personal connection',
   'modelSource.providedUnknown': '{model} · provided by this deployment',
-  'modelSource.providedGroup': 'Provided by this deployment',
-  'modelSource.ownGroup': 'Your connections',
   'modelSource.unavailable': '{label} (unavailable)',
   'modelSource.unavailableHint':
     '{label} cannot run with {runtime}, or its connection no longer offers it. Choose a model to continue.',
@@ -44,8 +42,6 @@ export const modelSourcesZhCN: Record<keyof typeof modelSourcesEn, string> = {
   'modelSource.personal': '{model} · {name}',
   'modelSource.personalUnknown': '{model} · 个人连接',
   'modelSource.providedUnknown': '{model} · 由本部署提供',
-  'modelSource.providedGroup': '由本部署提供',
-  'modelSource.ownGroup': '你的连接',
   'modelSource.unavailable': '{label}（不可用）',
   'modelSource.unavailableHint':
     '{label} 无法与 {runtime} 一起运行，或其连接已不再提供该模型。请选择模型后继续。',
