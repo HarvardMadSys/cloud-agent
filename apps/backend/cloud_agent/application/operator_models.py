@@ -66,6 +66,47 @@ async def provided_sources(operator_models: OperatorModelRepository) -> list[dic
     return sources
 
 
+def without_own_models(
+    sources: list[dict[str, Any]], own: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """``sources`` less every model one of the owner's enabled connections offers.
+
+    A model id is listed once in an owner's composer. Where the owner's own
+    connection and a provided one both offer it, the owner chose their own key
+    for it, so theirs is the one listed; the provided copy is not offered to
+    them, and a source left with no model is not listed. Other owners still
+    see it.
+    """
+    mine = {
+        model
+        for row in own
+        if row.get("enabled")
+        for model, runtimes in usable_runtimes(row).items()
+        if runtimes
+    }
+    kept: list[dict[str, Any]] = []
+    for source in sources:
+        models = [model for model in source["models"] if model not in mine]
+        if not models:
+            continue
+        if len(models) == len(source["models"]):
+            kept.append(source)
+            continue
+        kept.append(
+            {
+                **source,
+                "models": models,
+                "model_runtimes": {model: source["model_runtimes"][model] for model in models},
+                "model_efforts": {
+                    model: offers
+                    for model, offers in source["model_efforts"].items()
+                    if model in models
+                },
+            }
+        )
+    return kept
+
+
 def provided_default(sources: list[dict[str, Any]]) -> tuple[str, str] | None:
     """``(model, connection_id)`` an owner with no history starts on, when there is one.
 
@@ -109,4 +150,5 @@ __all__ = [
     "new_operator_connection_id",
     "provided_default",
     "provided_sources",
+    "without_own_models",
 ]

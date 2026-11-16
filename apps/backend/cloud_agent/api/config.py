@@ -20,7 +20,11 @@ from cloud_agent.api.deps import (
 )
 from cloud_agent.application.model_connection_status import model_efforts, usable_runtimes
 from cloud_agent.application.model_connections import model_connections_enabled
-from cloud_agent.application.operator_models import provided_default, provided_sources
+from cloud_agent.application.operator_models import (
+    provided_default,
+    provided_sources,
+    without_own_models,
+)
 from cloud_agent.logging_utils import get_logger
 from cloud_agent.mcp.registry import resolve_connection
 from cloud_agent.profile.model_preference import resolve_connection_default
@@ -127,8 +131,14 @@ async def get_agent_config(
         # Switched off: nothing is offered, so the control stays empty.
         model_connections = []
         provided = []
+    # One name, one source: a model the owner's own connection offers runs on
+    # their key, and the deployment's copy of it is not listed for them.
+    provided = without_own_models(provided, model_connections)
     # Where the owner's newest turn ran, whichever kind of source that was;
     # with no such source left, where this deployment starts a new owner.
+    # A last turn on a provided model the owner has since put on their own
+    # connection is not moved there: a source is never swapped for another of
+    # the same model name, since the two bill different accounts.
     connection_default = resolve_connection_default(
         preference, [*model_connections, *provided]
     ) or provided_default(provided)

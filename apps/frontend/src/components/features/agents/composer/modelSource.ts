@@ -5,10 +5,13 @@ import { findSource, isProvidedId, ownConnections, providedSources } from './pro
 // Where a model runs is part of the choice, not a detail of it.
 //
 // Each of the owner's connections is a separate source, and so is each
-// connection the deployment provides. The same model id may be offered by
-// several of them: `gpt-5` on two keys bills two accounts, and on a provided
-// source it is the deployment's key instead. So a choice is always
-// the pair, and two choices are equal only when both halves are. Drafts,
+// connection the deployment provides. A model id is listed once: a save that
+// would put one on two of the owner's connections, or on two provided ones,
+// is refused, and a provided model the owner also has on their own connection
+// is not offered to them. Connections saved before that rule may still list
+// one id twice (`gpt-5` on two keys bills two accounts), so a choice is still
+// the pair, and two choices are equal only when both halves are; the label
+// names the source only then. Drafts,
 // requests and API state keep the two fields as they are; the encoded key
 // below exists only so a picker, which deals in strings, can tell two
 // same-named options apart.
@@ -153,36 +156,13 @@ export interface ModelPickerProps {
   options: string[];
   optionLabels: Record<string, string>;
   onChange: (key: string) => void;
-  /**
-   * Each option's group heading, set only where the list holds both provided
-   * models and the owner's own connections.
-   */
-  optionGroups?: Record<string, string>;
-}
-
-/** The group headings of a list of choices, set where it mixes provided and own sources. */
-function pickerGroups(
-  listed: ModelChoice[],
-  keyOf: (choice: ModelChoice) => string,
-  t: Translator,
-): Pick<ModelPickerProps, 'optionGroups'> {
-  const provided = listed.filter((choice) => isProvidedId(choice.connectionId));
-  if (provided.length === 0 || provided.length === listed.length) return {};
-  const optionGroups: Record<string, string> = {};
-  for (const choice of listed) {
-    optionGroups[keyOf(choice)] = t(
-      isProvidedId(choice.connectionId) ? 'modelSource.providedGroup' : 'modelSource.ownGroup',
-    );
-  }
-  return { optionGroups };
 }
 
 /**
  * The props a `Picker` needs for these choices (`listedChoices`). `kept` is
  * shown first when it is not listed — the turn a follow-up inherits, or a
  * personal pick that can no longer run — so the control never shows one thing
- * while another runs. Provided models and the owner's own are grouped apart
- * when both are listed.
+ * while another runs.
  */
 export function modelPicker(
   config: AgentConfigApi | null,
@@ -221,7 +201,6 @@ export function modelPicker(
       const next = byKey.get(key);
       if (next) onChange(next);
     },
-    ...pickerGroups(listed, keyOf, t),
   };
 }
 

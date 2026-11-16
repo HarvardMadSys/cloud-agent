@@ -6,7 +6,7 @@ import {
   type OperatorModelConnectionUpdate,
   type OperatorModelPrices,
 } from '@/lib/api/adminOperatorModels';
-import { invalidFields, refusedModels } from '@/lib/api/modelConnections';
+import { invalidFields, refusedModels, takenModel } from '@/lib/api/modelConnections';
 import type { Translator } from '@/lib/i18n/translate';
 import { formatUsd } from '@/lib/money';
 import { APIError, getErrorMessage } from '@/lib/utils/errors';
@@ -135,6 +135,9 @@ export function providedFailure(cause: unknown, t: Translator): string {
   if (refusedModels(cause)) return t('adminModels.error.noneUsable');
   if (invalidFields(cause)) return t('connections.invalid');
   if (cause instanceof APIError) {
+    const taken = takenModel(cause);
+    if (cause.code === 'operator_model_model_taken' && taken)
+      return t('adminModels.error.modelTaken', { model: taken.model, name: taken.connection });
     if (Object.hasOwn(REFUSALS, cause.code))
       return t(REFUSALS[cause.code as keyof typeof REFUSALS]);
     if (cause.statusCode === 504) return t('connections.timedOut');

@@ -69,7 +69,7 @@ from cloud_agent.application.operator_models import (
     new_operator_connection_id,
 )
 from cloud_agent.crypto.credential_cipher import CredentialCipherError
-from cloud_agent.domain.model_connections import ModelConnectionConflict
+from cloud_agent.domain.model_connections import ModelConnectionConflict, taken_model
 from cloud_agent.domain.operator_models import listed_prices
 from cloud_agent.schemas import (
     OperatorModelConnectionList,
@@ -216,6 +216,29 @@ def _changed() -> HTTPException:
     )
 
 
+async def _model_taken(store: _Storage, models: list[str], *, other_than: str = "") -> None:
+    """Refuse a model another provided connection lists, before anything is verified.
+
+    Each model id is provided by one connection at most, so an owner's
+    composer never lists one name twice.
+    """
+    rows = await store.operator_models.list_operator_connections()
+    taken = taken_model(models, rows, other_than=other_than)
+    if taken is None:
+        return
+    model, name = taken
+    raise HTTPException(
+        409,
+        {
+            "error": {
+                "type": "operator_model_model_taken",
+                "message": f"{model} is already provided by {name}.",
+                "taken": {"model": model, "connection": name},
+            }
+        },
+    )
+
+
 async def _name_taken(store: _Storage, name: str, *, other_than: str = "") -> bool:
     rows = await store.operator_models.list_operator_connections()
     return any(row["name"].lower() == name.lower() and row["id"] != other_than for row in rows)
@@ -348,6 +371,7 @@ async def create_connection(
         raise _taken(body.name)
     listed = await _listing(base_url=body.base_url, api_key=body.api_key)
     models = [entry.id for entry in listed]
+    await _model_taken(store, models)
     checks = await _verified(base_url=body.base_url, api_key=body.api_key, models=models)
     try:
         row = await store.operator_models.create_operator_connection(
@@ -414,6 +438,11 @@ async def update_connection(
             base_url=base_url, api_key=new_key if new_key is not None else _key(row)
         )
         requested["models"] = [entry.id for entry in listed]
+        await _model_taken(
+            store,
+            [model for model in requested["models"] if model not in row["models"]],
+            other_than=row["id"],
+        )
     plan = plan_edit(row, requested=requested, new_key=new_key)
     settings = (
         {"enabled": body.enabled}
@@ -460,7 +489,11 @@ async def refresh_models(
     store = require_store(store)
     row = await _live(store, connection_id)
     listed = await _listing(base_url=row["base_url"], api_key=_key(row))
-    plan = plan_edit(row, requested={"models": [entry.id for entry in listed]}, new_key=None)
+    models = [entry.id for entry in listed]
+    await _model_taken(
+        store, [model for model in models if model not in row["models"]], other_than=row["id"]
+    )
+    plan = plan_edit(row, requested={"models": models}, new_key=None)
     updated = await _commit(store, row, plan, {})
     await store.operator_models.set_operator_prices(
         connection_id=connection_id, prices=_prices(listed)

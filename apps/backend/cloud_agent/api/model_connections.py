@@ -77,6 +77,7 @@ from cloud_agent.domain.model_connections import (
     clean_models,
     clean_name,
     is_connection_id,
+    taken_model,
 )
 from cloud_agent_shared.model_connections import (
     MAX_API_KEY_CHARS,
@@ -384,6 +385,31 @@ def _taken(name: str) -> HTTPException:
     )
 
 
+async def _model_taken(
+    store: _Storage, user_id: str, models: list[str], *, other_than: str = ""
+) -> None:
+    """Refuse a model another of the owner's connections lists, before spending a check.
+
+    Each model id is on one of the owner's connections at most, so the
+    composer never lists one name twice.
+    """
+    rows = await store.model_connections.list_model_connections(user_id=user_id)
+    taken = taken_model(models, rows, other_than=other_than)
+    if taken is None:
+        return
+    model, name = taken
+    raise HTTPException(
+        409,
+        {
+            "error": {
+                "type": "model_connection_model_taken",
+                "message": f"{model} is already on your connection {name}.",
+                "taken": {"model": model, "connection": name},
+            }
+        },
+    )
+
+
 @router.get("", response_model=ModelConnectionList)
 async def list_connections(
     user: dict[str, Any] = Depends(require_agent_owner),
@@ -476,6 +502,7 @@ async def create_connection(
     cipher = _cipher()
     if await _name_taken(store, user["user_id"], body.name):
         raise _taken(body.name)
+    await _model_taken(store, user["user_id"], body.models)
     checks = await _verified(
         store, user["user_id"], base_url=body.base_url, api_key=body.api_key, models=body.models
     )
@@ -523,6 +550,9 @@ async def update_connection(
         requested=body.model_dump(exclude_unset=True, exclude={"api_key"}),
         new_key=new_key,
     )
+    if "models" in plan.changes:
+        added = [model for model in plan.changes["models"] if model not in row["models"]]
+        await _model_taken(store, user_id, added, other_than=connection_id)
     if plan.verify or plan.changes.get("enabled") is True:
         # Turning the feature off stops anything that would make a connection
         # usable again; disabling, deleting, renaming and removing models still work.

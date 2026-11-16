@@ -24,6 +24,8 @@ export const providedModelsEn = {
   'adminModels.search.description':
     'Connections this deployment offers to every account, with the models their keys list.',
   'adminModels.error.nameTaken': 'Another provided connection already has this name.',
+  'adminModels.error.modelTaken':
+    'This key lists {model}, which {name} already provides. A model can be provided by only one connection: limit one of the keys at the provider so they do not overlap.',
   'adminModels.error.notFound':
     'This connection no longer exists. Reload the page to see the current list.',
   'adminModels.error.featureOff':
@@ -111,6 +113,8 @@ export const providedModelsZhCN: Record<keyof typeof providedModelsEn, string> =
   'adminModels.search.label': '提供的模型',
   'adminModels.search.description': '本部署向所有账号提供的连接，以及它们的 key 列出的模型。',
   'adminModels.error.nameTaken': '已有同名的提供的连接。',
+  'adminModels.error.modelTaken':
+    '这把 key 列出了 {model}，而「{name}」已经提供了这个模型。一个模型只能由一个连接提供，请在服务商那边限定其中一把 key 的模型，让两边不重叠。',
   'adminModels.error.notFound': '此连接已不存在。请重新加载页面查看当前列表。',
   'adminModels.error.featureOff':
     '此部署已关闭模型连接功能。请先开启，再添加、验证或启用提供的连接。',
