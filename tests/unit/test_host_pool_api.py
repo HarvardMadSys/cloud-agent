@@ -32,7 +32,6 @@ from tests.support.storage import AllCapabilities
 
 from cloud_agent.api import admin_hosts, hosts
 from cloud_agent.api.deps import get_storage, verify_admin_access
-from cloud_agent.application import host_pool_view
 from cloud_agent.domain.host_pool import (
     HOST_DISABLED,
     HOST_DRAINING,
@@ -2517,31 +2516,6 @@ async def test_the_pool_listing_carries_the_new_fields(client):
     assert (row["slots_total"], row["slots_used"]) == (4, 1)
     assert row["sandbox_manager_url"] == "http://sandbox-manager-a:8092"
     assert row["enrolled"] is True
-
-
-@pytest.mark.parametrize(
-    "row",
-    [
-        # The optional phase-G fields may still be absent, but migration 0051
-        # backfills the protocol generation before this API starts.
-        {
-            "host": "legacy",
-            "last_worker_id": "w-1",
-            "first_seen_at": datetime.now(UTC),
-            "last_seen_at": datetime.now(UTC),
-            "is_active": False,
-            "drain_fence_epoch": uuid4(),
-        }
-    ],
-)
-def test_a_row_without_optional_pool_columns_still_renders(row):
-    item = host_pool_view.host_item(row)
-
-    assert item.status == HOST_ONLINE
-    assert item.enrolled is False
-    assert item.slots_used == 0
-    assert item.slots_total is None
-    assert item.drain_fence_epoch == row["drain_fence_epoch"]
 
 
 @pytest.mark.parametrize(

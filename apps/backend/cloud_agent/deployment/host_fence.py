@@ -75,11 +75,15 @@ def _body[Body: BaseModel](model: type[Body], text: str) -> Body:
         raise FenceRefused(422, "invalid request body: " + ", ".join(fields)) from None
 
 
-async def _record(audit: AuditRepository, action: str, host: str) -> None:
+async def _record(audit: AuditRepository, *, drained: bool, host: str) -> None:
     """Append the audit row; like the API, a failed write never undoes the change."""
+    action = "agent.runner_host.drain" if drained else "agent.runner_host.undrain"
     try:
         await audit.record_admin_action(
-            action=action, actor_id=ACTOR, admin_ip=ADMIN_IP, details={"host": host}
+            action="agent.runner_host.drain" if drained else "agent.runner_host.undrain",
+            actor_id=ACTOR,
+            admin_ip=ADMIN_IP,
+            details={"host": host},
         )
     except Exception as exc:  # the fence already changed; say so and go on
         print(
@@ -113,11 +117,11 @@ async def run(
                 expected_fence_epoch=acquire.expected_fence_epoch,
                 fence_token=acquire.fence_token,
             )
-            await _record(audit, "agent.runner_host.drain", host)
+            await _record(audit, drained=True, host=host)
         elif command == "undrain" and host:
             release = _body(ReleaseHostDrainFenceRequest, body)
             await commands.release_drain_fence(host=host, fence_token=release.fence_token)
-            await _record(audit, "agent.runner_host.undrain", host)
+            await _record(audit, drained=False, host=host)
     except HostCommandError as exc:
         raise FenceRefused(exc.status, str(exc), code=exc.code) from None
     return (await pool_snapshot(host_pool)).model_dump(mode="json")
