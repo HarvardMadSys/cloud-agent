@@ -1,21 +1,13 @@
 import type { AgentConfigApi } from '@/lib/api/agents';
 import type { Translator } from '@/lib/i18n/translate';
-import { formatUsdLeft } from '@/lib/money';
-import {
-  findSource,
-  isProvidedId,
-  ownConnections,
-  providedAllowance,
-  providedSources,
-  resetTime,
-} from './providedModels';
+import { findSource, isProvidedId, ownConnections, providedSources } from './providedModels';
 
 // Where a model runs is part of the choice, not a detail of it.
 //
 // Each of the owner's connections is a separate source, and so is each
 // connection the deployment provides. The same model id may be offered by
 // several of them: `gpt-5` on two keys bills two accounts, and on a provided
-// source it spends the owner's daily budget there instead. So a choice is always
+// source it is the deployment's key instead. So a choice is always
 // the pair, and two choices are equal only when both halves are. Drafts,
 // requests and API state keep the two fields as they are; the encoded key
 // below exists only so a picker, which deals in strings, can tell two
@@ -67,9 +59,7 @@ export function storedChoice(model: unknown, connectionId: unknown): ModelChoice
  * Every model a runtime's picker lists: the provided sources' models first,
  * then each of the owner's enabled connections', where this runtime can run
  * them. A model is listed only once its own verification found a way for this
- * agent to use it. A provided model whose source's budget is used up for today
- * is listed too, so its owner can see when it comes back; `offeredChoices`
- * leaves it out.
+ * agent to use it.
  */
 export function listedChoices(config: AgentConfigApi | null, runtime: string): ModelChoice[] {
   return [...providedSources(config), ...ownConnections(config)].flatMap((source) =>
@@ -80,26 +70,16 @@ export function listedChoices(config: AgentConfigApi | null, runtime: string): M
 }
 
 /**
- * Whether a choice is a provided model with nothing left of today's budget.
- * The budget is its source's, so every model of that source is used up with it.
- */
-export function isUsedUp(config: AgentConfigApi | null, choice: ModelChoice, now?: number) {
-  return providedAllowance(config, choice.connectionId, choice.model, now)?.exhausted === true;
-}
-
-/**
- * What a runtime can run now: the listed models, less any provided one used
- * up for today. Exactly what the server accepts, so nothing is offered and
- * then refused on Run.
+ * What a runtime can run now: the listed models. Exactly what the server
+ * accepts, so nothing is offered and then refused on Run.
  */
 export function offeredChoices(config: AgentConfigApi | null, runtime: string): ModelChoice[] {
-  return listedChoices(config, runtime).filter((choice) => !isUsedUp(config, choice));
+  return listedChoices(config, runtime);
 }
 
 /**
  * Whether a choice may not run here: a loaded catalog that is being read again,
- * or one that does not offer its exact source, or offers it with nothing left
- * of today's budget.
+ * or one that does not offer its exact source.
  *
  * Before any catalog has loaded nothing is known, and a turn inheriting its
  * source is left to the server, which checks that connection again on every
@@ -153,7 +133,7 @@ function sourceLabel(config: AgentConfigApi | null, choice: ModelChoice, t: Tran
 /**
  * A choice's model, and its source's name where another source lists the same
  * model, so two sources of one name never read alike; one that cannot run
- * here says so, and a provided one used up for today says that instead. Which
+ * here says so. Which
  * API the agent reaches it on is the platform's business and is not part of
  * the label.
  */
@@ -165,7 +145,6 @@ export function choiceLabel(
 ): string {
   if (!choice.connectionId) return choice.model;
   const label = sourceLabel(config, choice, t);
-  if (isUsedUp(config, choice)) return t('modelSource.usedUp', { label });
   return unavailable ? t('modelSource.unavailable', { label }) : label;
 }
 
@@ -179,63 +158,23 @@ export interface ModelPickerProps {
    * models and the owner's own connections.
    */
   optionGroups?: Record<string, string>;
-  /** A provided option's second line: what is left today, or when it resets. */
-  optionNotes?: Record<string, string>;
-  /** Options shown but not selectable: provided models used up for today. */
-  disabledOptions?: string[];
 }
 
-/**
- * What a provided model adds to its option: what is left of today's budget
- * on its source, or, with nothing left, when the budget starts over (the
- * option is then disabled). The models of one source share its budget, so
- * they all read the same. Nothing extra for any other source.
- */
-function allowanceNote(
-  config: AgentConfigApi | null,
-  choice: ModelChoice,
-  t: Translator,
-): { note: string; disabled: boolean } | null {
-  const allowance = providedAllowance(config, choice.connectionId, choice.model);
-  if (!allowance) return null;
-  if (allowance.exhausted) {
-    return {
-      note: t('modelSource.resets', { time: resetTime(allowance.resetsAt) }),
-      disabled: true,
-    };
-  }
-  const amount = formatUsdLeft(allowance.remaining);
-  return { note: t('modelSource.remaining', { amount }), disabled: false };
-}
-
-/** The group headings, budget notes and disabled options of a list of choices. */
-function pickerAnnotations(
-  config: AgentConfigApi | null,
+/** The group headings of a list of choices, set where it mixes provided and own sources. */
+function pickerGroups(
   listed: ModelChoice[],
   keyOf: (choice: ModelChoice) => string,
   t: Translator,
-): Pick<ModelPickerProps, 'optionGroups' | 'optionNotes' | 'disabledOptions'> {
+): Pick<ModelPickerProps, 'optionGroups'> {
   const provided = listed.filter((choice) => isProvidedId(choice.connectionId));
-  const grouped = provided.length > 0 && provided.length < listed.length;
+  if (provided.length === 0 || provided.length === listed.length) return {};
   const optionGroups: Record<string, string> = {};
-  const optionNotes: Record<string, string> = {};
-  const disabledOptions: string[] = [];
   for (const choice of listed) {
-    const key = keyOf(choice);
-    if (grouped) {
-      optionGroups[key] = t(
-        isProvidedId(choice.connectionId) ? 'modelSource.providedGroup' : 'modelSource.ownGroup',
-      );
-    }
-    const extra = allowanceNote(config, choice, t);
-    if (extra) optionNotes[key] = extra.note;
-    if (extra?.disabled) disabledOptions.push(key);
+    optionGroups[keyOf(choice)] = t(
+      isProvidedId(choice.connectionId) ? 'modelSource.providedGroup' : 'modelSource.ownGroup',
+    );
   }
-  return {
-    ...(grouped ? { optionGroups } : {}),
-    ...(Object.keys(optionNotes).length ? { optionNotes } : {}),
-    ...(disabledOptions.length ? { disabledOptions } : {}),
-  };
+  return { optionGroups };
 }
 
 /**
@@ -243,8 +182,7 @@ function pickerAnnotations(
  * shown first when it is not listed — the turn a follow-up inherits, or a
  * personal pick that can no longer run — so the control never shows one thing
  * while another runs. Provided models and the owner's own are grouped apart
- * when both are listed, and a provided model shows what is left of today's
- * budget; one with nothing left stays in the list, disabled.
+ * when both are listed.
  */
 export function modelPicker(
   config: AgentConfigApi | null,
@@ -281,9 +219,9 @@ export function modelPicker(
     optionLabels,
     onChange: (key) => {
       const next = byKey.get(key);
-      if (next && !isUsedUp(config, next)) onChange(next);
+      if (next) onChange(next);
     },
-    ...pickerAnnotations(config, listed, keyOf, t),
+    ...pickerGroups(listed, keyOf, t),
   };
 }
 

@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentConfigApi } from '@/lib/api/agents';
-import { providedSource, TEST_BUDGET, TEST_PROVIDED } from '@/test/connectionConfig';
+import { providedSource, TEST_PROVIDED } from '@/test/connectionConfig';
 import { useComposerModel } from './useComposerModel';
 
 vi.mock('@/components/providers', () => ({ useT: () => (key: string) => key }));
 
 const PROVIDED = { model: 'model-1', connectionId: TEST_PROVIDED };
 
-/** An owner whose default is a provided model, with `spent` of today's budget gone. */
-function loaded(spent: number, resetsAt: string): AgentConfigApi {
+/** An owner whose default the server resolved to a provided model. */
+function loaded(): AgentConfigApi {
   return {
     repos: [],
     runtimes: ['codex'],
@@ -20,9 +20,7 @@ function loaded(spent: number, resetsAt: string): AgentConfigApi {
     default_model_connection_id: TEST_PROVIDED,
     model_connections_enabled: true,
     model_connections: [],
-    provided_sources: [
-      providedSource(['model-1'], { spent_today_microusd: spent, resets_at: resetsAt }),
-    ],
+    provided_sources: [providedSource(['model-1', 'model-2'])],
   };
 }
 
@@ -32,29 +30,11 @@ function composer(config: AgentConfigApi) {
   return view;
 }
 
-describe('a provided model whose budget is used up for today, on a page left open', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-11-12T23:59:59Z'));
-  });
-  afterEach(() => {
-    cleanup();
-    vi.useRealTimers();
-  });
+afterEach(cleanup);
 
-  it('holds Run until the day starts over, then runs with nothing reloaded', () => {
-    const { result } = composer(loaded(TEST_BUDGET, '2026-11-13T00:00:00Z'));
-    expect(result.current.missingModel).toBe(true);
-    expect(result.current.choice.model).toBe('');
-    expect(result.current.unavailableHint).toBe('modelSource.usedUpHint');
-    expect(result.current.picker.disabledOptions).toEqual(['model-1']);
-    // Its line in the picker says when the budget comes back.
-    expect(result.current.picker.optionNotes).toEqual({ 'model-1': 'modelSource.resets' });
-
-    // Midnight UTC passes with nobody touching the page.
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
+describe('a provided model a new owner starts on', () => {
+  it('runs with nothing chosen, and nothing counted down beside it', () => {
+    const { result } = composer(loaded());
     expect(result.current.missingModel).toBe(false);
     expect(result.current.choice).toEqual(PROVIDED);
     expect(result.current.requestFields).toEqual({
@@ -62,34 +42,17 @@ describe('a provided model whose budget is used up for today, on a page left ope
       model_connection_id: TEST_PROVIDED,
     });
     expect(result.current.unavailableHint).toBe('');
-    expect(result.current.picker.disabledOptions ?? []).toEqual([]);
-    // A new day's budget: the line says what is left again.
-    expect(result.current.picker.optionNotes).toEqual({ 'model-1': 'modelSource.remaining' });
+    expect(result.current.picker).not.toHaveProperty('optionNotes');
+    expect(result.current.picker).not.toHaveProperty('disabledOptions');
   });
 
-  it('offers exactly what its picker shows, on a redraw the reset did not cause', () => {
-    const { result, rerender } = composer(loaded(TEST_BUDGET, '2026-11-13T00:00:00Z'));
-    // The clock moves, the timer has not fired: the tab was asleep.
-    vi.setSystemTime(new Date('2026-11-13T00:00:01Z'));
-    rerender();
-    expect(result.current.picker.disabledOptions ?? []).toEqual([]);
-    act(() => result.current.picker.onChange('model-1'));
-    expect(result.current.choice).toEqual(PROVIDED);
-    expect(result.current.missingModel).toBe(false);
-  });
-
-  it('waits out a reset further off than a timer can be set for', () => {
-    const { result } = composer(loaded(TEST_BUDGET, '2999-01-01T00:00:00Z'));
-    act(() => {
-      vi.advanceTimersByTime(40 * 24 * 60 * 60 * 1000);
-    });
-    expect(result.current.missingModel).toBe(true);
-    // One timer re-armed, not a loop of them firing at once.
-    expect(vi.getTimerCount()).toBe(1);
-  });
-
-  it('sets no timer where nothing is provided', () => {
-    composer({ ...loaded(0, '2026-11-13T00:00:00Z'), provided_sources: [] });
-    expect(vi.getTimerCount()).toBe(0);
+  it('sets no timer: there is no day to wait out', () => {
+    vi.useFakeTimers();
+    try {
+      composer(loaded());
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

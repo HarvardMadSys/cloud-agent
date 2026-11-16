@@ -458,12 +458,10 @@ describe('local account model onboarding', () => {
 describe('models the deployment provides', () => {
   const PROVIDED = 'oconn_0123456789abcdef0123456789abcdef';
   const SPENT = 'oconn_fedcba9876543210fedcba9876543210';
-  const RESETS = '2999-01-01T00:00:00Z';
 
   /**
-   * Two provided sources for Codex. The first has $3.20 left of today's $5.00;
-   * `shared` is also on the owner's own connection. The second has spent all
-   * of its budget for today.
+   * Two provided sources for Codex; `shared` is also on the owner's own
+   * connection.
    */
   function provided(overrides: Partial<AgentConfigApi> = {}): AgentConfigApi {
     return config({
@@ -473,40 +471,24 @@ describe('models the deployment provides', () => {
         {
           id: PROVIDED,
           name: 'House models',
-          is_default: true,
-          default_model: 'house-fast',
           models: ['house-fast', 'shared'],
           model_runtimes: { 'house-fast': ['codex'], shared: ['codex'] },
           model_efforts: {
             'house-fast': { codex: { status: 'supported', levels: ['low', 'high'] } },
           },
-          daily_budget_microusd: 5_000_000,
-          spent_today_microusd: 1_800_000,
-          resets_at: RESETS,
         },
         {
           id: SPENT,
           name: 'Spent house',
-          is_default: false,
-          default_model: null,
           models: ['house-spent', 'house-idle'],
           model_runtimes: { 'house-spent': ['codex'], 'house-idle': ['codex'] },
-          daily_budget_microusd: 2_000_000,
-          spent_today_microusd: 2_000_000,
-          resets_at: RESETS,
         },
       ],
       ...overrides,
     });
   }
 
-  const reset = new Date(RESETS).toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-  const usedUp = `Today’s budget is used up · resets at ${reset}`;
-
-  it('groups them apart from the owner’s connections, with what is left of today’s budget', async () => {
+  it('groups them apart from the owner’s connections, with nothing counted beside them', async () => {
     vi.mocked(getAgentConfig).mockResolvedValue(provided());
     render(<TaskComposer />);
     await chooseRepository();
@@ -518,12 +500,11 @@ describe('models the deployment provides', () => {
         .getAllByRole('option')
         .map((option) => option.textContent),
     ).toEqual([
-      // One budget for a source's models together: both say what is left of it.
-      'house-fast $3.20 left today',
+      'house-fast',
       // Listed by the owner's connection too, so each says where it runs.
-      'shared · House models $3.20 left today',
-      `house-spent (used up today) ${usedUp}`,
-      `house-idle (used up today) ${usedUp}`,
+      'shared · House models',
+      'house-spent',
+      'house-idle',
     ]);
     const own = screen.getByRole('group', { name: 'Your connections' });
     expect(
@@ -531,14 +512,11 @@ describe('models the deployment provides', () => {
         .getAllByRole('option')
         .map((option) => option.textContent),
     ).toEqual(['shared · My provider', 'mine']);
-    // Used up for today: every model of that source is shown, with when it comes back,
-    // and none can be selected.
-    for (const name of [/house-spent/, /house-idle/]) {
-      const spent = within(house).getByRole('option', { name });
-      expect(spent).toHaveAttribute('aria-disabled', 'true');
-      fireEvent.click(spent);
-      expect(screen.getByRole('dialog', { name: 'Model' })).toBeInTheDocument();
-    }
+    // Every provided model can be chosen: nothing here holds one back.
+    expect(within(house).getByRole('option', { name: /house-spent/ })).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
   });
 
   it('runs an owner with no connection of their own on a provided model, with no setup', async () => {
@@ -564,28 +542,5 @@ describe('models the deployment provides', () => {
       model_connection_id: PROVIDED,
       reasoning_effort: 'high',
     });
-  });
-
-  it('holds Run on a provided model whose budget is used up, and says when it resets', async () => {
-    vi.mocked(getAgentConfig).mockResolvedValue(
-      provided({ default_model: 'house-spent', default_model_connection_id: SPENT }),
-    );
-    render(<TaskComposer />);
-    await chooseRepository();
-    choose('Agent', 'Codex');
-    expect(
-      await screen.findByText(
-        `Today’s budget for house-spent on this deployment is used up. It resets at ${reset}. Choose a model that is still available to continue.`,
-      ),
-    ).toBeVisible();
-    expect(screen.getByLabelText('Model')).toHaveAccessibleDescription(
-      'house-spent (used up today)',
-    );
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Try anyway' } });
-    expect(screen.getByRole('button', { name: /^Run/ })).toBeDisabled();
-    // Another model, provided or not, lets it run; nothing was switched for the owner.
-    choose('Model', /^house-fast/);
-    expect(screen.queryByText(/on this deployment is used up/)).toBeNull();
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Run/ })).toBeEnabled());
   });
 });

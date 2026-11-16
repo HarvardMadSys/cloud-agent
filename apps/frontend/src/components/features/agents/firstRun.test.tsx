@@ -12,7 +12,7 @@ import {
   type AgentJobApi,
 } from '@/lib/api/agents';
 
-import { providedSource, TEST_BUDGET } from '@/test/connectionConfig';
+import { providedSource } from '@/test/connectionConfig';
 
 import { MODEL_CONNECTIONS_CHANGED } from './composer/modelConnectionEvents';
 import { FirstRunProvider, firstRunSteps, useFirstRun } from './firstRun';
@@ -314,13 +314,6 @@ describe('firstRunSteps', () => {
         model_connections_enabled: true,
         model_connection_required: true,
         provided_sources: provided,
-      }),
-    ).toEqual(['model (done)', 'connect', 'repository', 'task']);
-    // Used up for today is still theirs to run tomorrow: nothing to set up.
-    expect(
-      ids({
-        model_connections_enabled: true,
-        provided_sources: [providedSource(['house-fast'], { spent_today_microusd: TEST_BUDGET })],
       }),
     ).toEqual(['model (done)', 'connect', 'repository', 'task']);
   });

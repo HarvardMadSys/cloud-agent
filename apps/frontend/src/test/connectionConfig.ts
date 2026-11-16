@@ -24,18 +24,7 @@ export function offering(
 /** A connection the deployment provides, as a test's owner is offered it. */
 export const TEST_PROVIDED = 'oconn_0123456789abcdef0123456789abcdef';
 
-/** A time safely after any test's clock: today's spending has not started over. */
-export const TEST_RESETS_AT = '2999-01-01T00:00:00Z';
-
-/** What a test's owner may spend a day on a provided source: $5.00, in micro-dollars. */
-export const TEST_BUDGET = 5_000_000;
-
-/**
- * One provided source listing `models`, on which the owner may spend
- * `TEST_BUDGET` a day and has spent nothing. `overrides` sets another budget
- * (`daily_budget_microusd`) or what was spent today (`spent_today_microusd`):
- * all of the budget spent is a source used up for today.
- */
+/** One provided source listing `models`, every agent able to run each. */
 export function providedSource(
   models: string[],
   overrides: Partial<ProvidedModelSourceApi> = {},
@@ -44,13 +33,8 @@ export function providedSource(
   return {
     id: TEST_PROVIDED,
     name: 'House models',
-    is_default: true,
-    default_model: models[0] ?? null,
     models,
     model_runtimes: Object.fromEntries(models.map((model) => [model, runtimes])),
-    daily_budget_microusd: TEST_BUDGET,
-    spent_today_microusd: 0,
-    resets_at: TEST_RESETS_AT,
     ...overrides,
   };
 }

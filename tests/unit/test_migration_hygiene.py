@@ -68,6 +68,11 @@ KNOWN_ORPHANS: dict[str, str] = {
         "the platform publisher was removed in #1103; dropped by a migration in the "
         "release after it"
     ),
+    "agent_operator_user_budgets": (
+        "created by 0120_operator_model_budgets for each account's daily budget on a "
+        "provided connection; provided models stopped keeping budgets, so nothing "
+        "reads it. Dropped by a migration in a later release."
+    ),
     "agent_mcp_catalog_cache": (
         "created by 0014_mcp_catalog_cache and written by 0061 in SQL only; the "
         "runtime reads agent_mcp_catalog_snapshots instead, so no Python reader "

@@ -1,4 +1,4 @@
-"""Port: the models a deployment provides, owners' budgets, and the model relay's reads."""
+"""Port: the models a deployment provides, their prices, and the model relay's reads and records."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from datetime import date
+
+    from cloud_agent.domain.operator_models import ModelPrices
 
 
 class ChargeOutcomeUnknown(Exception):
@@ -19,7 +21,7 @@ class ChargeOutcomeUnknown(Exception):
 
 
 class OperatorModelRepository(Protocol):
-    """Persist provided connections and record what the model relay's requests cost.
+    """Persist provided connections and record what the model relay's requests used.
 
     Rows are plain dictionaries with the fields an owner's connection row has,
     ``api_key_ciphertext`` included; encrypting and decrypting is the caller's
@@ -72,53 +74,16 @@ class OperatorModelRepository(Protocol):
         """How many enrolled hosts advertise that their sandboxes reach the model relay."""
         ...
 
-    async def operator_terms(
+    async def operator_prices(
         self, *, connection_ids: list[str]
-    ) -> dict[str, dict[str, dict[str, Any]]]:
-        """Each connection's stored terms per model: ``{connection: {model: terms}}``.
-
-        Terms are a model's prices (``input_price``, ``output_price``,
-        ``cache_read_price``, ``cache_write_price``), whether it is for named
-        accounts only (``named_only``) and its ``global_concurrency``.
-        """
+    ) -> dict[str, dict[str, ModelPrices]]:
+        """Each connection's models that have prices: ``{connection: {model: prices}}``."""
         ...
 
-    async def set_operator_terms(
-        self, *, connection_id: str, model: str, terms: Mapping[str, Any]
-    ) -> bool:
-        """Set a listed model's terms; ``False`` when it is not listed."""
-        ...
-
-    async def set_operator_user_budget(
-        self, *, connection_id: str, user_id: str, daily_budget_microusd: int
-    ) -> bool:
-        """Give one account its own daily budget; ``False`` when the connection is gone."""
-        ...
-
-    async def clear_operator_user_budget(self, *, connection_id: str, user_id: str) -> bool:
-        """Return one account to the default budget; ``False`` when it had none of its own."""
-        ...
-
-    async def set_operator_user_access(
-        self, *, connection_id: str, user_id: str, model: str, offered: bool
-    ) -> bool:
-        """Offer one account a listed model, or withhold it; ``False`` when not listed."""
-        ...
-
-    async def clear_operator_user_access(
-        self, *, connection_id: str, user_id: str, model: str
-    ) -> bool:
-        """Return one account to a model's default; ``False`` when it had no answer of its own."""
-        ...
-
-    async def list_operator_users(
-        self, *, connection_id: str, cursor: str | None, limit: int
-    ) -> list[dict[str, Any]]:
-        """Accounts with a budget or an answer of their own, or with use today, by account id."""
-        ...
-
-    async def operator_user(self, *, connection_id: str, user_id: str) -> dict[str, Any]:
-        """One account as :meth:`list_operator_users` lists it, whatever it has of its own."""
+    async def set_operator_prices(
+        self, *, connection_id: str, prices: Mapping[str, ModelPrices | None]
+    ) -> None:
+        """Store listed models' prices; ``None`` removes a model's."""
         ...
 
     async def operator_usage(
@@ -127,8 +92,8 @@ class OperatorModelRepository(Protocol):
         """Requests, their tokens and their cost per day, account and model, newest day first."""
         ...
 
-    async def operator_sources_for_user(self, *, user_id: str) -> list[dict[str, Any]]:
-        """Every enabled connection with ``user_id``'s allowance on each listed model."""
+    async def enabled_operator_connections(self) -> list[dict[str, Any]]:
+        """Every enabled provided connection, oldest first."""
         ...
 
     async def release_stale_operator_residencies(
@@ -147,8 +112,7 @@ class OperatorModelRepository(Protocol):
         attempt on its own enrolled host, and the job has not been asked to
         stop. Answers the job, its owner, its provided ``connection`` row
         (``None`` when the turn runs on none), the revision this residency was
-        bound to, and for ``model`` the owner's ``allowance``, the model's
-        ``prices`` and its ``global_concurrency``.
+        bound to, and for ``model`` its ``prices`` (``None`` when it has none).
         """
         ...
 
@@ -166,12 +130,12 @@ class OperatorModelRepository(Protocol):
         estimated: bool,
         day: date | None = None,
     ) -> None:
-        """Add one served request, its tokens and its cost to the owner's use on ``day``.
+        """Add one served request, its tokens and what they cost to the owner's use on ``day``.
 
         ``day`` is the UTC day its answer ended on, today when ``None``.
         ``input_tokens`` is every input token, the cached ones included.
         ``estimated`` says the answer named no usage, or was cut short, and
-        the cost is the relay's estimate. Raises :class:`ChargeOutcomeUnknown`
+        the tokens are the relay's estimate. Raises :class:`ChargeOutcomeUnknown`
         when the statement was sent and its outcome is not known; any other
         failure wrote nothing.
         """

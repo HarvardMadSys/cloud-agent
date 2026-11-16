@@ -132,9 +132,6 @@ async def require_connection_source(
             runtime=runtime,
             model=model,
             reasoning_effort=reasoning_effort,
-            # A new turn: a provided model whose owner has used up today's
-            # budget is refused here, before anything is queued.
-            admit=True,
         )
     except ModelConnectionUnusable as exc:
         raise model_connection_unusable(exc) from None

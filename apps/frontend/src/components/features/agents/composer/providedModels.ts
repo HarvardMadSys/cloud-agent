@@ -7,11 +7,9 @@ import type {
 // Models the deployment provides, as their owner-facing pages read them.
 //
 // A provided source (`oconn_…`) sits beside the owner's own connections
-// (`mconn_…`) and is chosen the same way: a model and the source's id. What
-// differs is the allowance. Each owner has a budget per UTC day on a source's
-// models together, and each request is charged the tokens it used at its
-// model's prices; `/config` answers the budget, what was spent of it today
-// and when the day starts over. Amounts are micro-dollars (`@/lib/money`).
+// (`mconn_…`) and is chosen the same way: a model and the source's id. It is
+// every owner's, with the same models for everyone, and runs on the
+// deployment's key; nothing here counts what an owner may spend on it.
 
 const PROVIDED_PREFIX = 'oconn_';
 
@@ -47,65 +45,6 @@ export function findSource(
   return providedSource(config, id) ?? config?.model_connections?.find((entry) => entry.id === id);
 }
 
-/** What an owner has left to spend on one provided source today, in micro-dollars. */
-export interface Allowance {
-  /** What the owner may spend today on the source's models together. */
-  budget: number;
-  /** What their requests on the source have cost today. */
-  spent: number;
-  /** `budget - spent`, never below zero. */
-  remaining: number;
-  /** Nothing is left until `resetsAt`. */
-  exhausted: boolean;
-  resetsAt: string;
-}
-
-/**
- * The owner's allowance on a source, as of `now`: one budget for the day,
- * shared by every model the source lists.
- *
- * Once `resets_at` has passed the day's spending has started over, whatever a
- * `/config` read before midnight said: a page left open overnight must not
- * keep a model closed.
- */
-export function allowanceOf(source: ProvidedModelSourceApi, now: number = Date.now()): Allowance {
-  const budget = source.daily_budget_microusd;
-  const reset = Date.parse(source.resets_at);
-  const spent = Number.isFinite(reset) && now >= reset ? 0 : source.spent_today_microusd;
-  const remaining = Math.max(0, budget - spent);
-  return { budget, spent, remaining, exhausted: remaining === 0, resetsAt: source.resets_at };
-}
-
-/**
- * When the next of the provided sources' days starts over, in epoch
- * milliseconds; `null` when none lies ahead of `now`.
- */
-export function nextAllowanceReset(
-  config: AgentConfigApi | null,
-  now: number = Date.now(),
-): number | null {
-  const ahead = providedSources(config)
-    .map((source) => Date.parse(source.resets_at))
-    .filter((reset) => Number.isFinite(reset) && reset > now);
-  return ahead.length > 0 ? Math.min(...ahead) : null;
-}
-
-/**
- * A provided model's allowance, which is its source's; `null` for any other
- * choice. A source whose answer names no budget is not limited here: the
- * server still decides when the turn is sent.
- */
-export function providedAllowance(
-  config: AgentConfigApi | null,
-  connectionId: string | null | undefined,
-  model: string,
-  now?: number,
-): Allowance | null {
-  const source = providedSource(config, connectionId);
-  if (!source?.models.includes(model)) return null;
-  return Number.isFinite(source.daily_budget_microusd) ? allowanceOf(source, now) : null;
-}
-
 /** Whether any provided source has a model some agent can run for this owner. */
 export function hasRunnableProvidedModel(config: AgentConfigApi | null): boolean {
   return providedSources(config).some((source) =>
@@ -124,25 +63,17 @@ export function modelSetupRequired(config: AgentConfigApi | null): boolean {
   return config?.model_connection_required === true && !hasRunnableProvidedModel(config);
 }
 
-/** The provided source a newcomer is pointed at: the default one, else the first. */
+/** The provided source a newcomer is pointed at: the oldest, where new owners start. */
 export function leadingProvidedSource(
   config: AgentConfigApi | null,
 ): ProvidedModelSourceApi | undefined {
-  const sources = providedSources(config);
-  return sources.find((source) => source.is_default) ?? sources[0];
-}
-
-/** When the day's budget starts over, in the viewer's own time zone and format. */
-export function resetTime(iso: string): string {
-  const time = new Date(iso);
-  if (Number.isNaN(time.getTime())) return '';
-  return time.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return providedSources(config)[0];
 }
 
 /**
  * The line that says whose a turn's usage is: the owner's provider bills a
- * turn on their own connection; one on a provided model spends the owner's
- * daily budget on this deployment. A control plane that predates provided
+ * turn on their own connection; one on a provided model runs on this
+ * deployment's key. A control plane that predates provided
  * models names no source, which reads as the owner's own.
  */
 export function usageSourceKey(

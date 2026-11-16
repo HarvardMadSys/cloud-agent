@@ -317,11 +317,11 @@ describe('LedgerUsage with the owner change stream', () => {
   });
 });
 
-it('says a turn on a provided model spends the daily budget, not the owner’s provider', async () => {
+it('says a turn on a provided model ran on the deployment’s key, not the owner’s provider', async () => {
   vi.mocked(getAgentJobUsage).mockResolvedValue({ ...usage(1200, 80), source: 'provided' });
   await mount();
   expect(screen.getByText(/a model this deployment provides/)).toBeInTheDocument();
-  expect(screen.getByText(/counts against your daily budget/)).toBeInTheDocument();
+  expect(screen.getByText(/on the deployment’s own key/)).toBeInTheDocument();
   expect(screen.queryByText(/your provider bills it/)).not.toBeInTheDocument();
   expect(screen.getByLabelText('Usage')).not.toHaveTextContent('$');
 });

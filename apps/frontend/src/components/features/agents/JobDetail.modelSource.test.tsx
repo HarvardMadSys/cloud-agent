@@ -244,32 +244,24 @@ describe('follow-up model sources', () => {
 
 describe('a conversation on a model the deployment provides', () => {
   const PROVIDED = 'oconn_0123456789abcdef0123456789abcdef';
-  const RESETS = '2999-01-01T00:00:00Z';
 
-  const BUDGET = 5_000_000;
-
-  /** One provided source with $5.00 a day for its two models, of which `spent` is gone. */
-  function providing(spent: number) {
+  /** One provided source with two models. */
+  function providing() {
     vi.mocked(getAgentConfig).mockResolvedValue({
       ...CONFIG,
       provided_sources: [
         {
           id: PROVIDED,
           name: 'House models',
-          is_default: true,
-          default_model: 'shared',
           models: ['shared', 'house-fast'],
           model_runtimes: { shared: ['codex'], 'house-fast': ['codex'] },
-          daily_budget_microusd: BUDGET,
-          spent_today_microusd: spent,
-          resets_at: RESETS,
         },
       ],
     });
   }
 
   it('names the provided source the turn ran on, and inherits it without naming it again', async () => {
-    providing(1_800_000);
+    providing();
     render(<JobDetail job={makeJob({ modelConnectionId: PROVIDED })} />);
     // `shared` is on three sources: the control says which one this chat runs on.
     await waitFor(() =>
@@ -278,11 +270,11 @@ describe('a conversation on a model the deployment provides', () => {
       ),
     );
     fireEvent.click(screen.getByLabelText('Model for this turn'));
-    expect(
-      screen.getByRole('option', { name: 'shared · House models $3.20 left today' }),
-    ).toHaveAttribute('aria-selected', 'true');
-    // The source's other model draws on the same budget.
-    expect(screen.getByRole('option', { name: 'house-fast $3.20 left today' })).toBeVisible();
+    expect(screen.getByRole('option', { name: 'shared · House models' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('option', { name: 'house-fast' })).toBeVisible();
     fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
     await send('Go on');
     await waitFor(() => expect(sentBody()).toMatchObject({ prompt: 'Go on' }));
@@ -291,37 +283,13 @@ describe('a conversation on a model the deployment provides', () => {
   });
 
   it('switches a personal conversation onto a provided model by its source id', async () => {
-    providing(0);
+    providing();
     render(<JobDetail job={makeJob()} />);
     await screen.findByLabelText('Model for this turn');
-    chooseModel('house-fast $5.00 left today');
+    chooseModel('house-fast');
     await send('Use the house model');
     await waitFor(() =>
       expect(sentBody()).toMatchObject({ model: 'house-fast', model_connection_id: PROVIDED }),
-    );
-  });
-
-  it('holds Send once today’s budget is used up, and never falls back to a namesake', async () => {
-    providing(BUDGET);
-    render(<JobDetail job={makeJob({ modelConnectionId: PROVIDED })} />);
-    expect(
-      await screen.findByText(/shared · House models \(used up today\), which is unavailable/),
-    ).toBeVisible();
-    fireEvent.change(screen.getByLabelText('Add a follow-up'), { target: { value: 'Go on' } });
-    expect(screen.getByRole('button', { name: /^(Send|Queue)$/ })).toBeDisabled();
-    fireEvent.keyDown(screen.getByLabelText('Add a follow-up'), { key: 'Enter' });
-    expect(submitThreadMessage).not.toHaveBeenCalled();
-    // Every model of the used-up source stays listed, disabled, with when it comes back.
-    fireEvent.click(screen.getByLabelText('Model for this turn'));
-    const spent = screen.getAllByRole('option', { name: /Today’s budget is used up · resets at/ });
-    expect(spent.map((option) => option.textContent?.split(' ')[0])).toEqual([
-      'shared',
-      'house-fast',
-    ]);
-    for (const option of spent) expect(option).toHaveAttribute('aria-disabled', 'true');
-    // The owner's own connections are theirs to pay for, and stay open.
-    expect(screen.getByRole('option', { name: 'shared · My provider' })).not.toHaveAttribute(
-      'aria-disabled',
     );
   });
 });

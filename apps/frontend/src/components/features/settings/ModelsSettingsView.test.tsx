@@ -78,12 +78,7 @@ afterEach(() => {
 
 describe('the models a deployment provides, in Settings', () => {
   it('lists each by name and nothing else', async () => {
-    providing(
-      providedSource(['house-fast', 'house-open', 'house-spent'], {
-        daily_budget_microusd: 5_000_000,
-        spent_today_microusd: 1_800_000,
-      }),
-    );
+    providing(providedSource(['house-fast', 'house-open', 'house-spent']));
     render(<ModelsSettingsView />);
 
     const card = await provided();
@@ -92,7 +87,7 @@ describe('the models a deployment provides, in Settings', () => {
         .getAllByRole('listitem')
         .map((item) => item.textContent),
     ).toEqual(['house-fast', 'house-open', 'house-spent']);
-    // The budget, what was spent of it today and the reset belong to the model picker.
+    // Nothing about money or limits: the provider's key bounds them.
     expect(card).not.toHaveTextContent(/\$|5\.00|1\.80|3\.20|left today|budget|resets/i);
     expect(within(card).queryByRole('table')).not.toBeInTheDocument();
     // One source needs no name, and the list no heading.

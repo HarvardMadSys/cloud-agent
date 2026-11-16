@@ -7,8 +7,6 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from cloud_agent.domain.operator_models import Allowance
-
 
 class ModelConnectionRepository(Protocol):
     """Persist model connections per owner.
@@ -125,15 +123,8 @@ class ModelConnectionRepository(Protocol):
     async def operator_connection(self, *, connection_id: str) -> dict[str, Any] | None:
         """A connection the deployment provides, deleted ones included; ``None`` otherwise.
 
-        Not scoped to an owner: it is every admitted owner's. What one owner
-        may use of it is :meth:`operator_allowance`.
+        Not scoped to an owner: it is every admitted owner's.
         """
-        ...
-
-    async def operator_allowance(
-        self, *, connection_id: str, user_id: str, model: str
-    ) -> Allowance:
-        """``user_id``'s daily request allowance on one provided model, with today's use."""
         ...
 
     async def bind_operator_residency(

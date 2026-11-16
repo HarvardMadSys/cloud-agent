@@ -116,6 +116,8 @@ UNUSABLE_MESSAGES: dict[str, str] = {
     "provided_model_unavailable": (
         "This deployment no longer provides that model for this agent. Choose another model."
     ),
+    # No longer raised: provided models have no per-account allowance. Kept
+    # for a turn or waiting message an earlier release refused with them.
     "allowance_none": (
         "That model is not provided to your account on this deployment. Choose another "
         "model, or ask the deployment administrator."

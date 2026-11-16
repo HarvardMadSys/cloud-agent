@@ -72,8 +72,6 @@ describe('reasoning levels on a model the deployment provides', () => {
       {
         id: PROVIDED,
         name: 'House models',
-        is_default: true,
-        default_model: 'house-thinker',
         models: ['house-thinker', 'deepseek-like', 'house-plain'],
         model_runtimes: {
           'house-thinker': ['claude-code', 'pi'],
@@ -87,9 +85,6 @@ describe('reasoning levels on a model the deployment provides', () => {
           },
           'deepseek-like': { 'claude-code': { status: 'supported', levels: ['low'] } },
         },
-        daily_budget_microusd: 5_000_000,
-        spent_today_microusd: 0,
-        resets_at: '2999-01-01T00:00:00Z',
       },
     ],
   } as AgentConfigApi;

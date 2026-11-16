@@ -1,22 +1,21 @@
-"""Models a deployment provides: budgets, prices, the relay's route list and the owner tag.
+"""Models a deployment provides: prices, the relay's route list and the first model.
 
 Pure rules, no I/O. A *provided* (operator) connection has the fields an
 owner's connection has, so the same predicate decides which agents run which
 model (``domain.model_connections.require_usable``). What is its own lives
 here:
 
-**Budgets.** Each owner may spend an amount per UTC day on a connection's
-models together, in millionths of a US dollar. The connection has a default;
-an account may have an amount of its own, which replaces it. ``0`` withholds
-the connection, and a connection with no default chosen offers nothing.
+**Its models are its key's.** The connection lists what its provider lists
+for its key, so the provider decides which models the deployment offers. The
+first of them an agent can use is where a new owner starts.
 
-**Prices.** A request costs what it used at its model's prices: input, output
-and, where the provider prices them apart, tokens read from and written to
-its prompt cache, each in millionths of a US dollar per million tokens. A
-model with no prices is offered to nobody.
-
-**Who a model is for.** A model is open to every owner, or only to the
-accounts named for it; an account's own answer replaces either.
+**Prices, for the usage table.** A request's tokens are recorded with what
+they cost at its model's prices: input, output and, where the provider prices
+them apart, tokens read from and written to its prompt cache, each in
+millionths of a US dollar per million tokens. They are the prices the
+provider's model listing gives; a model it gives none for is recorded by its
+tokens alone. Nothing is limited by them: the provider's own budget on the
+key is what caps spending.
 
 **The relay's routes.** The model relay forwards exactly the inference and
 listing paths an agent CLI calls under the connection's Base URL, matched
@@ -27,16 +26,11 @@ See ``docs/agents/specs/2026-11-12-platform-model-relay.zh-CN.md``.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from cloud_agent.domain.model_connections import ModelConnectionInvalid
 from cloud_agent.domain.model_usage import CHAT, MESSAGES, RESPONSES, TokenUsage
 from cloud_agent_shared.model_connections import anthropic_base_url
 
@@ -46,11 +40,6 @@ if TYPE_CHECKING:
 #: The domain the stored key of a provided connection is encrypted under, and
 #: its members' translator tokens are derived under, from the settings root key.
 OPERATOR_CONNECTION_KEY_DOMAIN = b"cloud-agent/operator-model-connection-key/v1"
-#: What an owner's tag is a MAC of, ahead of the account id.
-END_USER_TAG_DOMAIN = b"cloud-agent/operator-model-connection/end-user/v1"
-END_USER_TAG_CHARS = 24
-
-DEFAULT_USER_CONCURRENCY = 4
 
 #: Money is kept in whole millionths of a US dollar, and a price in those per
 #: million tokens: 2_800_000 is $2.80 per million tokens. A request's cost is
@@ -59,38 +48,8 @@ DEFAULT_USER_CONCURRENCY = 4
 MICROUSD_PER_USD = 1_000_000
 TOKENS_PER_PRICE = 1_000_000
 _MICRO = Decimal("0.000001")
-
-_HEADER_NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,62}")
-#: Headers the relay writes, strips or passes on from the client; an owner tag
-#: may not be one.
-_RESERVED_HEADERS = frozenset(
-    {
-        "authorization",
-        "x-api-key",
-        "host",
-        "content-length",
-        "content-type",
-        "connection",
-        "transfer-encoding",
-        "cookie",
-        "accept",
-        "accept-encoding",
-        "user-agent",
-        "anthropic-version",
-        "anthropic-beta",
-        "openai-beta",
-    }
-)
-
-
-class OperatorTermsMissing(Exception):
-    """A connection cannot be enabled before it has a budget and every model has prices."""
-
-    def __init__(self, models: list[str], *, budget: bool) -> None:
-        """Keep the models that still need prices, and whether the budget is still to be chosen."""
-        super().__init__("a default budget or model prices are missing")
-        self.models = models
-        self.budget = budget
+#: The dearest price a listing is believed: a million dollars per million tokens.
+_MAX_LISTED_USD = Decimal(1_000_000)
 
 
 @dataclass(frozen=True)
@@ -156,110 +115,46 @@ def request_cost(prices: ModelPrices, usage: TokenUsage) -> int:
     return int(Decimal(cost).quantize(_MICRO, rounding=ROUND_HALF_UP) * MICROUSD_PER_USD)
 
 
-@dataclass(frozen=True)
-class Allowance:
-    """What one owner may use of one provided model today."""
+def listed_prices(pricing: Any) -> ModelPrices | None:
+    """A model's prices as its provider's listing gives them; ``None`` when it gives none.
 
-    #: Whether the model is this owner's to use at all: it has prices, it is
-    #: open to them, and their budget on its connection is not zero.
-    offered: bool
-    #: Micro-dollars the owner may spend per UTC day on the connection's models.
-    budget_microusd: int = 0
-    #: Micro-dollars the owner's requests on the connection have cost today.
-    spent_microusd: int = 0
-
-    @property
-    def exhausted(self) -> bool:
-        """Whether today's budget is used up."""
-        return self.spent_microusd >= self.budget_microusd
-
-    @property
-    def remaining_microusd(self) -> int:
-        """What is left of today's budget."""
-        return max(self.budget_microusd - self.spent_microusd, 0)
-
-
-#: A model with no prices, or a connection with no budget chosen: offered to nobody.
-NOT_OFFERED = Allowance(offered=False)
-
-
-def effective_budget(default: int | None, own: int | None) -> int | None:
-    """An owner's daily budget on a connection; ``None`` while none was chosen."""
-    return own if own is not None else default
-
-
-def effective_allowance(
-    terms: Mapping[str, Any] | None,
-    *,
-    own_offered: bool | None = None,
-    budget_microusd: int | None = None,
-    spent_microusd: int = 0,
-) -> Allowance:
-    """The allowance an owner has on a model.
-
-    ``terms`` is the model's stored row, ``None`` when it has none;
-    ``own_offered`` is the account's own answer on the model, ``None`` when it
-    has none; ``budget_microusd`` is the owner's budget on the connection
-    (:func:`effective_budget`). A model without prices and a connection
-    without a budget are offered to nobody, whatever an account's rows say.
+    Read the way an inference gateway in the hybridInference family lists
+    them: ``pricing`` with ``prompt``, ``completion`` and, optionally,
+    ``input_cache_reads`` and ``input_cache_writes``, each in US dollars per
+    million tokens, as text or a number. A listing without both of the first
+    two, or with a value that is not a non-negative number, gives none; a
+    cache price of zero is no cache price, as the gateway reads it.
     """
-    if model_prices(terms) is None or budget_microusd is None:
-        return NOT_OFFERED
-    assert terms is not None
-    open_to_owner = own_offered if own_offered is not None else not terms.get("named_only")
-    return Allowance(
-        offered=bool(open_to_owner) and budget_microusd > 0,
-        budget_microusd=budget_microusd,
-        spent_microusd=spent_microusd,
+    if not isinstance(pricing, dict):
+        return None
+    prompt = _listed_usd(pricing.get("prompt"))
+    completion = _listed_usd(pricing.get("completion"))
+    if prompt is None or completion is None:
+        return None
+    return ModelPrices(
+        input=prompt,
+        output=completion,
+        cache_read=_listed_usd(pricing.get("input_cache_reads")) or None,
+        cache_write=_listed_usd(pricing.get("input_cache_writes")) or None,
     )
 
 
-def utc_day(now: datetime | None = None) -> datetime:
-    """Midnight UTC of the day ``now`` is in."""
-    moment = (now or datetime.now(UTC)).astimezone(UTC)
-    return moment.replace(hour=0, minute=0, second=0, microsecond=0)
-
-
-def next_reset(now: datetime | None = None) -> datetime:
-    """When today's counts start over: the next midnight, UTC."""
-    return utc_day(now) + timedelta(days=1)
-
-
-def clean_end_user_header(value: str | None) -> str | None:
-    """The header a relayed request names its owner in; ``None`` sends none."""
-    name = (value or "").strip()
-    if not name:
+def _listed_usd(value: Any) -> int | None:
+    """Dollars per million tokens as micro-dollars per million tokens; ``None`` if unreadable."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         return None
-    if not _HEADER_NAME.fullmatch(name) or name.lower() in _RESERVED_HEADERS:
-        raise ModelConnectionInvalid(
-            "An end-user header is a plain header name such as X-End-User, "
-            "and not one the relay sets itself."
-        )
-    return name
-
-
-def clean_default_model(value: str | None, models: list[str]) -> str | None:
-    """The model a new owner starts on: one of ``models``, or none."""
-    model = (value or "").strip()
-    if not model:
+    try:
+        dollars = Decimal(str(value).strip())
+    except InvalidOperation:
         return None
-    if model not in models:
-        raise ModelConnectionInvalid("The default model must be one of the listed models.")
-    return model
+    if not dollars.is_finite() or dollars < 0 or dollars > _MAX_LISTED_USD:
+        return None
+    return int((dollars * MICROUSD_PER_USD).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
-def end_user_tag(secret: str, user_id: str) -> str:
-    """An opaque, stable tag for one account, as a provider may attribute requests by.
-
-    A keyed digest: not the account id, its email or anything derived from
-    them without the deployment's key, and the same for every request of the
-    account, so an administrator can compute it and find the account's
-    requests at the provider.
-    """
-    if not secret or not user_id:
-        raise ValueError("an end-user tag needs the deployment's key and an account")
-    key = hashlib.sha256(END_USER_TAG_DOMAIN + b"\0" + secret.encode()).digest()
-    return hmac.new(key, user_id.encode(), hashlib.sha256).hexdigest()[:END_USER_TAG_CHARS]
+def first_usable_model(models: list[str], runtimes: Mapping[str, list[str]]) -> str | None:
+    """Where a new owner starts on a connection: its first model an agent can use."""
+    return next((model for model in models if runtimes.get(model)), None)
 
 
 @dataclass(frozen=True)
@@ -267,12 +162,12 @@ class RelayRoute:
     """One path the model relay forwards."""
 
     #: Whether the request is an inference call: its body names the model, and
-    #: what it costs is charged to the owner's budget.
+    #: what it used is recorded for its owner.
     inference: bool
     #: Whether a refusal is shaped as Anthropic's error rather than OpenAI's.
     anthropic: bool
     #: The inference API an answer on this path is read as
-    #: (``domain.model_usage``); empty where nothing is charged.
+    #: (``domain.model_usage``); empty where nothing is recorded.
     api: str = ""
 
 
@@ -308,26 +203,15 @@ def is_messages_path(raw_path: str) -> bool:
 
 
 __all__ = [
-    "DEFAULT_USER_CONCURRENCY",
-    "END_USER_TAG_CHARS",
-    "END_USER_TAG_DOMAIN",
     "MICROUSD_PER_USD",
-    "NOT_OFFERED",
     "OPERATOR_CONNECTION_KEY_DOMAIN",
     "TOKENS_PER_PRICE",
-    "Allowance",
     "ModelPrices",
-    "OperatorTermsMissing",
     "RelayRoute",
-    "clean_default_model",
-    "clean_end_user_header",
-    "effective_allowance",
-    "effective_budget",
-    "end_user_tag",
+    "first_usable_model",
     "is_messages_path",
+    "listed_prices",
     "model_prices",
-    "next_reset",
     "relay_route",
     "request_cost",
-    "utc_day",
 ]

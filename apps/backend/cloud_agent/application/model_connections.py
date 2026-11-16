@@ -14,11 +14,11 @@ its process, the same way a chat deletion does.
 
 **A turn may instead name a connection the deployment provides** (an
 ``oconn_`` id). It is resolved here too, by the same predicate, with two
-differences. It is every admitted owner's, so what is read per owner is their
-allowance on the model, not the row. And its key never leaves the control
-plane: the claim carries no key and marks the access *relayed*, and the
-residency's credential is a placeholder only the model relay accepts
-(``api.model_relay``). Nothing falls back between the two kinds either.
+differences. It is every admitted owner's, so it is not read scoped to one.
+And its key never leaves the control plane: the claim carries no key and
+marks the access *relayed*, and the residency's credential is a placeholder
+only the model relay accepts (``api.model_relay``). Nothing falls back between
+the two kinds either.
 
 See ``docs/agents/specs/2026-10-27-user-model-connections.zh-CN.md`` and
 ``docs/agents/specs/2026-11-12-platform-model-relay.zh-CN.md``.
@@ -154,31 +154,22 @@ async def resolve_turn_connection(
     runtime: str,
     model: str,
     reasoning_effort: str | None = None,
-    admit: bool = False,
 ) -> tuple[dict[str, Any], ProtocolPlan]:
     """The connection one turn runs on and the plan it will run with, or refuse.
 
     An owner's connection is read scoped to ``user_id``: a connection id of
     somebody else's reads as missing, which is the only answer a forged or
-    shared id ever gets. A provided connection is everybody's; what is read
-    for ``user_id`` is their allowance on ``model``.
-
-    ``admit`` is for the moments a turn is accepted or handed to a host: there
-    a provided model whose owner has used up today's budget refuses the turn. A
-    turn already starting (its residency, a Fork) is only refused a model that
-    is not offered to its owner at all.
+    shared id ever gets. A provided connection is everybody's.
     """
     if not is_connection_id(connection_id):
         raise ModelConnectionUnusable("not_found")
     if is_operator_connection_id(connection_id):
         return await _resolve_provided(
             connections,
-            user_id=user_id,
             connection_id=connection_id,
             runtime=runtime,
             model=model,
             reasoning_effort=reasoning_effort,
-            admit=admit,
         )
     row = await connections.get_model_connection(user_id=user_id, connection_id=connection_id)
     plan = require_usable(row, runtime=runtime, model=model, reasoning_effort=reasoning_effort)
@@ -189,14 +180,12 @@ async def resolve_turn_connection(
 async def _resolve_provided(
     connections: ModelConnectionRepository,
     *,
-    user_id: str,
     connection_id: str,
     runtime: str,
     model: str,
     reasoning_effort: str | None,
-    admit: bool,
 ) -> tuple[dict[str, Any], ProtocolPlan]:
-    """A provided connection for one turn of ``user_id``, or the owner-facing refusal.
+    """A provided connection for one turn, or the owner-facing refusal.
 
     What an owner could fix on a connection of their own (enable it, list the
     model, verify it) is here the administrator's, so those read as the
@@ -211,13 +200,6 @@ async def _resolve_provided(
         if exc.reason in PROVIDED_MODEL_REASONS:
             raise ModelConnectionUnusable("provided_model_unavailable") from None
         raise
-    allowance = await connections.operator_allowance(
-        connection_id=connection_id, user_id=user_id, model=model
-    )
-    if not allowance.offered:
-        raise ModelConnectionUnusable("allowance_none")
-    if admit and allowance.exhausted:
-        raise ModelConnectionUnusable("allowance_exhausted")
     return row, plan
 
 
@@ -294,7 +276,6 @@ async def access_for_job(
     cipher: CredentialCipher | None = None,
     *,
     member: str | None = None,
-    admit: bool = False,
 ) -> ModelConnectionAccess | None:
     """The connection access a job's turn runs on; ``None`` when it names none.
 
@@ -304,8 +285,7 @@ async def access_for_job(
     are all re-read from it, never from a request. ``member`` is the thread
     whose process will hold it, when that is not the job's own (a Fork's new
     member runs the source's turn settings under its own token). ``cipher`` is
-    the connection kind's own unless one is given; ``admit`` is
-    :func:`resolve_turn_connection`'s.
+    the connection kind's own unless one is given.
     """
     connection_id = job.get("model_connection_id")
     if not connection_id:
@@ -317,7 +297,6 @@ async def access_for_job(
         runtime=str(job["runtime"]),
         model=str(job["model"]),
         reasoning_effort=job.get("reasoning_effort"),
-        admit=admit,
     )
     return connection_access(
         row,
@@ -437,7 +416,7 @@ async def claim_model_connection(
         await store.attempt_commands.release_claim(**fence, retry_after_seconds=30)
         raise waiting
     try:
-        access = await access_for_job(store.model_connections, claim, admit=True)
+        access = await access_for_job(store.model_connections, claim)
         # A translated plan also needs a host that can run the helper, and a
         # relayed one a host whose sandboxes reach the model relay; a host
         # without gets the claim back rather than a turn it cannot launch.

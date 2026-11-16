@@ -9,7 +9,7 @@ import * as api from '@/lib/api/adminOperatorModels';
 import ProvidedModelsSettings from './ProvidedModels';
 import { utcDay } from './providedModelsForm';
 import {
-  COMPLETE,
+  PRICED,
   PROVIDED_ID,
   providedConnection,
   providedList,
@@ -23,18 +23,13 @@ vi.mock('@/lib/api/adminOperatorModels', async (importOriginal) => ({
   listOperatorModelConnections: vi.fn(),
   createOperatorModelConnection: vi.fn(),
   updateOperatorModelConnection: vi.fn(),
+  refreshOperatorModels: vi.fn(),
   deleteOperatorModelConnection: vi.fn(),
-  setOperatorModelTerms: vi.fn(),
-  listOperatorModelUsers: vi.fn(),
-  setOperatorModelUserBudget: vi.fn(),
-  clearOperatorModelUserBudget: vi.fn(),
-  setOperatorModelUserAccess: vi.fn(),
-  clearOperatorModelUserAccess: vi.fn(),
   getOperatorModelUsage: vi.fn(),
 }));
 
 const ESTIMATED =
-  'Estimated: the provider’s answer named no usage, or was cut short before it could, so the request was charged an estimate of its input and of the output it had produced.';
+  'Estimated: the provider’s answer named no usage, or was cut short before it could, so the request was recorded as an estimate of its input and of the output it had produced.';
 
 /** One account's use of one model on one day: nothing estimated, nothing written to the cache. */
 function used(overrides: Partial<api.OperatorModelUsageRow> = {}): api.OperatorModelUsageRow {
@@ -75,17 +70,17 @@ beforeEach(() => {
   vi.resetAllMocks();
   localStorage.clear();
   vi.mocked(api.listOperatorModelConnections).mockResolvedValue(
-    providedList([providedConnection(COMPLETE)]),
+    providedList([providedConnection(PRICED)]),
   );
 });
 afterEach(cleanup);
 
 describe('what was used of a connection', () => {
-  it('says cost is tokens at the model’s prices, and not the provider’s bill', async () => {
+  it('says cost is tokens at the listed prices, an estimate and not the provider’s bill', async () => {
     render(<ProvidedModelsSettings />);
     const usage = await openUsage();
     expect(usage).toHaveTextContent(
-      'What each account used per UTC day and model, as the provider’s answers reported it. Cost is the tokens each answer said it used, at the model’s prices at the time: it is what a daily budget counts, not the provider’s bill. Input tokens include the cached ones.',
+      'What each account used per UTC day and model, as the provider’s answers reported it. Cost is the tokens each answer said it used, at the prices the provider listed for the model at the time: an estimate, not the provider’s bill, and nothing is limited by it. Input tokens include the cached ones.',
     );
     // Nothing is read until a range is asked for.
     expect(api.getOperatorModelUsage).not.toHaveBeenCalled();
@@ -141,7 +136,7 @@ describe('what was used of a connection', () => {
       'Cost',
     ]);
     expect(rowTexts(table)).toEqual([
-      // Cost to its last decimal: a fraction of a cent is still what the budget was charged.
+      // Cost to its last decimal: a fraction of a cent is still what was recorded.
       [
         '2026-11-12',
         'ada@example.com',
@@ -155,11 +150,11 @@ describe('what was used of a connection', () => {
       ['2026-11-11', 'acct_bob', 'house-deep', '3', '1,500', '0', '20', '$0.0042'],
     ]);
     expect(within(usage).queryByText(/More rows matched/)).not.toBeInTheDocument();
-    // Nothing was charged by estimate, so nothing is said about estimates.
-    expect(usage).not.toHaveTextContent(/estimate/i);
+    // Nothing was recorded by estimate, so nothing is said about estimates.
+    expect(usage).not.toHaveTextContent(/estimated/i);
   });
 
-  it('says how many requests were charged by estimate, and what that means', async () => {
+  it('says how many requests were recorded by estimate, and what that means', async () => {
     vi.mocked(api.getOperatorModelUsage).mockResolvedValue({
       rows: [used({ estimated_requests: 2 }), used({ day: '2026-11-11', requests: 1_200 })],
       truncated: false,

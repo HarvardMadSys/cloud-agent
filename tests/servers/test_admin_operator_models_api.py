@@ -1,4 +1,4 @@
-"""Admin routes for the models a deployment provides: saved verified, key write-only, audited."""
+"""Admin routes for the models a deployment provides: what the key lists, verified, audited."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from cloud_agent.api import admin_operator_models
 from cloud_agent.api.deps import get_storage
+from cloud_agent.application.model_connection_check import CheckStop, ListedModel
 from cloud_agent.application.model_connection_save import (
     VerificationRefused,
     VerificationTimedOut,
@@ -20,7 +21,7 @@ from cloud_agent.application.model_connection_save import (
 from cloud_agent.application.model_connection_status import verification_status
 from cloud_agent.application.model_connections import operator_connection_cipher
 from cloud_agent.domain.model_connections import ModelConnectionConflict
-from cloud_agent.domain.operator_models import OperatorTermsMissing, model_prices
+from cloud_agent_shared.model_connections import MAX_MODELS
 
 pytestmark = pytest.mark.asyncio
 
@@ -29,17 +30,16 @@ PATH = "/admin/agent/operator-model-connections"
 _KEY = "sk-deployment-key-0123456789"
 _NOW = datetime(2026, 11, 12, 9, tzinfo=UTC)
 _SUPPORTED = {"protocols": {"chat_completions": {"status": "supported"}}}
-#: $2.80 in and $8.80 out per million tokens, and $5 a day.
-_PRICES = {"input_price": 2_800_000, "output_price": 8_800_000}
-_TERMS = {
-    **_PRICES,
-    "cache_read_price": None,
-    "cache_write_price": None,
-    "named_only": False,
-    "global_concurrency": None,
-}
-_BUDGET = 5_000_000
 _FAILED = {"protocols": {"chat_completions": {"status": "failed", "category": "auth"}}}
+#: As hybridInference lists them: US dollars per million tokens.
+_PRICING = {"prompt": "2.8", "completion": "8.8", "input_cache_reads": "0.8", "image": "0"}
+#: The same, as stored and answered: micro-dollars per million tokens.
+_PRICES = {
+    "input_price": 2_800_000,
+    "output_price": 8_800_000,
+    "cache_read_price": 800_000,
+    "cache_write_price": None,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -53,9 +53,7 @@ class _Repository:
 
     def __init__(self) -> None:
         self.rows: dict[str, dict[str, Any]] = {}
-        self.term_rows: dict[tuple[str, str], dict[str, Any]] = {}
-        self.user_budgets: dict[tuple[str, str], int] = {}
-        self.user_access: dict[tuple[str, str, str], bool] = {}
+        self.prices: dict[tuple[str, str], Any] = {}
         self.usage_rows: list[dict[str, Any]] = []
         self.released: list[str] = []
         self.relay_hosts = 1
@@ -74,10 +72,8 @@ class _Repository:
         ):
             raise ModelConnectionConflict(values["name"])
         row = {
-            "user_daily_budget_microusd": None,
             **values,
             "model_checks": {m: {**r, "revision": 1} for m, r in values["model_checks"].items()},
-            "is_default": False,
             "enabled": False,
             "config_revision": 1,
             "credential_revision": 1,
@@ -91,25 +87,22 @@ class _Repository:
 
     async def update_operator_connection(self, *, connection_id, changes):
         row = self.rows[connection_id]
-        if changes.get("enabled") and not row["enabled"]:
-            models = changes.get("models", row["models"])
-            missing = [
-                m for m in models if model_prices(self.term_rows.get((connection_id, m))) is None
-            ]
-            budget = changes.get("user_daily_budget_microusd", row["user_daily_budget_microusd"])
-            if missing or budget is None:
-                raise OperatorTermsMissing(missing, budget=budget is None)
+        assert set(changes) <= {"name", "models", "enabled"}, changes
         if changes.get("enabled") is False and row["enabled"]:
             row["credential_revision"] += 1
-        if changes.get("is_default"):
-            for other in self.rows.values():
-                other["is_default"] = False
+        if "models" in changes:
+            assert set(changes["models"]) <= set(row["models"]), "an unverified edit only shrinks"
+            row["model_checks"] = {
+                m: r for m, r in row["model_checks"].items() if m in changes["models"]
+            }
+            self._forget(connection_id, changes["models"])
         row.update(changes)
         return row
 
     async def commit_verified_operator_update(
         self, *, connection_id, expected, changes, model_checks
     ):
+        assert set(changes) <= {"name", "models", "base_url", "api_key_ciphertext"}, changes
         if self.moved_during_verification:
             return None
         row = self.rows[connection_id]
@@ -124,7 +117,14 @@ class _Repository:
         row["model_checks"] = {
             m: {**r, "revision": row["config_revision"]} for m, r in model_checks.items()
         }
+        if "models" in changes:
+            self._forget(connection_id, changes["models"])
         return row
+
+    def _forget(self, connection_id: str, models: list[str]) -> None:
+        for key in [key for key in self.prices if key[0] == connection_id]:
+            if key[1] not in models:
+                del self.prices[key]
 
     async def delete_operator_connection(self, *, connection_id):
         row = self.rows[connection_id]
@@ -134,73 +134,20 @@ class _Repository:
     async def model_relay_host_count(self):
         return self.relay_hosts
 
-    async def operator_terms(self, *, connection_ids):
+    async def operator_prices(self, *, connection_ids):
         found: dict[str, dict[str, Any]] = {cid: {} for cid in connection_ids}
-        for (cid, model), terms in self.term_rows.items():
+        for (cid, model), prices in self.prices.items():
             if cid in found:
-                found[cid][model] = terms
+                found[cid][model] = prices
         return found
 
-    async def set_operator_terms(self, *, connection_id, model, terms):
-        if model not in self.rows[connection_id]["models"]:
-            return False
-        self.term_rows[(connection_id, model)] = dict(terms)
-        return True
-
-    async def set_operator_user_budget(self, *, connection_id, user_id, daily_budget_microusd):
-        self.user_budgets[(connection_id, user_id)] = daily_budget_microusd
-        return True
-
-    async def clear_operator_user_budget(self, *, connection_id, user_id):
-        return self.user_budgets.pop((connection_id, user_id), None) is not None
-
-    async def set_operator_user_access(self, *, connection_id, user_id, model, offered):
-        if model not in self.rows[connection_id]["models"]:
-            return False
-        self.user_access[(connection_id, user_id, model)] = offered
-        return True
-
-    async def clear_operator_user_access(self, *, connection_id, user_id, model):
-        return self.user_access.pop((connection_id, user_id, model), None) is not None
-
-    async def list_operator_users(self, *, connection_id, cursor, limit):
-        users: dict[str, dict[str, Any]] = {}
-
-        def user(user_id: str) -> dict[str, Any]:
-            return users.setdefault(
-                user_id,
-                {
-                    "user_id": user_id,
-                    "daily_budget_microusd": None,
-                    "access": {},
-                    "spent_today_microusd": 0,
-                    "requests_today": 0,
-                },
-            )
-
-        for (cid, user_id), budget in self.user_budgets.items():
-            if cid == connection_id:
-                user(user_id)["daily_budget_microusd"] = budget
-        for (cid, user_id, model), offered in self.user_access.items():
-            if cid == connection_id:
-                user(user_id)["access"][model] = offered
-        page = [row for user_id, row in sorted(users.items()) if cursor is None or user_id > cursor]
-        return page[:limit]
-
-    async def operator_user(self, *, connection_id, user_id):
-        listed = await self.list_operator_users(connection_id=connection_id, cursor=None, limit=999)
-        mine = [row for row in listed if row["user_id"] == user_id]
-        return (
-            mine[0]
-            if mine
-            else {
-                "user_id": user_id,
-                "daily_budget_microusd": None,
-                "access": {},
-                "spent_today_microusd": 0,
-                "requests_today": 0,
-            }
-        )
+    async def set_operator_prices(self, *, connection_id, prices):
+        listed = self.rows[connection_id]["models"]
+        for model, price in prices.items():
+            if price is None:
+                self.prices.pop((connection_id, model), None)
+            elif model in listed:
+                self.prices[(connection_id, model)] = price
 
     async def operator_usage(self, *, connection_id, start, end, limit):
         return [row for row in self.usage_rows if start <= row["day"] <= end][:limit]
@@ -216,19 +163,19 @@ class _Accounts:
     async def account_emails(self, account_ids):
         return {aid: self.emails[aid] for aid in account_ids if aid in self.emails}
 
-    async def identifier_owner(self, kind, normalized):
-        return next((aid for aid, email in self.emails.items() if email == normalized), None)
 
-    async def get_account(self, account_id):
-        return SimpleNamespace(id=account_id) if account_id in self.emails else None
+def _listing(*models: str, pricing: dict[str, Any] | None = _PRICING) -> list[ListedModel]:
+    return [ListedModel(model, pricing) for model in models]
 
 
 class _Harness:
     def __init__(self, monkeypatch) -> None:
         self.repository = _Repository()
         self.audit: list[dict[str, Any]] = []
+        self.listed: list[dict[str, Any]] = []
         self.verified: list[dict[str, Any]] = []
         self.results: dict[str, dict[str, Any]] = {}
+        self.listing: list[ListedModel] | CheckStop = _listing("model-1", "model-2")
         self.timeout = False
         harness = self
 
@@ -244,16 +191,24 @@ class _Harness:
             host_pool=SimpleNamespace(),
         )
 
-        async def verify_endpoint(*, base_url, api_key, models):
+        async def discover_listing(*, base_url, api_key):
+            harness.listed.append({"base_url": base_url, "api_key": api_key})
+            if isinstance(harness.listing, CheckStop):
+                raise harness.listing
+            return list(harness.listing)
+
+        async def verify_endpoint(*, base_url, api_key, models, every=True):
+            assert every is False, "a provided connection keeps what some agent can use"
             harness.verified.append({"base_url": base_url, "api_key": api_key, "models": models})
             if harness.timeout:
                 raise VerificationTimedOut
             results = {model: harness.results.get(model, _SUPPORTED) for model in models}
             statuses = [verification_status(model, results[model]) for model in models]
-            if any(not status["runtimes"] for status in statuses):
+            if all(not status["runtimes"] for status in statuses):
                 raise VerificationRefused(statuses)
             return results
 
+        monkeypatch.setattr(admin_operator_models, "discover_listing", discover_listing)
         monkeypatch.setattr(admin_operator_models, "verify_endpoint", verify_endpoint)
         self.app = FastAPI()
         self.app.include_router(admin_operator_models.router)
@@ -269,7 +224,6 @@ class _Harness:
             "name": "Provider",
             "base_url": "https://provider.example/v1/",
             "api_key": _KEY,
-            "models": ["model-1", "model-2"],
             **changes,
         }
         return await self.call("POST", json=body)
@@ -289,18 +243,12 @@ async def _created(admin: _Harness, **changes) -> dict[str, Any]:
     return response.json()
 
 
-async def _priced(admin: _Harness, view: dict[str, Any]) -> None:
-    for model in view["models"]:
-        response = await admin.call("PUT", f"/{view['id']}/terms", json={"model": model, **_PRICES})
-        assert response.status_code == 200, response.text
-
-
 async def _enabled(admin: _Harness) -> dict[str, Any]:
-    view = await _created(admin, user_daily_budget_microusd=_BUDGET)
-    await _priced(admin, view)
+    view = await _created(admin)
     response = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
     assert response.status_code == 200, response.text
     admin.audit.clear()
+    admin.listed.clear()
     admin.verified.clear()
     admin.repository.released.clear()
     return response.json()
@@ -316,36 +264,59 @@ async def _enabled(admin: _Harness) -> dict[str, Any]:
         ("POST", ""),
         ("PATCH", "/x"),
         ("DELETE", "/x"),
-        ("PUT", "/x/terms"),
-        ("GET", "/x/users"),
-        ("PUT", "/x/user-budgets"),
-        ("DELETE", "/x/user-budgets"),
-        ("PUT", "/x/user-access"),
-        ("DELETE", "/x/user-access"),
+        ("POST", "/x/refresh-models"),
         ("GET", "/x/usage"),
     ],
 )
 async def test_every_route_is_an_administrators(admin, method, path) -> None:
     response = await admin.call(method, path, headers={}, json={})
     assert response.status_code in (401, 403)
-    assert admin.repository.rows == {} and admin.audit == []
+    assert admin.repository.rows == {} and admin.audit == [] and admin.listed == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("PUT", "/x/terms"),
+        ("GET", "/x/users"),
+        ("PUT", "/x/user-budgets"),
+        ("DELETE", "/x/user-budgets"),
+        ("PUT", "/x/user-access"),
+        ("DELETE", "/x/user-access"),
+    ],
+)
+async def test_nothing_is_set_per_model_or_per_account_any_more(admin, method, path) -> None:
+    response = await admin.call(method, path, json={})
+    assert response.status_code in (404, 405)
 
 
 # -- saving ------------------------------------------------------------------------
 
 
-async def test_a_connection_is_saved_verified_disabled_and_without_its_key(admin) -> None:
-    response = await admin.create(default_model="model-1", end_user_header="X-End-User")
+async def test_a_connection_lists_what_its_key_lists_verified_disabled_and_keyless(
+    admin,
+) -> None:
+    response = await admin.create()
     assert response.status_code == 201
     assert response.headers["cache-control"] == "no-store"
     view = response.json()
     assert view["id"].startswith("oconn_") and view["enabled"] is False
     assert view["base_url"] == "https://provider.example/v1"
-    assert (view["default_model"], view["end_user_header"]) == ("model-1", "X-End-User")
-    # No budget chosen and no model priced: it offers nothing until both are.
-    assert view["terms"] == {} and view["user_daily_budget_microusd"] is None
+    # The provider's listing for this key, in its order, with the prices it gives.
+    assert view["models"] == ["model-1", "model-2"]
+    assert view["prices"] == {"model-1": _PRICES, "model-2": _PRICES}
     assert [status["status"] for status in view["model_status"]] == ["ready", "ready"]
-    # Verified with exactly what would be saved, before anything was.
+    # Nothing is chosen or limited per connection any more.
+    assert not {
+        "default_model",
+        "is_default",
+        "end_user_header",
+        "user_concurrency",
+        "user_daily_budget_microusd",
+        "terms",
+    } & set(view)
+    # Listed and verified with exactly what would be saved, before anything was.
+    assert admin.listed == [{"base_url": "https://provider.example/v1", "api_key": _KEY}]
     assert admin.verified == [
         {
             "base_url": "https://provider.example/v1",
@@ -360,20 +331,63 @@ async def test_a_connection_is_saved_verified_disabled_and_without_its_key(admin
     listed = await admin.call("GET")
     assert _KEY not in listed.text and "ciphertext" not in listed.text
     assert admin.actions() == ["agent.operator_model_connection.create"]
+    assert admin.audit[0]["details"]["models"] == ["model-1", "model-2"]
     assert _KEY not in json.dumps(admin.audit, default=str)
 
 
-async def test_a_model_no_agent_can_use_saves_nothing(admin) -> None:
+async def test_a_model_listed_without_prices_is_kept_and_recorded_by_tokens(admin) -> None:
+    admin.listing = [ListedModel("model-1", _PRICING), ListedModel("model-2", None)]
+    view = await _created(admin)
+    assert view["models"] == ["model-1", "model-2"]
+    assert view["prices"] == {"model-1": _PRICES}
+
+
+async def test_a_model_no_agent_can_use_is_kept_and_offered_to_nobody(admin) -> None:
     admin.results["model-2"] = _FAILED
+    view = await _created(admin)
+    assert view["models"] == ["model-1", "model-2"]
+    statuses = {status["model"]: status["status"] for status in view["model_status"]}
+    assert statuses == {"model-1": "ready", "model-2": "failed"}
+
+
+async def test_a_key_none_of_whose_models_an_agent_can_use_saves_nothing(admin) -> None:
+    admin.results["model-1"] = admin.results["model-2"] = _FAILED
     response = await admin.create()
     assert response.status_code == 422
     error = response.json()["detail"]["error"]
     assert error["type"] == "model_connection_verification_failed"
     assert {status["model"]: status["status"] for status in error["models"]} == {
-        "model-1": "ready",
+        "model-1": "failed",
         "model-2": "failed",
     }
     assert admin.repository.rows == {} and admin.audit == []
+
+
+@pytest.mark.parametrize(
+    ("listing", "error_type"),
+    [
+        (CheckStop("auth", http_status=401), "operator_model_listing_failed"),
+        (CheckStop("endpoint_missing", http_status=404), "operator_model_listing_failed"),
+        ([], "operator_model_listing_empty"),
+        (
+            _listing(*(f"model-{n}" for n in range(MAX_MODELS + 1))),
+            "operator_model_listing_too_long",
+        ),
+    ],
+)
+async def test_a_listing_that_names_no_usable_set_saves_nothing(admin, listing, error_type) -> None:
+    admin.listing = listing
+    response = await admin.create()
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"]["type"] == error_type
+    assert _KEY not in response.text
+    # Refused before any model was verified.
+    assert admin.verified == [] and admin.repository.rows == {} and admin.audit == []
+
+
+async def test_a_listing_of_exactly_the_most_models_is_saved(admin) -> None:
+    admin.listing = _listing(*(f"model-{n}" for n in range(MAX_MODELS)))
+    assert len((await _created(admin))["models"]) == MAX_MODELS
 
 
 async def test_a_verification_that_outlasts_its_bound_saves_nothing(admin) -> None:
@@ -388,9 +402,12 @@ async def test_a_verification_that_outlasts_its_bound_saves_nothing(admin) -> No
         {"base_url": "http://provider.example/v1"},
         {"base_url": "https://provider.example:8443/v1"},
         {"api_key": "has space"},
-        {"models": []},
-        {"end_user_header": "Authorization"},
-        {"user_concurrency": 0},
+        # What an administrator no longer chooses is refused, not ignored.
+        {"models": ["model-1"]},
+        {"default_model": "model-1"},
+        {"end_user_header": "X-End-User"},
+        {"user_concurrency": 4},
+        {"user_daily_budget_microusd": 5_000_000},
         {"unknown": 1},
     ],
 )
@@ -402,21 +419,17 @@ async def test_what_could_not_be_a_connection_is_refused_before_any_provider_cal
     assert response.json()["error"]["type"] == "invalid_model_connection"
     # Which field, never what was sent.
     assert _KEY not in response.text and "has space" not in response.text
-    assert admin.verified == [] and admin.repository.rows == {}
-
-
-async def test_the_default_model_must_be_listed(admin) -> None:
-    response = await admin.create(default_model="model-9")
-    assert response.status_code == 422 and admin.verified == []
+    assert admin.listed == [] and admin.verified == [] and admin.repository.rows == {}
 
 
 async def test_a_taken_name_is_refused_before_any_provider_call(admin) -> None:
     await _created(admin)
+    admin.listed.clear()
     admin.verified.clear()
     response = await admin.create(name="provider")
     assert response.status_code == 409
     assert response.json()["detail"]["error"]["type"] == "operator_model_connection_name_taken"
-    assert admin.verified == []
+    assert admin.listed == [] and admin.verified == []
 
 
 async def test_the_master_switch_stops_saving_and_enabling(admin, monkeypatch) -> None:
@@ -424,146 +437,21 @@ async def test_the_master_switch_stops_saving_and_enabling(admin, monkeypatch) -
     monkeypatch.setenv("AGENT_MODEL_CONNECTIONS_ENABLED", "false")
     assert (await admin.create(name="Another")).status_code == 403
     assert (await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})).status_code == 403
+    assert (await admin.call("POST", f"/{view['id']}/refresh-models")).status_code == 403
     listed = (await admin.call("GET")).json()
     assert listed["feature_enabled"] is False
     # Removing it still works.
     assert (await admin.call("DELETE", f"/{view['id']}")).status_code == 204
 
 
-# -- enabling, prices and the budget ----------------------------------------------
-
-
-async def test_enabling_waits_for_a_budget_and_every_models_prices(admin) -> None:
+async def test_a_new_connection_is_enabled_with_nothing_else_to_set(admin) -> None:
     view = await _created(admin)
-    refused = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
-    assert refused.status_code == 409
-    error = refused.json()["detail"]["error"]
-    assert error["type"] == "operator_model_terms_missing"
-    assert "budget" in error["message"]
-    assert "model-1" in error["message"] and "model-2" in error["message"]
-    # Named beside the sentence too, for a client that says it in its own words.
-    assert (error["budget"], error["models"]) == (True, ["model-1", "model-2"])
-
-    priced = await admin.call(
-        "PUT",
-        f"/{view['id']}/terms",
-        json={
-            "model": "model-1",
-            **_PRICES,
-            "cache_read_price": 800_000,
-            "global_concurrency": 8,
-        },
-    )
-    assert priced.json()["terms"] == {
-        "model-1": {**_TERMS, "cache_read_price": 800_000, "global_concurrency": 8}
-    }
-    # Still missing: a budget, and the other model's prices.
-    still = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
-    assert still.status_code == 409
-    error = still.json()["detail"]["error"]
-    message = error["message"]
-    assert "budget" in message and "model-2" in message and "model-1" not in message
-    assert (error["budget"], error["models"]) == (True, ["model-2"])
-
-    # A model for named accounts only is priced like any other.
-    await admin.call(
-        "PUT", f"/{view['id']}/terms", json={"model": "model-2", **_PRICES, "named_only": True}
-    )
-    no_budget = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
-    assert no_budget.status_code == 409
-    error = no_budget.json()["detail"]["error"]
-    assert "budget" in error["message"] and "model-" not in error["message"]
-    assert (error["budget"], error["models"]) == (True, [])
-
-    # The budget may be chosen in the request that enables.
-    enabled = await admin.call(
-        "PATCH", f"/{view['id']}", json={"enabled": True, "user_daily_budget_microusd": _BUDGET}
-    )
-    assert enabled.status_code == 200 and enabled.json()["enabled"] is True
-    assert enabled.json()["user_daily_budget_microusd"] == _BUDGET
-    assert admin.actions()[-4:] == [
-        "agent.operator_model_connection.set_terms",
-        "agent.operator_model_connection.set_terms",
-        "agent.operator_model_connection.enable",
-        "agent.operator_model_connection.update",
-    ]
-    assert admin.audit[-1]["details"]["changed"] == ["user_daily_budget_microusd"]
-    assert admin.audit[-4]["details"] == {
-        "connection_id": view["id"],
-        "name": "Provider",
-        "model": "model-1",
-        **_TERMS,
-        "cache_read_price": 800_000,
-        "global_concurrency": 8,
-    }
-
-
-async def test_a_budget_of_zero_is_a_choice_and_the_budget_can_be_changed(admin) -> None:
-    # Zero offers the connection only to accounts given a budget of their own.
-    view = await _created(admin, user_daily_budget_microusd=0)
-    assert view["user_daily_budget_microusd"] == 0
-    await _priced(admin, view)
-    enabled = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
-    assert enabled.status_code == 200
-
-    raised = await admin.call(
-        "PATCH", f"/{view['id']}", json={"user_daily_budget_microusd": 20_000_000}
-    )
-    assert raised.json()["user_daily_budget_microusd"] == 20_000_000
-    # A budget is a number, never negative.
-    for bad in (-1, 1.5, "plenty"):
-        response = await admin.call(
-            "PATCH", f"/{view['id']}", json={"user_daily_budget_microusd": bad}
-        )
-        assert response.status_code == 422, bad
-    assert admin.repository.rows[view["id"]]["user_daily_budget_microusd"] == 20_000_000
-
-
-async def test_a_row_without_prices_reads_as_a_model_still_to_be_priced(admin) -> None:
-    """What a previous release stored for a model: a request limit, and no prices."""
-    view = await _created(admin, user_daily_budget_microusd=_BUDGET)
-    admin.repository.term_rows[(view["id"], "model-1")] = {
-        **_TERMS,
-        "input_price": None,
-        "output_price": None,
-    }
-    listed = (await admin.call("GET")).json()["connections"][0]
-    assert listed["terms"] == {}
-    refused = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
-    assert refused.status_code == 409 and "model-1" in refused.text
-
-
-@pytest.mark.parametrize(
-    "terms",
-    [
-        {"model": "model-9", **_PRICES},
-        {"model": "model-1", "input_price": 1},
-        {"model": "model-1", "output_price": 1},
-        {"model": "model-1", **_PRICES, "input_price": -1},
-        {"model": "model-1", **_PRICES, "output_price": 1.5},
-        # A cache price is a price or absent: zero would read as free.
-        {"model": "model-1", **_PRICES, "cache_read_price": 0},
-        {"model": "model-1", **_PRICES, "cache_write_price": -5},
-        {"model": "model-1", **_PRICES, "global_concurrency": 0},
-        {"model": "model-1", **_PRICES, "user_daily_requests": 100},
-    ],
-)
-async def test_terms_are_for_a_listed_model_and_name_both_prices(admin, terms) -> None:
-    view = await _created(admin)
-    response = await admin.call("PUT", f"/{view['id']}/terms", json=terms)
-    assert response.status_code in (404, 422)
-    assert admin.repository.term_rows == {}
-
-
-async def test_a_model_may_be_free(admin) -> None:
-    view = await _created(admin)
-    response = await admin.call(
-        "PUT",
-        f"/{view['id']}/terms",
-        json={"model": "model-1", "input_price": 0, "output_price": 0},
-    )
+    response = await admin.call("PATCH", f"/{view['id']}", json={"enabled": True})
     assert response.status_code == 200
-    assert response.json()["terms"]["model-1"] == {**_TERMS, "input_price": 0, "output_price": 0}
+    assert response.json()["enabled"] is True
+    assert admin.actions()[-1] == "agent.operator_model_connection.enable"
+    # Enabling reads nothing from the provider.
+    assert len(admin.listed) == len(admin.verified) == 1
 
 
 # -- editing -----------------------------------------------------------------------
@@ -575,34 +463,46 @@ async def test_a_rename_calls_no_provider_and_closes_nothing_it_need_not(admin) 
         "PATCH", f"/{view['id']}", json={"name": "Renamed", "base_url": view["base_url"]}
     )
     assert response.json()["name"] == "Renamed"
-    assert admin.verified == []
+    assert admin.listed == [] and admin.verified == []
     assert admin.repository.rows[view["id"]]["credential_revision"] == 1
     assert admin.audit[-1]["action"] == "agent.operator_model_connection.update"
     assert admin.audit[-1]["details"]["changed"] == ["name"]
 
 
-async def test_rotating_the_key_verifies_every_model_and_keeps_running_processes(admin) -> None:
+async def test_rotating_the_key_follows_its_listing_and_keeps_running_processes(admin) -> None:
     view = await _enabled(admin)
+    # The new key lists one more model, and one fewer.
+    admin.listing = _listing("model-2", "model-3")
     response = await admin.call(
         "PATCH", f"/{view['id']}", json={"api_key": "sk-new-deployment-key"}
     )
     assert response.status_code == 200
+    assert admin.listed == [
+        {"base_url": "https://provider.example/v1", "api_key": "sk-new-deployment-key"}
+    ]
+    # A new key verifies every model it lists.
     assert admin.verified == [
         {
             "base_url": "https://provider.example/v1",
             "api_key": "sk-new-deployment-key",
-            "models": ["model-1", "model-2"],
+            "models": ["model-2", "model-3"],
         }
     ]
+    view = response.json()
+    assert view["models"] == ["model-2", "model-3"]
+    assert view["prices"] == {"model-2": _PRICES, "model-3": _PRICES}
     row = admin.repository.rows[view["id"]]
     assert (
         operator_connection_cipher().decrypt(row["api_key_ciphertext"]) == "sk-new-deployment-key"
     )
     # No process holds the key, so the revision a residency is bound to does not move.
     assert row["credential_revision"] == 1 and row["config_revision"] == 2
-    [rotation] = admin.audit
-    assert rotation["action"] == "agent.operator_model_connection.rotate_key"
-    assert rotation["details"]["api_key"] == "[redacted]"
+    assert admin.actions() == [
+        "agent.operator_model_connection.rotate_key",
+        "agent.operator_model_connection.update",
+    ]
+    assert admin.audit[0]["details"]["api_key"] == "[redacted]"
+    assert admin.audit[1]["details"]["changed"] == ["models"]
     assert "sk-new-deployment-key" not in json.dumps(admin.audit, default=str)
     assert "sk-new-deployment-key" not in response.text
 
@@ -611,66 +511,39 @@ async def test_re_entering_the_stored_key_rotates_nothing(admin) -> None:
     view = await _enabled(admin)
     response = await admin.call("PATCH", f"/{view['id']}", json={"api_key": _KEY})
     assert response.status_code == 200
-    assert admin.verified == [] and admin.audit == []
+    assert admin.listed == [] and admin.verified == [] and admin.audit == []
 
 
-async def test_a_new_base_url_is_verified_with_the_stored_key_and_closes_processes(admin) -> None:
+async def test_a_new_base_url_is_listed_with_the_stored_key_and_closes_processes(admin) -> None:
     view = await _enabled(admin)
     response = await admin.call(
         "PATCH", f"/{view['id']}", json={"base_url": "https://other.example/v1"}
     )
     assert response.status_code == 200
+    assert admin.listed == [{"base_url": "https://other.example/v1", "api_key": _KEY}]
     assert admin.verified[0]["base_url"] == "https://other.example/v1"
     assert admin.verified[0]["api_key"] == _KEY
     assert admin.repository.rows[view["id"]]["credential_revision"] == 2
     assert admin.repository.released == [view["id"]]
 
 
-async def test_only_an_added_model_is_verified(admin) -> None:
-    view = await _enabled(admin)
-    response = await admin.call(
-        "PATCH", f"/{view['id']}", json={"models": ["model-1", "model-2", "model-3"]}
-    )
-    assert response.status_code == 200
-    assert admin.verified[0]["models"] == ["model-3"]
-    statuses = {status["model"]: status["status"] for status in response.json()["model_status"]}
-    assert statuses == {"model-1": "ready", "model-2": "ready", "model-3": "ready"}
-    # The new model has no prices yet, so it is offered to nobody.
-    assert "model-3" not in response.json()["terms"]
-
-
-async def test_enabling_with_a_new_model_is_refused_before_anything_is_verified_or_saved(
-    admin,
-) -> None:
-    view = await _created(admin, user_daily_budget_microusd=_BUDGET)
-    await _priced(admin, view)
-    admin.verified.clear()
-    before = json.dumps(admin.repository.rows[view["id"]], default=str, sort_keys=True)
-    # The added model has no prices, so the connection cannot be enabled with it.
-    response = await admin.call(
-        "PATCH",
-        f"/{view['id']}",
-        json={"models": ["model-1", "model-2", "model-3"], "enabled": True},
-    )
-    assert response.status_code == 409
-    error = response.json()["detail"]["error"]
-    assert error["type"] == "operator_model_terms_missing"
-    assert "model-3" in error["message"]
-    assert (error["budget"], error["models"]) == (False, ["model-3"])
-    assert admin.verified == []
-    assert json.dumps(admin.repository.rows[view["id"]], default=str, sort_keys=True) == before
-
-
-async def test_a_refused_verification_leaves_the_connection_as_it_was(admin) -> None:
+async def test_a_key_whose_listing_cannot_be_read_changes_nothing(admin) -> None:
     view = await _enabled(admin)
     before = json.dumps(admin.repository.rows[view["id"]], default=str, sort_keys=True)
-    admin.results["model-3"] = _FAILED
-    response = await admin.call(
-        "PATCH", f"/{view['id']}", json={"models": ["model-1", "model-3"], "name": "X"}
-    )
+    admin.listing = CheckStop("auth", http_status=401)
+    response = await admin.call("PATCH", f"/{view['id']}", json={"api_key": "sk-wrong-key"})
     assert response.status_code == 422
+    assert response.json()["detail"]["error"]["type"] == "operator_model_listing_failed"
     assert json.dumps(admin.repository.rows[view["id"]], default=str, sort_keys=True) == before
-    assert admin.audit == []
+    assert admin.verified == [] and admin.audit == []
+
+
+@pytest.mark.parametrize("field", ["models", "default_model", "is_default"])
+async def test_an_edit_cannot_choose_models_or_a_default(admin, field) -> None:
+    view = await _created(admin)
+    value = ["model-1"] if field == "models" else "model-1" if field == "default_model" else True
+    response = await admin.call("PATCH", f"/{view['id']}", json={field: value})
+    assert response.status_code == 422
 
 
 async def test_an_edit_overtaken_by_another_saves_nothing(admin) -> None:
@@ -684,11 +557,66 @@ async def test_an_edit_overtaken_by_another_saves_nothing(admin) -> None:
     assert admin.audit == []
 
 
-async def test_removing_the_default_model_clears_the_choice(admin) -> None:
-    view = await _created(admin, default_model="model-2")
-    response = await admin.call("PATCH", f"/{view['id']}", json={"models": ["model-1"]})
+# -- refreshing --------------------------------------------------------------------
+
+
+async def test_refreshing_follows_the_listing_and_verifies_only_what_it_added(admin) -> None:
+    view = await _enabled(admin)
+    admin.listing = [
+        ListedModel("model-1", {"prompt": "1", "completion": "2"}),
+        ListedModel("model-3", _PRICING),
+    ]
+    response = await admin.call("POST", f"/{view['id']}/refresh-models")
+    assert response.status_code == 200, response.text
+    # With the stored key, at the stored Base URL.
+    assert admin.listed == [{"base_url": "https://provider.example/v1", "api_key": _KEY}]
+    assert admin.verified == [
+        {"base_url": "https://provider.example/v1", "api_key": _KEY, "models": ["model-3"]}
+    ]
+    refreshed = response.json()
+    assert refreshed["models"] == ["model-1", "model-3"]
+    statuses = {status["model"]: status["status"] for status in refreshed["model_status"]}
+    assert statuses == {"model-1": "ready", "model-3": "ready"}
+    # Every model's prices are read again; a removed model's go with it.
+    assert refreshed["prices"] == {
+        "model-1": {
+            "input_price": 1_000_000,
+            "output_price": 2_000_000,
+            "cache_read_price": None,
+            "cache_write_price": None,
+        },
+        "model-3": _PRICES,
+    }
+    assert refreshed["enabled"] is True
+    # The key and the Base URL did not change, so no running process is closed.
+    row = admin.repository.rows[view["id"]]
+    assert (row["credential_revision"], row["config_revision"]) == (1, 1)
+    assert admin.actions() == ["agent.operator_model_connection.update"]
+    assert admin.audit[0]["details"]["changed"] == ["models"]
+
+
+async def test_refreshing_an_unchanged_listing_changes_nothing_but_prices(admin) -> None:
+    view = await _enabled(admin)
+    admin.listing = _listing("model-1", "model-2", pricing=None)
+    response = await admin.call("POST", f"/{view['id']}/refresh-models")
     assert response.status_code == 200
-    assert response.json()["default_model"] is None and admin.verified[1:] == []
+    assert response.json()["models"] == ["model-1", "model-2"]
+    assert response.json()["prices"] == {}
+    assert admin.verified == [] and admin.audit == []
+
+
+async def test_a_refresh_whose_listing_fails_changes_nothing(admin) -> None:
+    view = await _enabled(admin)
+    before = json.dumps(admin.repository.rows[view["id"]], default=str, sort_keys=True)
+    admin.listing = []
+    response = await admin.call("POST", f"/{view['id']}/refresh-models")
+    assert response.status_code == 422
+    assert json.dumps(admin.repository.rows[view["id"]], default=str, sort_keys=True) == before
+    assert set(admin.repository.prices) == {(view["id"], "model-1"), (view["id"], "model-2")}
+    assert admin.audit == []
+
+
+# -- disabling and deleting --------------------------------------------------------
 
 
 async def test_disabling_and_deleting_close_running_processes(admin) -> None:
@@ -709,28 +637,17 @@ async def test_disabling_and_deleting_close_running_processes(admin) -> None:
     ]
 
 
-async def test_one_connection_is_where_a_new_owner_starts(admin) -> None:
-    first = await _created(admin)
-    second = await _created(admin, name="Second")
-    await admin.call("PATCH", f"/{first['id']}", json={"is_default": True})
-    await admin.call("PATCH", f"/{second['id']}", json={"is_default": True})
-    listed = {c["name"]: c["is_default"] for c in (await admin.call("GET")).json()["connections"]}
-    assert listed == {"Provider": False, "Second": True}
-
-
 @pytest.mark.parametrize("connection_id", ["mconn_" + "0" * 32, "oconn_" + "9" * 32, "x"])
 async def test_an_unknown_connection_is_not_found(admin, connection_id) -> None:
     for method, path, body in (
         ("PATCH", "", {"name": "X"}),
         ("DELETE", "", None),
-        ("PUT", "/terms", {"model": "m", **_PRICES}),
-        ("GET", "/users", None),
-        ("PUT", "/user-budgets", {"account": "a@example.edu", "daily_budget_microusd": 1}),
-        ("PUT", "/user-access", {"account": "a@example.edu", "model": "m", "offered": True}),
+        ("POST", "/refresh-models", None),
         ("GET", "/usage", None),
     ):
         response = await admin.call(method, f"/{connection_id}{path}", json=body)
         assert response.status_code == 404, (method, path)
+    assert admin.listed == []
 
 
 async def test_the_list_says_whether_any_host_reaches_the_relay(admin) -> None:
@@ -740,147 +657,7 @@ async def test_the_list_says_whether_any_host_reaches_the_relay(admin) -> None:
     assert (await admin.call("GET")).json()["relay_hosts"] == 0
 
 
-# -- one account's own budget and models -------------------------------------------
-
 _ACCOUNT = "01HZXACCOUNTAAAAAAAAAAAAAAA"
-
-
-@pytest.mark.parametrize("account", [_ACCOUNT, "a@example.edu", " A@Example.edu "])
-async def test_an_account_named_by_id_or_by_email_gets_a_budget_of_its_own(admin, account) -> None:
-    view = await _created(admin)
-    response = await admin.call(
-        "PUT",
-        f"/{view['id']}/user-budgets",
-        json={"account": account, "daily_budget_microusd": 20_000_000},
-    )
-    assert response.status_code == 200
-    assert response.json() == {
-        "account_id": _ACCOUNT,
-        "email": "a@example.edu",
-        "daily_budget_microusd": 20_000_000,
-        "access": {},
-        "spent_today_microusd": 0,
-        "requests_today": 0,
-    }
-    [row] = admin.audit[-1:]
-    assert row["action"] == "agent.operator_model_user_budget.set"
-    assert row["target_user_id"] == _ACCOUNT
-    assert row["details"]["daily_budget_microusd"] == 20_000_000
-
-    listed = await admin.call("GET", f"/{view['id']}/users")
-    assert listed.json()["users"][0]["daily_budget_microusd"] == 20_000_000
-
-    cleared = await admin.call(
-        "DELETE", f"/{view['id']}/user-budgets", params={"account_id": _ACCOUNT}
-    )
-    assert cleared.status_code == 204
-    assert admin.audit[-1]["action"] == "agent.operator_model_user_budget.clear"
-    again = await admin.call(
-        "DELETE", f"/{view['id']}/user-budgets", params={"account_id": _ACCOUNT}
-    )
-    assert again.status_code == 404
-    assert again.json()["detail"]["error"]["type"] == "operator_model_user_budget_not_found"
-
-
-async def test_a_budget_of_zero_withholds_the_connection_from_one_account(admin) -> None:
-    view = await _created(admin)
-    response = await admin.call(
-        "PUT",
-        f"/{view['id']}/user-budgets",
-        json={"account": _ACCOUNT, "daily_budget_microusd": 0},
-    )
-    assert response.status_code == 200 and response.json()["daily_budget_microusd"] == 0
-    for bad in (-1, None, "plenty"):
-        refused = await admin.call(
-            "PUT",
-            f"/{view['id']}/user-budgets",
-            json={"account": _ACCOUNT, "daily_budget_microusd": bad},
-        )
-        assert refused.status_code == 422, bad
-    assert admin.repository.user_budgets == {(view["id"], _ACCOUNT): 0}
-
-
-@pytest.mark.parametrize("offered", [True, False])
-async def test_an_account_is_offered_a_model_or_has_it_withheld(admin, offered) -> None:
-    view = await _created(admin)
-    response = await admin.call(
-        "PUT",
-        f"/{view['id']}/user-access",
-        json={"account": "a@example.edu", "model": "model-2", "offered": offered},
-    )
-    assert response.status_code == 200
-    assert response.json()["access"] == {"model-2": offered}
-    [row] = admin.audit[-1:]
-    assert row["action"] == "agent.operator_model_user_access.set"
-    # A write answers the account as the list has it, not only what it wrote.
-    budgeted = await admin.call(
-        "PUT",
-        f"/{view['id']}/user-budgets",
-        json={"account": _ACCOUNT, "daily_budget_microusd": 7_000_000},
-    )
-    assert budgeted.json() == {
-        "account_id": _ACCOUNT,
-        "email": "a@example.edu",
-        "daily_budget_microusd": 7_000_000,
-        "access": {"model-2": offered},
-        "spent_today_microusd": 0,
-        "requests_today": 0,
-    }
-    again = await admin.call(
-        "PUT",
-        f"/{view['id']}/user-access",
-        json={"account": _ACCOUNT, "model": "model-1", "offered": True},
-    )
-    assert again.json()["daily_budget_microusd"] == 7_000_000
-    assert again.json()["access"] == {"model-1": True, "model-2": offered}
-    await admin.call("DELETE", f"/{view['id']}/user-budgets", params={"account_id": _ACCOUNT})
-    await admin.call(
-        "DELETE", f"/{view['id']}/user-access", params={"account_id": _ACCOUNT, "model": "model-1"}
-    )
-    admin.audit[:] = [row]
-    assert row["target_user_id"] == _ACCOUNT
-    assert row["details"]["model"] == "model-2" and row["details"]["offered"] is offered
-
-    listed = await admin.call("GET", f"/{view['id']}/users")
-    assert listed.json()["users"][0]["access"] == {"model-2": offered}
-
-    cleared = await admin.call(
-        "DELETE", f"/{view['id']}/user-access", params={"account_id": _ACCOUNT, "model": "model-2"}
-    )
-    assert cleared.status_code == 204
-    assert admin.audit[-1]["action"] == "agent.operator_model_user_access.clear"
-    again = await admin.call(
-        "DELETE", f"/{view['id']}/user-access", params={"account_id": _ACCOUNT, "model": "model-2"}
-    )
-    assert again.status_code == 404
-    assert again.json()["detail"]["error"]["type"] == "operator_model_user_access_not_found"
-
-
-async def test_an_answer_is_for_a_listed_model(admin) -> None:
-    view = await _created(admin)
-    response = await admin.call(
-        "PUT",
-        f"/{view['id']}/user-access",
-        json={"account": _ACCOUNT, "model": "model-9", "offered": True},
-    )
-    assert response.status_code == 404
-    assert response.json()["detail"]["error"]["type"] == "operator_model_not_listed"
-    assert admin.repository.user_access == {}
-
-
-@pytest.mark.parametrize("account", ["nobody@example.edu", "01HZXNOBODY", "not an email@"])
-async def test_an_unknown_account_gets_nothing_of_its_own(admin, account) -> None:
-    view = await _created(admin)
-    for path, body in (
-        ("/user-budgets", {"daily_budget_microusd": 5}),
-        ("/user-access", {"model": "model-1", "offered": True}),
-    ):
-        response = await admin.call(
-            "PUT", f"/{view['id']}{path}", json={"account": account, **body}
-        )
-        assert response.status_code == 404
-        assert response.json()["detail"]["error"]["type"] == "account_not_found"
-    assert admin.repository.user_budgets == {} and admin.repository.user_access == {}
 
 
 # -- usage -------------------------------------------------------------------------

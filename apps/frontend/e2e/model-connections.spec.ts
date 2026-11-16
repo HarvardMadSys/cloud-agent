@@ -102,14 +102,8 @@ test('personal connections fold beneath available models and keep a half-filled 
           {
             id: 'oconn_fixture',
             name: 'Fixture models',
-            is_default: true,
-            default_model: 'fixture-provided',
             models: ['fixture-provided'],
             model_runtimes: { 'fixture-provided': ['codex'] },
-            // $5.00 a day on this source's models together, of which a cent is spent.
-            daily_budget_microusd: 5_000_000,
-            spent_today_microusd: 10_000,
-            resets_at: '2026-10-29T00:00:00Z',
           },
         ],
       },
