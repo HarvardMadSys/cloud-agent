@@ -106,6 +106,8 @@ export function useAgentNotifications(
     const receipts = new Set(readReceipts(userId));
     const pendingNotices = new Set<string>();
     const readingQuestions = new Set<string>();
+    /** Threads whose hinted refresh hit an in-flight read and must re-read once it settles. */
+    const rereadQuestions = new Set<string>();
     /** The conversations whose questions this watcher reads, and how to stop. */
     const watchedQuestions = new Map<string, () => void>();
     let refreshing = false;
@@ -356,8 +358,16 @@ export function useAgentNotifications(
         readingQuestions.has(threadId) ||
         pendingReads.has(job.id) ||
         unconfirmedChanges.has(job.id)
-      )
+      ) {
+        // invalidate(threadId, true) aborts the in-flight read and then asks
+        // the clock for a refresh; the abort only rejects the read's pending
+        // await on a later microtask, so this synchronous call lands while the
+        // flag is still set. Record one re-read so the notification the hint
+        // announced is fetched as soon as the aborted read's cleanup runs,
+        // instead of waiting for the next background poll.
+        if (asking(job) && readingQuestions.has(threadId)) rereadQuestions.add(threadId);
         return;
+      }
       readingQuestions.add(threadId);
       const readVersion = reads.get(job.id) ?? 0;
       try {
@@ -387,6 +397,9 @@ export function useAgentNotifications(
         // Hosts can be temporarily unavailable; keep the next poll alive.
       } finally {
         readingQuestions.delete(threadId);
+        // A hint that arrived while this read was in flight asked for a fresh
+        // read; run one now, and only one, so a burst of hints cannot loop.
+        if (rereadQuestions.delete(threadId)) void readQuestions(threadId);
       }
     }
 
