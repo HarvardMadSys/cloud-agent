@@ -1427,6 +1427,26 @@ describe('global limits', () => {
     expect(screen.getByLabelText('Enable sandbox archives')).toBeChecked();
   });
 
+  it('shows a refused bucket change beside the bucket instead of as a page error', async () => {
+    const message =
+      'The archive bucket cannot be changed: 1 checkpoint of a live sandbox is stored in ' +
+      `${archiveSettings.s3_uri} and can be read back only from that bucket. ` +
+      'Moving a deployment to another bucket is not supported.';
+    updateArchiveSettings.mockRejectedValue(new APIError('archive_bucket_locked', message, 409));
+    renderSettings('Sandbox');
+
+    const bucket = await screen.findByLabelText('S3 bucket');
+    fireEvent.change(bucket, { target: { value: 'example-archives' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save archive settings' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(bucket).toHaveAttribute('aria-invalid', 'true');
+    expect(bucket).toHaveValue('example-archives');
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('labels a configuration-only archive save without claiming enablement changed', async () => {
     updateArchiveSettings.mockResolvedValue({
       ...archiveSettings,

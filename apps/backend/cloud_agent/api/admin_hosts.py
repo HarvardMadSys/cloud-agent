@@ -32,9 +32,10 @@ from cloud_agent.api.deps import (
     log_admin_action,
     verify_admin_access,
 )
-from cloud_agent.api.errors import typed_error
+from cloud_agent.api.errors import as_http_exception, typed_error
 from cloud_agent.application.host_commands import HostCommandError, HostCommands, SandboxPlacement
 from cloud_agent.application.host_pool_view import pool_snapshot
+from cloud_agent.domain.errors import Refused
 from cloud_agent.domain.host_pool import (
     HOST_DRAINING,
     HOST_ONLINE,
@@ -294,9 +295,14 @@ async def set_sandbox_archive_settings(
     """Atomically replace the archive policy; hosts apply it on their next beat.
 
     Only the bucket of the destination is a setting; an omitted ``s3_uri``
-    keeps the stored one. A saved access key is encrypted at rest and is not
-    returned. With no key, sandbox managers authenticate with their workload
-    identity and still require the bucket owner and KMS key.
+    keeps the stored one. The bucket is set once: a change is refused (409,
+    ``archive_bucket_locked``) while a live sandbox's checkpoint or an
+    environment snapshot is stored in the current bucket, and, for an enabled
+    policy in a bucket other than the default, while a host cannot archive
+    there. Moving a deployment to another bucket is not supported. A saved
+    access key is encrypted at rest and is not returned. With no key, sandbox
+    managers authenticate with their workload identity and still require the
+    bucket owner and KMS key.
     """
     job_store = _require_store(store)
     previous = await job_store.host_pool.sandbox_archive_settings()
@@ -337,6 +343,8 @@ async def set_sandbox_archive_settings(
         )
     except SandboxArchivePolicyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Refused as exc:
+        raise as_http_exception(exc) from exc
     if updated is None:
         raise HTTPException(
             status_code=409,

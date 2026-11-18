@@ -21,6 +21,7 @@ from tests.support.storage import AllCapabilities
 
 from cloud_agent.api import admin_hosts as admin_router
 from cloud_agent.api.deps import get_storage
+from cloud_agent.domain.errors import Refused
 
 ADMIN = {"Authorization": "Bearer test-admin"}
 
@@ -70,6 +71,8 @@ class FakeHostStore(AllCapabilities):
             "revision": 0,
             "updated_at": datetime.now(UTC),
         }
+        #: When set, a bucket change is refused with this message.
+        self.archive_bucket_refusal: str | None = None
         self.audit = _AuditTrail()
 
     def seed(self, host: str, *, active: bool = False, seen_minutes_ago: float = 0.0) -> None:
@@ -162,6 +165,12 @@ class FakeHostStore(AllCapabilities):
             return {**self.archive_settings, "_changed": False}
         if expected_revision != self.archive_settings["revision"]:
             return None
+        # The store's set-once refusal, whatever holds the bucket.
+        if (
+            self.archive_bucket_refusal is not None
+            and settings.get("s3_uri") != self.archive_settings["s3_uri"]
+        ):
+            raise Refused("conflict", "archive_bucket_locked", self.archive_bucket_refusal)
         self.archive_settings = {
             **settings,
             "revision": expected_revision + 1,
@@ -839,6 +848,51 @@ async def test_archive_policy_saves_another_bucket_and_keeps_it_when_omitted(adm
     )
     assert elsewhere.status_code == 422
     assert store.archive_settings["s3_uri"] == uri
+
+
+@pytest.mark.asyncio
+async def test_a_refused_bucket_change_is_a_typed_conflict_and_changes_nothing(admin_client):
+    """The bucket is set once: the store refuses, and the page shows the reason.
+
+    The refusal is a 409 in the typed envelope, so the settings card can tell
+    it from a stale revision, which is a 409 too. Nothing is saved or audited.
+    """
+    client, store = admin_client
+    saved = await client.put(
+        "/admin/agent/sandbox-archive-settings", json=_archive_policy(), headers=ADMIN
+    )
+    assert saved.status_code == 200
+    bucket = store.archive_settings["s3_uri"]
+    store.archive_bucket_refusal = (
+        "The archive bucket cannot be changed: 1 checkpoint of a live sandbox is stored in "
+        f"{bucket} and can be read back only from that bucket. "
+        "Moving a deployment to another bucket is not supported."
+    )
+
+    refused = await client.put(
+        "/admin/agent/sandbox-archive-settings",
+        json={**_archive_policy(revision=1), "s3_uri": "s3://example-archives/cloud-agent/sandbox"},
+        headers=ADMIN,
+    )
+
+    assert refused.status_code == 409
+    assert refused.json() == {
+        "detail": {
+            "error": {"type": "archive_bucket_locked", "message": store.archive_bucket_refusal}
+        }
+    }
+    assert store.archive_settings["s3_uri"] == bucket
+    assert store.archive_settings["revision"] == 1
+    assert len(store.audit) == 1
+
+    # The rest of the policy still saves in the bucket it has.
+    kept = await client.put(
+        "/admin/agent/sandbox-archive-settings",
+        json=_archive_policy(revision=1, max_archive_bytes=1024**3),
+        headers=ADMIN,
+    )
+    assert kept.status_code == 200
+    assert kept.json()["revision"] == 2
 
 
 @pytest.mark.asyncio

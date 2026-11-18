@@ -5,19 +5,114 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from cloud_agent.domain.errors import Refused
+from cloud_agent.domain.host_pool import HOST_DISABLED
+from cloud_agent.domain.sandbox_group import GroupState
 from cloud_agent.sandbox_archive.sandbox_archive_credentials import (
     archive_settings_payload,
     seal_archive_storage,
     stored_archive_policy,
 )
+from cloud_agent.storage._sql.hosts import UNDELETED_GROUP_SQL
 from cloud_agent.storage._sql.rows import load_json
 from cloud_agent.storage._sql.runner_policy import archive_settings
 from cloud_agent.storage.repositories.host_pool._common import HostPoolBase, _changed_settings
-from cloud_agent_shared.sandbox_archive_settings import SandboxArchivePolicy
+from cloud_agent_shared.sandbox_archive_settings import (
+    SANDBOX_ARCHIVE_BUCKET,
+    SANDBOX_ARCHIVE_DESTINATION_CAPABILITY,
+    SandboxArchivePolicy,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from typing import Any
+
+#: The ``error.type`` of a refused bucket change.
+ARCHIVE_BUCKET_LOCKED = "archive_bucket_locked"
+
+#: What the current bucket holds that is read back from it: the checkpoints of
+#: groups that may still be restored, and the environment snapshots that are
+#: offered (``superseded`` ones during their grace period) or being built,
+#: whose upload goes to the bucket in force when the build started.
+_STORED_IN_BUCKET_SQL = f"""
+SELECT
+    (SELECT count(*) FROM agent_sandbox_checkpoints c
+     JOIN agent_sandboxes g ON g.id = c.sandbox_id
+     WHERE {UNDELETED_GROUP_SQL} AND g.state <> {GroupState.LOST.sql}) AS checkpoints,
+    (SELECT count(*) FROM agent_environment_snapshots
+     WHERE state IN ('building', 'ready', 'superseded')) AS snapshots
+"""
+
+#: Hosts not removed that cannot be sent a bucket other than the default.
+_HOSTS_WITHOUT_DESTINATION_SQL = """
+SELECT host FROM agent_runner_hosts
+WHERE status <> $1 AND NOT COALESCE(capabilities, '[]'::jsonb) ? $2
+ORDER BY host
+"""
+
+
+def _counted(count: int, one: str, many: str) -> str:
+    return f"1 {one}" if count == 1 else f"{count} {many}"
+
+
+def _named(hosts: list[str], limit: int = 5) -> str:
+    named = ", ".join(hosts[:limit])
+    return named if len(hosts) <= limit else f"{named} and {len(hosts) - limit} more"
+
+
+async def _refuse_bucket_change(
+    conn: Any, *, current: SandboxArchivePolicy, requested: SandboxArchivePolicy
+) -> None:
+    """Refuse a bucket change that would strand stored objects or archive elsewhere.
+
+    The bucket is set once (#1014). Checkpoint and snapshot rows record a key
+    and an object version but no bucket, and restores and snapshot loads read
+    the bucket in force now, so once one of them exists the bucket stays; a
+    new deployment still chooses its own, and a mistyped one can be corrected
+    until the first lands. Moving a deployment to another bucket is not
+    supported. Separately, a host without the destination capability is sent
+    no enabled policy in another bucket: it takes no work, and its sandbox
+    manager keeps archiving into the bucket it last applied.
+
+    The caller holds the policy row. An object a host uploaded before the
+    change and reports after it is not seen here; see the operations guide.
+
+    Raises:
+        Refused: ``conflict`` of type :data:`ARCHIVE_BUCKET_LOCKED`.
+    """
+    stored = await conn.fetchrow(_STORED_IN_BUCKET_SQL)
+    counts = (
+        (int(stored["checkpoints"]), "checkpoint of a live sandbox", "checkpoints of live sandboxes"),
+        (int(stored["snapshots"]), "environment snapshot", "environment snapshots"),
+    )
+    total = sum(count for count, _, _ in counts)
+    if total:
+        held = " and ".join(_counted(*named) for named in counts if named[0])
+        raise Refused(
+            "conflict",
+            ARCHIVE_BUCKET_LOCKED,
+            f"The archive bucket cannot be changed: {held} "
+            f"{'is' if total == 1 else 'are'} stored in {current.s3_uri} "
+            "and can be read back only from that bucket. "
+            "Moving a deployment to another bucket is not supported.",
+        )
+    if not requested.enabled or requested.bucket == SANDBOX_ARCHIVE_BUCKET:
+        return
+    rows = await conn.fetch(
+        _HOSTS_WITHOUT_DESTINATION_SQL, HOST_DISABLED, SANDBOX_ARCHIVE_DESTINATION_CAPABILITY
+    )
+    if rows:
+        hosts = [row["host"] for row in rows]
+        one = len(hosts) == 1
+        raise Refused(
+            "conflict",
+            ARCHIVE_BUCKET_LOCKED,
+            "The archive bucket cannot be changed while archives are enabled: "
+            f"{_named(hosts)} cannot archive to another bucket, so "
+            f"{'it' if one else 'they'} would take no work while "
+            f"{'its sandbox manager' if one else 'their sandbox managers'} "
+            f"kept archiving into the previous one. Redeploy {'it' if one else 'them'} first.",
+        )
 
 
 class SettingsMixin(HostPoolBase):
@@ -107,7 +202,15 @@ class SettingsMixin(HostPoolBase):
         expected_revision: int,
         settings: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        """Atomically replace the archive policy, or return ``None`` on a stale revision."""
+        """Atomically replace the archive policy, or return ``None`` on a stale revision.
+
+        A bucket change is refused while the current bucket holds what is read
+        back from it, or while an enabled policy in another bucket would not
+        reach every host (see :func:`_refuse_bucket_change`).
+
+        Raises:
+            Refused: The bucket change is refused.
+        """
         async with self._pool.acquire() as conn, conn.transaction():
             await conn.execute(
                 "INSERT INTO agent_runner_policy (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING"
@@ -137,6 +240,8 @@ class SettingsMixin(HostPoolBase):
                 return current_response
             if current_policy.revision != expected_revision:
                 return None
+            if requested.bucket != current_policy.bucket:
+                await _refuse_bucket_change(conn, current=current_policy, requested=requested)
             policy = SandboxArchivePolicy.from_mapping(
                 {**dict(settings), "revision": current_policy.revision + 1}
             )

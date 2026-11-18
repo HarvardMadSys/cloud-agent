@@ -33010,7 +33010,7 @@
         "summary": "Get Sandbox Archive Settings"
       },
       "put": {
-        "description": "Atomically replace the archive policy; hosts apply it on their next beat.\n\nOnly the bucket of the destination is a setting; an omitted ``s3_uri``\nkeeps the stored one. A saved access key is encrypted at rest and is not\nreturned. With no key, sandbox managers authenticate with their workload\nidentity and still require the bucket owner and KMS key.",
+        "description": "Atomically replace the archive policy; hosts apply it on their next beat.\n\nOnly the bucket of the destination is a setting; an omitted ``s3_uri``\nkeeps the stored one. The bucket is set once: a change is refused (409,\n``archive_bucket_locked``) while a live sandbox's checkpoint or an\nenvironment snapshot is stored in the current bucket, and, for an enabled\npolicy in a bucket other than the default, while a host cannot archive\nthere. Moving a deployment to another bucket is not supported. A saved\naccess key is encrypted at rest and is not returned. With no key, sandbox\nmanagers authenticate with their workload identity and still require the\nbucket owner and KMS key.",
         "operationId": "set_sandbox_archive_settings_admin_agent_sandbox_archive_settings_put",
         "parameters": [
           {

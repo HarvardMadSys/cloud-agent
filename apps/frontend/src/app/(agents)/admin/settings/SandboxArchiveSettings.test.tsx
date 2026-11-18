@@ -43,8 +43,9 @@ describe('sandbox archive settings card', () => {
     expect(screen.getByLabelText('S3 bucket')).not.toHaveAttribute('readonly');
     expect(screen.getByLabelText('S3 bucket')).toHaveAttribute('placeholder', 'my-archive-bucket');
     expect(screen.getByLabelText('S3 bucket')).toHaveAccessibleDescription(
-      'Archives go to s3://freeinference/cloud-agent/sandbox. Checkpoints and snapshots ' +
-        'stored in a previous bucket are not restored after a change.',
+      'Archives go to s3://freeinference/cloud-agent/sandbox. Choose the bucket once: it ' +
+        'cannot be changed after the first checkpoint or environment snapshot is stored ' +
+        'there, and moving a deployment to another bucket is not supported.',
     );
     expect(screen.getByLabelText('AWS access key ID')).toBeInTheDocument();
     expect(screen.getByLabelText('AWS secret access key')).toHaveAttribute('type', 'password');
@@ -166,6 +167,35 @@ describe('sandbox archive settings card', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save archive settings' }));
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave.mock.calls[0][0].s3_uri).toBe('s3://example-archives/cloud-agent/sandbox');
+  });
+
+  it('shows a refused bucket change beside the bucket while the draft still names it', () => {
+    const refusal = {
+      s3Uri: 's3://example-archives/cloud-agent/sandbox',
+      message: 'The archive bucket cannot be changed: 1 environment snapshot is stored there.',
+    };
+    const { rerender } = render(
+      <SandboxArchiveSettingsCard settings={settings()} busy={false} onSave={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByLabelText('S3 bucket'), { target: { value: 'example-archives' } });
+    rerender(
+      <SandboxArchiveSettingsCard
+        settings={settings()}
+        busy={false}
+        refusal={refusal}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const bucket = screen.getByLabelText('S3 bucket');
+    expect(bucket).toHaveAttribute('aria-invalid', 'true');
+    expect(bucket).toHaveAccessibleDescription(expect.stringContaining(refusal.message));
+    expect(screen.getByRole('alert')).toHaveTextContent(refusal.message);
+
+    // Another bucket is a new request; the refusal was about this one.
+    fireEvent.change(bucket, { target: { value: 'example-archives-2' } });
+    expect(bucket).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it.each([

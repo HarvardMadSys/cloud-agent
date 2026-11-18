@@ -9,9 +9,13 @@ import { useT } from '@/components/providers/LocaleProvider';
 import { hasAgentPermission } from '@/components/providers/AuthProvider';
 import type { AgentRunnerHostPool } from '@/lib/api/admin';
 import { getAgentRunnerHosts, setAgentHostSettings, setAgentRuntimeVersion } from '@/lib/api/admin';
-import type { SandboxArchiveSettings } from '@/lib/api/adminArchiveSettings';
+import type {
+  ArchiveBucketRefusal,
+  SandboxArchiveSettings,
+} from '@/lib/api/adminArchiveSettings';
 import type { AgentAdminSettings } from '@/lib/api/adminSettings';
 import {
+  archiveBucketRefusal,
   getSandboxArchiveSettings,
   updateSandboxArchiveSettings,
 } from '@/lib/api/adminArchiveSettings';
@@ -96,6 +100,7 @@ function SettingsView() {
   const [pool, setPool] = useState<AgentRunnerHostPool | null>(null);
   const [archiveSettings, setArchiveSettings] = useState<SandboxArchiveSettings | null>(null);
   const [archiveEditorReset, setArchiveEditorReset] = useState(0);
+  const [archiveRefusal, setArchiveRefusal] = useState<ArchiveBucketRefusal | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [denied, setDenied] = useState(false);
@@ -262,6 +267,8 @@ function SettingsView() {
     action: () => Promise<Result>,
     apply: (next: Result) => void,
     message: string | null,
+    // Takes a failure its form shows itself, in place of the page's alert.
+    refused?: (cause: unknown) => boolean,
   ) => {
     if (writing.current || revoked.current) return;
     writing.current = true;
@@ -277,7 +284,7 @@ function SettingsView() {
       apply(next);
       setNotice(message);
     } catch (cause) {
-      if (mounted.current) fail(cause);
+      if (mounted.current && !refused?.(cause)) fail(cause);
     } finally {
       writing.current = false;
       if (mounted.current) setBusy(false);
@@ -601,10 +608,12 @@ function SettingsView() {
                 settings={archiveSettings}
                 hosts={servers.map(({ host }) => host)}
                 busy={busy}
+                refusal={archiveRefusal}
                 onSave={(update) =>
                   void save(
                     () => updateSandboxArchiveSettings(update),
                     (next) => {
+                      setArchiveRefusal(null);
                       setArchiveSettings(next);
                       // A successful idempotent retry may keep the same DB
                       // revision. Reset the editor explicitly instead of
@@ -616,6 +625,12 @@ function SettingsView() {
                         ? 'Sandbox archives enabled.'
                         : 'Sandbox archives disabled.'
                       : 'Sandbox archive settings saved.',
+                    // The bucket is set once: its refusal belongs beside the bucket.
+                    (cause) => {
+                      const refusal = archiveBucketRefusal(cause, update);
+                      if (refusal) setArchiveRefusal(refusal);
+                      return refusal !== null;
+                    },
                   )
                 }
               />
