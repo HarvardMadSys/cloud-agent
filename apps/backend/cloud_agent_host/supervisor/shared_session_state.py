@@ -28,6 +28,7 @@ from cloud_agent_host.container.sandbox import SandboxError
 from cloud_agent_host.session_lifecycle import (
     SessionBusy,
     SessionLeaseLost,
+    conflict_deadline,
 )
 from cloud_agent_host.supervisor.group_lifecycle import GroupLifecycle, Operation
 from cloud_agent_host.supervisor.group_lifecycle_state import GroupLifecycleState, RunLabel
@@ -401,16 +402,19 @@ class SharedSessionState:
                 raise SessionBusy(reason)
             self.condition.wait(timeout=min(remaining, 0.5))
 
-    def wait_for_start_locked(self, group: _Group, *, retry_failed: bool = False) -> None:
+    def wait_for_start_locked(
+        self, group: _Group, *, retry_failed: bool = False, wait_until: float | None = None
+    ) -> None:
         """Wait for an in-flight bridge check without holding the metadata lock.
 
         Workspace reads and terminal opens revalidate even a running container.
         Their temporary start fence must not reject an already leased member's
-        prompt. Callers recheck membership and activation after this wait.
+        prompt. Callers recheck membership and activation after this wait,
+        which ends at ``wait_until`` (see :func:`conflict_deadline`).
         """
         self.wait_while_locked(
             lambda: group.lifecycle.busy_reason(Operation.START_WAIT),
-            deadline=time.monotonic() + 30.0,
+            deadline=conflict_deadline(wait_until),
         )
         if group.life.container_lost:
             raise RetainedChatLost("shared sandbox container identity was lost")

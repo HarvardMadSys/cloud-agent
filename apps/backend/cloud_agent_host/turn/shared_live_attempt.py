@@ -50,6 +50,7 @@ from cloud_agent_host.service.attempt_lease import (
 )
 from cloud_agent_host.service.local_settings import _chat_idle_timeout_s
 from cloud_agent_host.service.measurement_sender import _enqueue_delivery
+from cloud_agent_host.session_lifecycle import CONFLICT_BUSY, CONFLICT_CHANGED
 from cloud_agent_host.setup import run_setup
 from cloud_agent_host.turn.group_reservation import (
     GroupPlan,
@@ -180,6 +181,8 @@ def _classify_startup_path(container_action: str, resident_action: str) -> str:
         return "new_group"
     if container_action == "start":
         return "resume_stopped"
+    if container_action == ACQUIRE_ACTION_UNREPORTED:
+        return STARTUP_UNCLASSIFIED_AFTER_RETRY
     # Anything else -- including a resident action the sandbox manager did not report --
     # does not identify a path, and guessing one would poison the comparison
     # the four paths exist for.
@@ -200,6 +203,117 @@ def _stage(measurement: operation_profiling.Measurement | None, name: str) -> st
     """
     operation_profiling.mark(measurement, name)
     return name
+
+
+#: How long, counted from the first request, an attempt keeps asking for its
+#: group after a conflict the sandbox manager calls momentary. Past it the turn
+#: goes back to the queue, as every conflict did before: handing back costs the
+#: control plane's retry delay and stops the container the attempt created.
+ACQUIRE_RETRY_BUDGET_S = 10.0
+#: The pause before the first repeat; each later one doubles.
+_ACQUIRE_RETRY_FIRST_DELAY_S = 0.5
+#: How often a pause looks for a Stop or a lost lease.
+_ACQUIRE_RETRY_POLL_S = 0.1
+#: The conflicts worth asking again for. A stale lease is not: a newer
+#: activation owns the member, and only the control plane can say what next.
+_RETRIED_CONFLICTS = frozenset({CONFLICT_BUSY, CONFLICT_CHANGED})
+#: The acquire's container action when a refused request of it did not say
+#: what it had done: it may have created the container the repeat reused.
+ACQUIRE_ACTION_UNREPORTED = "unreported"
+#: The startup path such an acquire is given: not one of the four, by name.
+STARTUP_UNCLASSIFIED_AFTER_RETRY = "unclassified_after_retry"
+
+
+def _acquire_container_action(refused: list[str | None], answered: str) -> str:
+    """What the acquire stage did to the container, over every request it made.
+
+    A repeat finds the container a refused request created, or started, and
+    reports only ``reuse``; the turn still waited for that work, so the stage
+    is reported by the most it did: ``create``, then ``start``, as within one
+    request (``SandboxActionFacts.note``). A refusal that did not say leaves
+    the stage :data:`ACQUIRE_ACTION_UNREPORTED`, short of a ``create`` seen.
+    """
+    actions = [*refused, answered]
+    if "create" in actions:
+        return "create"
+    if None in refused:
+        return ACQUIRE_ACTION_UNREPORTED
+    if "start" in actions:
+        return "start"
+    return answered
+
+
+def _log_acquire_conflict(
+    job_id: str, exc: SandboxManagerError, *, retrying: bool, elapsed_s: float
+) -> None:
+    """Say which kind of conflict stopped the acquire, and whether it is asked again.
+
+    Like every runner failure record, it leaves the response's words out: the
+    sandbox manager's ``shared_acquire_conflict`` record names the refusal.
+    """
+    logger.warning(
+        "supervisor_acquire_conflict job_id=%s conflict=%s retrying=%s elapsed_s=%.2f",
+        job_id,
+        exc.conflict or "unknown",
+        retrying,
+        elapsed_s,
+    )
+
+
+def _pause_unless_stopped(seconds: float, stopped: Callable[[], bool]) -> bool:
+    """Sleep ``seconds``, or less if ``stopped`` turns true; whether it stayed false."""
+    deadline = time.monotonic() + seconds
+    while not stopped():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(remaining, _ACQUIRE_RETRY_POLL_S))
+    return False
+
+
+def _acquire_retrying_conflicts(
+    acquire: Callable[[float | None], dict[str, Any]],
+    *,
+    job_id: str,
+    stopped: Callable[[], bool],
+    refusals: list[SandboxManagerError],
+) -> dict[str, Any]:
+    """Make the acquire, asking again a few times while it meets a momentary conflict.
+
+    Nothing has reached the CLI yet, and a repeat is the same request, for the
+    same owner and activation: the sandbox manager takes it up from wherever
+    the refused one left the group, a container that one created included.
+    Handing the turn back instead kept a new chat's first message waiting more
+    than half a minute for a conflict that was over in a second. Any other
+    refusal, a conflict past the budget, and a Stop or lost lease during a
+    pause raise the last refusal for the caller to handle as before.
+
+    ``acquire`` takes how long the sandbox manager may wait at conflicts: the
+    first request leaves it to the sandbox manager, and a repeat is given what
+    is left of the budget, so no wait inside it can outlast the budget either.
+    Each refusal asked again is added to ``refusals``.
+    """
+    started = time.monotonic()
+    delay = _ACQUIRE_RETRY_FIRST_DELAY_S
+    conflict_wait_s: float | None = None
+    while True:
+        try:
+            return acquire(conflict_wait_s)
+        except SandboxManagerError as exc:
+            if exc.status_code != 409:
+                raise
+            elapsed = time.monotonic() - started
+            retrying = (
+                exc.conflict in _RETRIED_CONFLICTS
+                and elapsed + delay <= ACQUIRE_RETRY_BUDGET_S
+                and not stopped()
+            )
+            _log_acquire_conflict(job_id, exc, retrying=retrying, elapsed_s=elapsed)
+            if not retrying or not _pause_unless_stopped(delay, stopped):
+                raise
+            refusals.append(exc)
+            delay *= 2
+            conflict_wait_s = max(0.0, ACQUIRE_RETRY_BUDGET_S - (time.monotonic() - started))
 
 
 class _HandBack(Exception):
@@ -300,7 +414,10 @@ class _SharedLiveAttempt:
     lease: dict[str, Any]
     acquire_started: float
     from_snapshot: bool
+    # What the request that was granted did to the container; what the whole
+    # stage did, any refused request included, is ``startup_container_action``.
     container_action: str
+    startup_container_action: str
     running: dict[str, Any]
     retained: RetainedChatBackend
     base_sha: str
@@ -466,14 +583,17 @@ class _SharedLiveAttempt:
             and not self.reservation.get("container_id"),
         )
         self.supervisor = supervisor = sandbox_manager_from_env()
-        try:
-            acquire_call = operation_profiling.expect_fragment(
-                self.measurement, SANDBOX_MANAGER_PRODUCER, "supervisor_acquire"
-            )
-            # Before the call, so a proof the sandbox manager makes during it is never
-            # taken for younger than it is.
+        # One fragment for the stage however many requests it takes: only an
+        # answered request carries one, and a repeat answers for the stage.
+        acquire_call = operation_profiling.expect_fragment(
+            self.measurement, SANDBOX_MANAGER_PRODUCER, "supervisor_acquire"
+        )
+
+        def acquire(conflict_wait_s: float | None) -> dict[str, Any]:
+            # Before each request, so a proof the sandbox manager makes during it
+            # is never taken for younger than it is.
             self.acquire_started = time.monotonic()
-            lease = supervisor.acquire_shared(
+            return supervisor.acquire_shared(
                 spec,
                 thread_id=job.thread_id,
                 activation_generation=self.activation_generation,
@@ -487,6 +607,16 @@ class _SharedLiveAttempt:
                 environment_snapshot=(
                     self.snapshot.model_dump(mode="json") if self.snapshot is not None else None
                 ),
+                conflict_wait_s=conflict_wait_s,
+            )
+
+        refusals: list[SandboxManagerError] = []
+        try:
+            lease = _acquire_retrying_conflicts(
+                acquire,
+                job_id=job.job_id,
+                stopped=lambda: self.heart.cancel_requested or self.heart.lease_lost,
+                refusals=refusals,
             )
         except SandboxManagerError as exc:
             if self.restore is not None and exc.status_code == 424:
@@ -494,15 +624,18 @@ class _SharedLiveAttempt:
                     RESTORE_FAILED_RELEASE_REASON, f"sandbox restore failed: {exc}"
                 ) from exc
             if exc.status_code == 409:
-                # The group stayed busy past the sandbox manager's wait: a
-                # snapshot capture can take longer, and the control plane
-                # claims a follow-up whatever the group is doing.
+                # The group stayed busy past the sandbox manager's wait and the
+                # retries above: a snapshot capture can take longer, and the
+                # control plane claims a follow-up whatever the group is doing.
                 raise _HandBack("sandbox_busy", f"sandbox busy: {exc}") from exc
             self.context_invalid = self.has_context and exc.status_code == 410
             raise
         self.lease = lease
         self.lease_token = str(lease["token"])
         self._accept_lease(lease, acquire_call)
+        self.startup_container_action = _acquire_container_action(
+            [refusal.container_action for refusal in refusals], self.container_action
+        )
 
     def _accept_lease(self, lease: dict[str, Any], acquire_call: str | None) -> None:
         # The container holds a snapshot's installation, whether this attempt
@@ -994,9 +1127,9 @@ class _SharedLiveAttempt:
             operation_profiling.set_attributes(
                 self.measurement,
                 context_status=self.context_status,
-                container_action=self.container_action,
+                container_action=self.startup_container_action,
                 resident_action=resident_action,
-                startup_path=_classify_startup_path(self.container_action, resident_action),
+                startup_path=_classify_startup_path(self.startup_container_action, resident_action),
                 process_generation=process_generation,
                 container_id=str(self.lease["container_id"]),
                 workspace_action=(

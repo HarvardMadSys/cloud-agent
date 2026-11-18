@@ -387,6 +387,7 @@ class GroupLifecycleController:
         facts: SandboxActionFacts | None = None,
         observer: StageRecorder | None = None,
         activation_owner: str | None = None,
+        wait_until: float | None = None,
     ) -> tuple[ChatSandboxInspection, bool]:
         """Start a group and archive a guest-network fail-stop exactly once.
 
@@ -405,7 +406,7 @@ class GroupLifecycleController:
         the group's bridge is touched, and records no failed start.
         """
         with self._state.lock:
-            self._state.wait_for_start_locked(group, retry_failed=True)
+            self._state.wait_for_start_locked(group, retry_failed=True, wait_until=wait_until)
             hold, members, expected_container_id = self._admit_start_locked(
                 group, activation_owner=activation_owner if start_seq is _SAME_RUN else None
             )
@@ -1101,11 +1102,13 @@ class GroupLifecycleController:
         facts: SandboxActionFacts | None = None,
         observer: StageRecorder | None = None,
         activation_owner: str | None = None,
+        wait_until: float | None = None,
     ) -> ChatSandboxInspection:
         """Start the group if it is stopped, and prove its network once for one request.
 
         A start proves it; a retried archive completion starts nothing, so the
-        running container it reused is proved here instead.
+        running container it reused is proved here instead. A start already in
+        progress is waited for until ``wait_until`` (see :func:`conflict_deadline`).
         """
         inspection, proved = self.start_group(
             group,
@@ -1113,6 +1116,7 @@ class GroupLifecycleController:
             facts=facts,
             observer=observer,
             activation_owner=activation_owner,
+            wait_until=wait_until,
         )
         if not proved:
             self._manager.require_network(group.spec, observer=observer)
