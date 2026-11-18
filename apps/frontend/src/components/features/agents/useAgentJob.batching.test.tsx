@@ -78,6 +78,9 @@ describe('streamed frame batching', () => {
 
     rerender({ id: second.id });
     await waitFor(() => expect(result.current.job?.id).toBe(second.id));
+    // The old stream can still deliver while its passive cleanup runs. This
+    // frame reaches the new turn's buffer and must be filtered by `job_id`.
+    act(() => oldStream.onEvent(event(101, 'message', { text: 'old after switch' })));
     await flushStream();
 
     expect(result.current.events.map((row) => row.id)).toEqual([5]);
