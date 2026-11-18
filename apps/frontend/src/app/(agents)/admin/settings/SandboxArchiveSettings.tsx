@@ -239,10 +239,7 @@ function ErrorText({ id, error }: { id: string; error: string | undefined }) {
 }
 
 /** The control plane's refusal of this draft's bucket, while the draft still names it. */
-function refusedBucket(
-  refusal: ArchiveBucketRefusal | null,
-  bucket: string,
-): string | undefined {
+function refusedBucket(refusal: ArchiveBucketRefusal | null, bucket: string): string | undefined {
   return refusal && refusal.s3Uri === `s3://${bucket}/${SANDBOX_ARCHIVE_PREFIX}`
     ? refusal.message
     : undefined;
@@ -478,10 +475,10 @@ export default function SandboxArchiveSettingsCard({
                   id="archive-destination-description"
                   className="mt-1 block text-xs font-normal text-gray-500 dark:text-gray-400"
                 >
-                  Archives go to s3://{draft.bucket || '<bucket>'}/{SANDBOX_ARCHIVE_PREFIX}.
-                  Choose the bucket once: it cannot be changed after the first checkpoint or
-                  environment snapshot is stored there, and moving a deployment to another bucket
-                  is not supported.
+                  Archives go to s3://{draft.bucket || '<bucket>'}/{SANDBOX_ARCHIVE_PREFIX}. Choose
+                  the bucket once: it cannot be changed after the first checkpoint or environment
+                  snapshot is stored there, and moving a deployment to another bucket is not
+                  supported.
                 </span>
                 <ErrorText id="archive-bucket-error" error={bucketError} />
               </label>

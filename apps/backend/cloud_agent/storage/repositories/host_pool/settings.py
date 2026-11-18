@@ -82,7 +82,11 @@ async def _refuse_bucket_change(
     """
     stored = await conn.fetchrow(_STORED_IN_BUCKET_SQL)
     counts = (
-        (int(stored["checkpoints"]), "checkpoint of a live sandbox", "checkpoints of live sandboxes"),
+        (
+            int(stored["checkpoints"]),
+            "checkpoint of a live sandbox",
+            "checkpoints of live sandboxes",
+        ),
         (int(stored["snapshots"]), "environment snapshot", "environment snapshots"),
     )
     total = sum(count for count, _, _ in counts)

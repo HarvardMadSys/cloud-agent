@@ -9,10 +9,7 @@ import { useT } from '@/components/providers/LocaleProvider';
 import { hasAgentPermission } from '@/components/providers/AuthProvider';
 import type { AgentRunnerHostPool } from '@/lib/api/admin';
 import { getAgentRunnerHosts, setAgentHostSettings, setAgentRuntimeVersion } from '@/lib/api/admin';
-import type {
-  ArchiveBucketRefusal,
-  SandboxArchiveSettings,
-} from '@/lib/api/adminArchiveSettings';
+import type { ArchiveBucketRefusal, SandboxArchiveSettings } from '@/lib/api/adminArchiveSettings';
 import type { AgentAdminSettings } from '@/lib/api/adminSettings';
 import {
   archiveBucketRefusal,
