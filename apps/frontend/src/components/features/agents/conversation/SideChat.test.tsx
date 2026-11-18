@@ -37,6 +37,7 @@ import { codeReviewFixPrompt } from './codeReview';
 import { sideChatKeys } from './sideChatStorage';
 import { SideChat } from './SideChat';
 import { conversationReadStorageKey } from '../sidebar/useConversationReadState';
+import { flushStream } from '@/test/agentStreamTestHelpers';
 import { answerThreadQuestion, listThreadQuestions } from '@/lib/api/questions';
 import type { SideChatTab } from '../workspace/useWorkspaceTabs';
 import { deleteAttachment, uploadAttachment, type AttachmentApi } from '@/lib/api/attachments';
@@ -593,6 +594,7 @@ describe('Side Chat', () => {
       events.push(toolCall);
       handler.onEvent(toolCall);
     });
+    await flushStream();
     expect(screen.getByRole('status', { name: 'Agent status' })).toHaveTextContent(
       'Running tool call',
     );
@@ -608,6 +610,7 @@ describe('Side Chat', () => {
       events.push(toolResult);
       handler.onEvent(toolResult);
     });
+    await flushStream();
     expect(screen.getByRole('status', { name: 'Agent status' })).toHaveTextContent(
       'Waiting for LLM response',
     );

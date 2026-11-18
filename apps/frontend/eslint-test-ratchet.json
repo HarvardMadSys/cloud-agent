@@ -46,7 +46,7 @@
     },
     {
       "files": ["src/components/features/agents/useAgentJob.test.tsx"],
-      "rules": { "max-lines": ["error", { "max": 1577 }] }
+      "rules": { "max-lines": ["error", { "max": 1562 }] }
     },
     {
       "files": ["src/app/(agents)/admin/measurements/page.test.tsx"],
@@ -70,7 +70,7 @@
     },
     {
       "files": ["src/lib/api/__tests__/agents.test.ts"],
-      "rules": { "max-lines": ["error", { "max": 1218 }] }
+      "rules": { "max-lines": ["error", { "max": 1217 }] }
     }
   ]
 }

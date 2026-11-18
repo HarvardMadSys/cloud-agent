@@ -21,6 +21,8 @@ import type {
   AgentThreadEventApi,
 } from '@/lib/api/agents';
 import { createDisplayJobAdapter } from './adapt/jobAdapter';
+import { mergeEventRows } from './conversation/eventLog';
+import { useStreamLog } from './conversation/useStreamLog';
 import { resumeAfter } from './conversation/threadHistory';
 import { useThreadHistory, type ThreadHistoryControl } from './conversation/useThreadHistory';
 import { useAgentReads } from './AgentReadProvider';
@@ -193,8 +195,17 @@ export function useAgentJob(
   reload: () => void;
 } {
   const [api, setApi] = useState<AgentJobApi | null>(null);
-  const [events, setEvents] = useState<AgentJobEventApi[]>([]);
-  const [threadEvents, setThreadEvents] = useState<AgentThreadEventApi[]>([]);
+  // The live turn's rows and the whole conversation's rows, kept append-only.
+  const {
+    log,
+    index: eventsByJob,
+    publish: publishLog,
+    queue: queueLive,
+    flush: flushPending,
+    current: currentLog,
+    drain: drainLog,
+    reset: resetLog,
+  } = useStreamLog();
   const [gitMetadata, setGitMetadata] = useState<AgentGitWorkspaceMetadataApi | null | undefined>(
     undefined,
   );
@@ -262,8 +273,7 @@ export function useAgentJob(
     if (seenScope.current.jobId !== jobId || seenScope.current.reads !== reads) {
       if (seenScope.current.reads !== reads) {
         setApi(null);
-        setEvents([]);
-        setThreadEvents([]);
+        resetLog();
         setThread(null);
         heldLog.current = null;
       }
@@ -280,16 +290,16 @@ export function useAgentJob(
     setLoading(true);
     const progressive =
       loadedStreamCursor.current?.jobId !== jobId || loadedStreamCursor.current.reads !== reads;
-    const publishEvents = (foundEvents: AgentThreadEventApi[]) => {
+    const publishPage = (page: AgentThreadEventApi[]) => {
       // A refresh already has a complete transcript. Keep it and its live
       // appends visible until the replacement snapshot is complete as well.
       if (!progressive || cancelled || requestGeneration !== generation.current) return;
-      const merged = new Map(foundEvents.map((event) => [event.id, event]));
-      for (const [id, event] of read.events) merged.set(id, event);
-      const rows = [...merged.values()].sort((left, right) => left.id - right.id);
-      const own = rows.filter((event) => event.job_id === jobId);
-      setEvents(own);
-      setThreadEvents(rows);
+      const own = page.filter((event) => event.job_id === jobId);
+      const held = currentLog();
+      publishLog({
+        live: mergeEventRows(held.live, own),
+        thread: mergeEventRows(held.thread, page),
+      });
       own.forEach((event) => seen.current.set(event.id, event));
     };
 
@@ -313,14 +323,13 @@ export function useAgentJob(
             ? heldLog.current.events
             : [];
         if (progressive && seen.current.size === 0) {
-          setEvents(held.filter((event) => event.job_id === jobId));
-          setThreadEvents(held);
+          publishLog({ live: held.filter((event) => event.job_id === jobId), thread: held });
         }
         setThread(foundThread);
         const added = await listAllAgentThreadEvents(jobId, {
           after: resumeAfter(held),
           signal: controller.signal,
-          onPage: (page) => publishEvents([...held, ...page]),
+          onPage: publishPage,
         });
         return [job, foundThread, [...held, ...added]] as const;
       })
@@ -365,8 +374,11 @@ export function useAgentJob(
           }
         }
         setApi((current) => preserveResolvedTaskTitle(current, latest));
-        setEvents(ownEvents);
-        setThreadEvents(completeEvents);
+        const buffered = drainLog();
+        publishLog({
+          live: mergeEventRows(ownEvents, buffered.live),
+          thread: mergeEventRows(completeEvents, buffered.thread),
+        });
         setThread(foundThread);
         ownEvents.forEach((event) => seen.current.set(event.id, event));
         setError(null);
@@ -385,7 +397,7 @@ export function useAgentJob(
       controller.abort();
       if (historyRead.current === read) historyRead.current = null;
     };
-  }, [active, jobId, reads, readThread, tick]);
+  }, [active, currentLog, drainLog, jobId, publishLog, reads, readThread, resetLog, tick]);
 
   // The detail path reads only a cheap status fingerprint. The full patch and
   // log belong to the Git panel. Avoid inspecting the prior turn under a new URL.
@@ -459,8 +471,7 @@ export function useAgentJob(
         if (historyRead.current?.jobId === jobId) {
           historyRead.current.lifecycleEvents.set(event.id, threadEvent);
         }
-        setEvents((current) => [...current, event]);
-        setThreadEvents((current) => [...current, threadEvent]);
+        queueLive(event, threadEvent);
         // The stream is also the fastest authority for a queued child
         // becoming active; keep the status pill in step without polling.
         setApi((current) => (current ? applyAgentLifecycleEvent(current, event) : current));
@@ -468,6 +479,9 @@ export function useAgentJob(
       onFinished: () => {
         finished = true;
         streamFailures.current = 0;
+        // Commit the frames received in this window before the reload replaces
+        // the log with the conversation read that follows them.
+        flushPending();
         reload();
       },
     })
@@ -491,7 +505,7 @@ export function useAgentJob(
       controller.abort();
       clearTimeout(retry);
     };
-  }, [active, currentTurnNo, jobId, isLive, reads, reload, streamAttempt]);
+  }, [active, currentTurnNo, flushPending, isLive, jobId, queueLive, reads, reload, streamAttempt]);
 
   // The turn on screen, for the reads below that decide outside a state update.
   const shownApi = useRef<AgentJobApi | null>(null);
@@ -677,14 +691,15 @@ export function useAgentJob(
   const job = useMemo(() => {
     if (!api) return null;
     return adapter.project(api, {
-      events,
+      events: log.live,
+      eventsByJob: eventsByJob.current,
       gitMetadata,
       gitMetadataPending: gitMetadata === undefined,
       thread: visibleThread,
-      threadEvents,
+      threadEvents: log.thread,
       historyLoading,
     });
-  }, [adapter, api, events, gitMetadata, visibleThread, threadEvents, historyLoading]);
+  }, [adapter, api, eventsByJob, gitMetadata, historyLoading, log, visibleThread]);
   // The turn rows come from the thread read, which is a snapshot: a live
   // attempt replacement updates `api` and would otherwise leave the inspector
   // reading the attempt that is already gone. The current turn is therefore
@@ -701,7 +716,7 @@ export function useAgentJob(
   // Both shapes, deliberately: `job.events` is the chat view's *reading* of
   // the stream — folded, deduplicated, unknown kinds dropped — while the
   // trajectory needs the rows the platform actually stored.
-  return { job, events: threadEvents, threadJobs, history, loading, error, reload };
+  return { job, events: log.thread, threadJobs, history, loading, error, reload };
 }
 
 /** One directory of the workspace tree, as far as it has been loaded. */
