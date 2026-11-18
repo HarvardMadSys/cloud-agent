@@ -5,6 +5,10 @@ sandbox request, and the turn went back to the queue: thirty seconds of retry
 delay, a stop of the container it had just created, and a fresh start, before
 "hello" was answered. The sandbox manager now names its conflicts, and the
 runner asks again, briefly, for the ones that are over in a moment.
+
+A repeat carries what is left of the runner's budget, and every conflict wait
+inside it ends there. A refusal says what it had done to the container, so a
+cold start that was asked again is still recorded as one.
 """
 
 from __future__ import annotations
@@ -12,12 +16,16 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import time
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from tests.support.owners import residency_connection
 from tests.unit.test_agent_runner import (
+    _JOB,
     _configure_host,
     _enable_profiling,
     _profiled_measurement,
@@ -31,14 +39,23 @@ from tests.unit.test_shared_session_supervisor import (
     _spec,
 )
 
+from cloud_agent_host import session_lifecycle
+from cloud_agent_host.container.sandbox import ProcessBackend
 from cloud_agent_host.manager_api.context import supervisor_error
+from cloud_agent_host.sandbox_manager import create_app
 from cloud_agent_host.sandbox_manager_client import SandboxManagerClient, SandboxManagerError
 from cloud_agent_host.session_lifecycle import (
     CONFLICT_HEADER,
+    CONTAINER_ACTION_HEADER,
     SessionBusy,
     SessionChanged,
     SessionLeaseLost,
     StaleStartFence,
+)
+from cloud_agent_host.supervisor import (
+    group_registration,
+    member_sessions,
+    shared_session_state,
 )
 from cloud_agent_host.turn import shared_live_attempt
 from cloud_agent_shared import operation_profiling
@@ -77,8 +94,13 @@ def test_every_409_says_which_conflict_it_is(error, kind):
 async def test_the_acquire_route_answers_the_conflict_and_names_it_in_its_own_log(caplog):
     supervisor = _SharedSupervisor()
 
-    def refuse(*_args, **_kwargs):
-        raise SessionBusy("chat 'athr_source' already has an active turn")
+    asked: list[dict] = []
+
+    def refuse(*_args, **kwargs):
+        asked.append(kwargs)
+        refusal = SessionBusy("chat 'athr_source' already has an active turn")
+        refusal.container_action = "create"
+        raise refusal
 
     supervisor.acquire = refuse
     caplog.set_level(logging.WARNING, logger="cloud_agent_host.sandbox_manager")
@@ -88,17 +110,56 @@ async def test_the_acquire_route_answers_the_conflict_and_names_it_in_its_own_lo
         answer = await client.post(
             "/shared-sandboxes/athr_source/acquire",
             headers={"X-Agent-Workspace-Token": "sandbox-manager-secret"},
-            json={**_identity(), "owner": "attempt:1", "activation_generation": 4},
+            json={
+                **_identity(),
+                "owner": "attempt:1",
+                "activation_generation": 4,
+                "conflict_wait_s": 2.5,
+            },
         )
 
     assert answer.status_code == 409
     assert answer.headers[CONFLICT_HEADER] == "busy"
+    assert answer.headers[CONTAINER_ACTION_HEADER] == "create"
     assert answer.json() == {"detail": "chat 'athr_source' already has an active turn"}
+    assert asked[0]["conflict_wait_s"] == 2.5
     logged = [r.getMessage() for r in caplog.records if "shared_acquire_conflict" in r.msg]
     assert logged == [
         "shared_acquire_conflict thread_id=athr_source owner=attempt:1 conflict=busy "
+        "container_action=create conflict_wait_s=2.50 "
         "detail=chat 'athr_source' already has an active turn"
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait", [-1, "Infinity"])
+async def test_the_acquire_route_refuses_a_wait_it_cannot_honour(wait):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(_SharedSupervisor())),
+        base_url="http://sandbox_manager",
+    ) as client:
+        answer = await client.post(
+            "/shared-sandboxes/athr_source/acquire",
+            headers={"X-Agent-Workspace-Token": "sandbox-manager-secret"},
+            json={
+                **_identity(),
+                "owner": "attempt:1",
+                "activation_generation": 4,
+                "conflict_wait_s": wait,
+            },
+        )
+
+    assert answer.status_code == 422
+
+
+def test_a_refused_acquire_also_says_what_it_did_to_the_container():
+    refusal = SessionChanged("shared sandbox lifecycle changed during activation")
+    refusal.container_action = "create"
+
+    assert supervisor_error(refusal).headers == {
+        CONFLICT_HEADER: "changed",
+        CONTAINER_ACTION_HEADER: "create",
+    }
 
 
 def test_a_changed_lifecycle_is_still_a_lost_lease_to_every_older_caller():
@@ -140,6 +201,55 @@ def test_the_runner_reads_the_conflict_only_from_a_409(status, headers, conflict
     assert caught.value.status_code == status
     assert caught.value.conflict == conflict
     assert str(caught.value) == "refused"
+
+
+@pytest.mark.parametrize(
+    ("status", "headers", "action"),
+    [
+        (409, {CONTAINER_ACTION_HEADER: "create"}, "create"),
+        (409, {CONTAINER_ACTION_HEADER: "none"}, "none"),
+        (409, {}, None),
+        (409, {CONTAINER_ACTION_HEADER: "created"}, None),
+        (503, {CONTAINER_ACTION_HEADER: "create"}, None),
+    ],
+)
+def test_the_runner_reads_what_a_refused_acquire_did_only_from_a_409(status, headers, action):
+    client = _refusing_client(status, headers)
+    try:
+        with pytest.raises(SandboxManagerError) as caught:
+            client.list()
+    finally:
+        client.close()
+
+    assert caught.value.container_action == action
+
+
+def test_only_a_repeat_tells_the_sandbox_manager_how_long_it_may_wait():
+    sent: list[dict] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"token": "lease"})
+
+    client = SandboxManagerClient("http://sandbox_manager", "secret")
+    client._client.close()
+    client._client = httpx.Client(transport=httpx.MockTransport(answer))
+    try:
+        for wait in (None, 2.5):
+            client.acquire_shared(
+                _spec(),
+                thread_id="athr_source",
+                activation_generation=1,
+                owner="attempt:1",
+                has_settled_context=True,
+                members=_identity()["members"],
+                conflict_wait_s=wait,
+            )
+    finally:
+        client.close()
+
+    assert "conflict_wait_s" not in sent[0]
+    assert sent[1]["conflict_wait_s"] == 2.5
 
 
 # ── the activation race is a changed lifecycle, not a lost lease ────────────
@@ -193,6 +303,103 @@ def test_a_member_replaced_during_activation_is_still_a_lost_lease(monkeypatch):
     with pytest.raises(SessionLeaseLost, match="lifecycle changed during activation") as caught:
         _acquire(supervisor)
     assert not isinstance(caught.value, SessionChanged)
+
+
+# ── one deadline for every conflict wait of a repeat ───────────────────────
+
+
+class _Clock:
+    """One clock for the runner and the sandbox manager, moved only by their waits.
+
+    Every other ``time`` function is the real one.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
+
+
+def _clocked(monkeypatch, supervisor: SharedChatSessionSupervisor, *, on_wait=None) -> _Clock:
+    """Run the runner's pauses and the sandbox manager's waits on one :class:`_Clock`.
+
+    A wait on the sandbox manager's condition returns at once, its timeout
+    added to the clock, after ``on_wait`` (called with the lock held) has had
+    its chance to change the group, as another thread would have.
+    """
+    clock = _Clock()
+    for module in (
+        shared_live_attempt,
+        session_lifecycle,
+        group_registration,
+        member_sessions,
+        shared_session_state,
+    ):
+        monkeypatch.setattr(module, "time", clock)
+
+    def wait(timeout=None):
+        clock.now += timeout or 0.0
+        if on_wait is not None:
+            on_wait(clock.now)
+        return False
+
+    monkeypatch.setattr(supervisor.state.condition, "wait", wait)
+    return clock
+
+
+@pytest.mark.parametrize(
+    ("conflict_wait_s", "refused_at"),
+    [
+        # A first request: each wait has its own thirty seconds, as before.
+        (None, 1.5 + 30.0),
+        # A repeat's budget is one deadline for both waits it meets.
+        (2.0, 2.0),
+        # And no more than the thirty seconds a single wait ever had.
+        (45.0, 30.0),
+    ],
+)
+def test_a_repeats_conflict_waits_share_one_deadline(monkeypatch, conflict_wait_s, refused_at):
+    """A lifecycle check holds registration, then a start holds the activation."""
+    manager = _Manager()
+    supervisor = SharedChatSessionSupervisor(manager)
+    supervisor.register_manifest(_spec(), _members())
+    state = supervisor.state
+    group = state.members["athr_source"]
+    with state.lock:
+        check = state.begin_lifecycle_check_locked(group)
+
+    def check_ends_then_a_start_begins(now):
+        if now >= 1.5 and group.life.check is check:
+            state.end_lifecycle_check_locked(check)
+            group.life.begin_start_locked()
+
+    clock = _clocked(monkeypatch, supervisor, on_wait=check_ends_then_a_start_begins)
+
+    with pytest.raises(SessionBusy, match="start is in progress") as refused:
+        supervisor.acquire(
+            _spec(),
+            thread_id="athr_source",
+            owner="attempt:1",
+            activation_generation=1,
+            has_settled_context=True,
+            manifest=_members(),
+            **({} if conflict_wait_s is None else {"conflict_wait_s": conflict_wait_s}),
+        )
+
+    assert clock.now == pytest.approx(refused_at)
+    # It got as far as the activation wait, and did nothing to the container.
+    assert refused.value.container_action == "none"
+    assert group.members["athr_source"].lease_token is None
+    assert manager.starts == []
 
 
 # ── the runner asks again for a momentary conflict ─────────────────────────
@@ -300,9 +507,14 @@ def test_a_stale_lease_or_an_unnamed_conflict_still_goes_back_at_once(
 
 def test_a_conflict_that_outlasts_the_budget_goes_back_to_the_queue(monkeypatch):
     clock = _fake_clock(monkeypatch)
+    calls: list[dict] = []
 
     result, control, supervisor, _finish = _run_shared_boundary_case(
-        monkeypatch, 0, None, "claude-code", configure=_refuse_first(*[_busy()] * 20)
+        monkeypatch,
+        0,
+        None,
+        "claude-code",
+        configure=_refuse_first(*[_busy()] * 20, calls=calls),
     )
 
     assert result == 0
@@ -310,6 +522,8 @@ def test_a_conflict_that_outlasts_the_budget_goes_back_to_the_queue(monkeypatch)
     assert supervisor.acquire_shared.call_count == 5
     assert sum(clock.sleeps) == pytest.approx(7.5)
     assert sum(clock.sleeps) <= shared_live_attempt.ACQUIRE_RETRY_BUDGET_S
+    # The first request waits as it always did; each repeat only what is left.
+    assert [call["conflict_wait_s"] for call in calls] == [None, 9.5, 8.5, 6.5, 2.5]
     control.release_turn.assert_called_once_with("sandbox_busy")
     control.admit_chat_turn.assert_not_called()
 
@@ -391,3 +605,263 @@ def test_a_retried_acquire_still_completes_its_startup_measurement(monkeypatch, 
     assert record["startup_outcome"] == "dispatched"
     assert record["measurement_complete"] is True
     assert record["producers"] == ["runner", "broker"]
+
+
+# ── through a real sandbox manager ─────────────────────────────────────────
+
+
+#: The harness's chat.
+_THREAD = _JOB.thread_id
+
+
+@pytest.fixture
+def real_sandbox_manager(monkeypatch):
+    """Answer the harness's acquire with a real supervisor behind the real route and client.
+
+    The factory takes ``during_activation(state, group)``, which runs once,
+    with the lock held, while the first request asks Docker about the
+    container outside the lock: what another operation beginning or ending
+    there would do. The supervisor's acquire records what each request was
+    given, how it ended, and when it began and ended on the shared clock.
+    """
+    clients: list[SandboxManagerClient] = []
+
+    def build(*, during_activation):
+        manager = _Manager()
+        supervisor = SharedChatSessionSupervisor(manager)
+        clock = _clocked(monkeypatch, supervisor)
+        created: list[str] = []
+        create, inspect, acquire = manager.create, manager.inspect, supervisor.acquire
+        fired: list[str] = []
+
+        def counted_create(spec, **kwargs):
+            if spec.container_name not in manager.items:
+                created.append(spec.container_name)
+            return create(spec, **kwargs)
+
+        def inspect_once(container_name):
+            if not fired:
+                fired.append(container_name)
+                with supervisor.state.lock:
+                    during_activation(supervisor.state, supervisor.state.members[_THREAD])
+            return inspect(container_name)
+
+        requests: list[dict] = []
+
+        def recorded_acquire(*args, **kwargs):
+            request = {"conflict_wait_s": kwargs.get("conflict_wait_s"), "began": clock.now}
+            requests.append(request)
+            try:
+                lease = acquire(*args, **kwargs)
+            except (SessionBusy, SessionLeaseLost) as exc:
+                request["refused"] = session_lifecycle.conflict_kind(exc)
+                raise
+            else:
+                request["container_action"] = lease.container_action
+                return lease
+            finally:
+                request["ended"] = clock.now
+
+        monkeypatch.setattr(manager, "create", counted_create)
+        monkeypatch.setattr(manager, "inspect", inspect_once)
+        monkeypatch.setattr(supervisor, "acquire", recorded_acquire)
+        app = create_app(
+            backend=ProcessBackend(acknowledged_unsafe=True),
+            token="sandbox-manager-secret",
+            shared_session_supervisor=supervisor,
+        )
+        client = SandboxManagerClient("http://testserver", "sandbox-manager-secret")
+        client._client.close()
+        client._client = TestClient(app, headers=client._headers)
+        clients.append(client)
+
+        def configure(_control, harness_supervisor, _finish):
+            harness_supervisor.acquire_shared.side_effect = client.acquire_shared
+
+        return SimpleNamespace(
+            configure=configure,
+            supervisor=supervisor,
+            manager=manager,
+            clock=clock,
+            created=created,
+            requests=requests,
+        )
+
+    yield build
+    for client in clients:
+        client.close()
+
+
+def test_a_repeat_that_meets_a_lasting_conflict_stops_at_the_budget_and_leaves_nothing(
+    monkeypatch, caplog, real_sandbox_manager
+):
+    """A fast refusal, then a lifecycle check that does not end: one hand-back at 10 s.
+
+    Before the repeat carried the budget, the sandbox manager waited its own
+    30 s for that check, and the turn went back to the queue after 30.5 s.
+    """
+
+    def a_check_begins_and_holds(state, group):
+        state.begin_lifecycle_check_locked(group)
+
+    real = real_sandbox_manager(during_activation=a_check_begins_and_holds)
+    caplog.set_level(logging.WARNING, logger="cloud_agent_host.runner")
+
+    result, control, harness_supervisor, finish = _run_shared_boundary_case(
+        monkeypatch, 0, None, "claude-code", configure=real.configure
+    )
+
+    assert result == 0
+    first, repeat = real.requests
+    # The first request created the container and met the check at its start.
+    assert first == {
+        "conflict_wait_s": None,
+        "began": 0.0,
+        "refused": "busy",
+        "ended": 0.0,
+    }
+    # The repeat, after a 0.5 s pause, was given what was left of the budget,
+    # and the sandbox manager stopped waiting for the check exactly there.
+    assert repeat == {
+        "conflict_wait_s": 9.5,
+        "began": 0.5,
+        "refused": "busy",
+        "ended": 10.0,
+    }
+    assert real.clock.now == shared_live_attempt.ACQUIRE_RETRY_BUDGET_S
+    # Nothing is left behind and nothing ran twice: one container, never
+    # started again, no lease, no turn, one hand-back.
+    assert len(real.created) == 1
+    assert real.manager.starts == []
+    member = real.supervisor.state.members[_THREAD].members[_THREAD]
+    assert member.lease_token is None
+    assert member.lease_owner is None
+    harness_supervisor.ensure_shared_resident.assert_not_called()
+    control.admit_chat_turn.assert_not_called()
+    control.release_turn.assert_called_once_with("sandbox_busy")
+    finish.assert_not_called()
+    logged = [r.getMessage() for r in caplog.records if "supervisor_acquire_conflict" in r.msg]
+    assert [line.split("conflict=")[1] for line in logged] == [
+        "busy retrying=True elapsed_s=0.00",
+        "busy retrying=False elapsed_s=10.00",
+    ]
+
+
+def test_a_cold_start_that_was_asked_again_is_still_a_new_group(
+    monkeypatch, tmp_path, real_sandbox_manager
+):
+    """Create, refused as changed, then reuse: the record says what the user waited for."""
+    _configure_host(monkeypatch)
+    sink = tmp_path / "startup.jsonl"
+    _enable_profiling(monkeypatch)
+    monkeypatch.setenv(operation_profiling.ENV_PROFILING_SINK, str(sink))
+    measurement = _profiled_measurement()
+    assert measurement is not None
+
+    def a_check_begins_and_ends(state, group):
+        state.end_lifecycle_check_locked(state.begin_lifecycle_check_locked(group))
+
+    real = real_sandbox_manager(during_activation=a_check_begins_and_ends)
+
+    def configure(control, harness_supervisor, finish):
+        real.configure(control, harness_supervisor, finish)
+        # The real sandbox manager has no process for the member yet: the
+        # turn opens a residency for the one it starts.
+        control.establish_shared_residency.return_value = {
+            "credential": "provider-key-2",
+            "generation": 12,
+            "model": _JOB.model,
+            **residency_connection("claude-code"),
+        }
+
+        def stream(**kwargs):
+            operation_profiling.finish(kwargs.get("measurement"), outcome="dispatched")
+            return 0, "", [], {"kind": "result", "status": "completed", "exit_code": 0}, None
+
+        monkeypatch.setattr(shared_live_attempt, "_stream_shared_agent_turn", stream)
+
+    result, control, _harness_supervisor, finish = _run_shared_boundary_case(
+        monkeypatch,
+        code=0,
+        frame={"kind": "result", "status": "completed", "exit_code": 0},
+        runtime_id="claude-code",
+        configure=configure,
+        measurement=measurement,
+        resident_action="new",
+    )
+
+    assert result == 0
+    assert finish.call_args.args[0] == "succeeded"
+    control.release_turn.assert_not_called()
+    first, repeat = real.requests
+    assert first["refused"] == "changed"
+    # The repeat found the container the refused request had created.
+    assert repeat["container_action"] == "reuse"
+    assert len(real.created) == 1
+    operation_profiling.flush_sink()
+    record = json.loads(sink.read_text().splitlines()[0])
+    assert record["facts"]["container_action"] == "create"
+    assert record["facts"]["startup_path"] == "new_group"
+    assert record["startup_outcome"] == "dispatched"
+    assert record["measurement_complete"] is True
+    assert record["producers"] == ["runner", "broker"]
+
+
+@pytest.mark.parametrize(
+    ("refused", "answered", "expected"),
+    [
+        ([], "create", "create"),
+        (["create"], "reuse", "create"),
+        (["create"], "start", "create"),
+        (["none", "create"], "reuse", "create"),
+        (["start"], "reuse", "start"),
+        (["none"], "start", "start"),
+        (["none", "reuse"], "reuse", "reuse"),
+        # A refusal that did not say may have created what the repeat reused.
+        ([None], "reuse", "unreported"),
+        ([None], "start", "unreported"),
+        ([None, "create"], "reuse", "create"),
+    ],
+)
+def test_the_acquire_is_reported_by_the_most_any_of_its_requests_did(refused, answered, expected):
+    assert shared_live_attempt._acquire_container_action(refused, answered) == expected
+
+
+def test_a_retry_that_cannot_say_what_was_created_is_unclassified_by_name(monkeypatch, tmp_path):
+    _configure_host(monkeypatch)
+    sink = tmp_path / "startup.jsonl"
+    _enable_profiling(monkeypatch)
+    monkeypatch.setenv(operation_profiling.ENV_PROFILING_SINK, str(sink))
+    measurement = _profiled_measurement()
+    assert measurement is not None
+    _fake_clock(monkeypatch)
+    refuse = _refuse_first(
+        SandboxManagerError(409, "shared sandbox lifecycle changed", conflict="changed")
+    )
+
+    def configure(control, supervisor, finish):
+        refuse(control, supervisor, finish)
+
+        def stream(**kwargs):
+            operation_profiling.finish(kwargs.get("measurement"), outcome="dispatched")
+            return 0, "", [], {"kind": "result", "status": "completed", "exit_code": 0}, None
+
+        monkeypatch.setattr(shared_live_attempt, "_stream_shared_agent_turn", stream)
+
+    result, _control, _supervisor, _finish = _run_shared_boundary_case(
+        monkeypatch,
+        code=0,
+        frame={"kind": "result", "status": "completed", "exit_code": 0},
+        runtime_id="claude-code",
+        configure=configure,
+        measurement=measurement,
+        container_action="reuse",
+        resident_action="new",
+    )
+
+    assert result == 0
+    operation_profiling.flush_sink()
+    record = json.loads(sink.read_text().splitlines()[0])
+    assert record["facts"]["container_action"] == "unreported"
+    assert record["facts"]["startup_path"] == "unclassified_after_retry"
+    assert record["measurement_complete"] is True

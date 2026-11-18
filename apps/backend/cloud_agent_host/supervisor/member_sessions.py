@@ -33,9 +33,12 @@ from cloud_agent_host.observe.guest_observer import (
 )
 from cloud_agent_host.resident_probe import probe_refusal_message
 from cloud_agent_host.session_lifecycle import (
+    CONFLICT_WAIT_S,
+    CONTAINER_ACTION_NONE,
     SessionBusy,
     SessionChanged,
     SessionLeaseLost,
+    conflict_deadline,
 )
 from cloud_agent_host.supervisor.group_lifecycle import Operation
 from cloud_agent_host.supervisor.shared_session_state import (
@@ -170,13 +173,67 @@ class MemberSessions:
         start_seq: int | None = None,
         restore: CheckpointRestore | None = None,
         environment_snapshot: EnvironmentSnapshotRef | None = None,
+        conflict_wait_s: float | None = None,
     ) -> SharedSessionLease:
-        """Start one group if needed and lease only the addressed member."""
+        """Start one group if needed and lease only the addressed member.
+
+        ``conflict_wait_s`` bounds every conflict wait this request meets, all
+        counted from now; without it, each waits :data:`CONFLICT_WAIT_S`. A
+        conflict refused says what this request had done to the container by
+        then, so the caller asking again still knows what the acquire did.
+        """
         # Container actions are always reported: they are a couple of string
         # assignments, and the runner needs them whenever it is profiling.
+        facts = SandboxActionFacts()
+        try:
+            return self._acquire(
+                spec,
+                thread_id=thread_id,
+                owner=owner,
+                activation_generation=activation_generation,
+                has_settled_context=has_settled_context,
+                manifest=manifest,
+                facts=facts,
+                expected_container_id=expected_container_id,
+                profiling=profiling,
+                start_seq=start_seq,
+                restore=restore,
+                environment_snapshot=environment_snapshot,
+                wait_until=(
+                    None
+                    if conflict_wait_s is None
+                    else time.monotonic() + min(conflict_wait_s, CONFLICT_WAIT_S)
+                ),
+            )
+        except (SessionBusy, SessionLeaseLost) as exc:
+            # A repeat finds a container this request created already there,
+            # and reports only ``reuse``.
+            exc.container_action = (
+                CONTAINER_ACTION_NONE
+                if facts.container_action == "unknown"
+                else facts.container_action
+            )
+            raise
+
+    def _acquire(
+        self,
+        spec: ChatSandboxSpec,
+        *,
+        thread_id: str,
+        owner: str,
+        activation_generation: int,
+        has_settled_context: bool,
+        manifest: builtins.list[SharedMemberManifest],
+        facts: SandboxActionFacts,
+        expected_container_id: str | None,
+        profiling: dict[str, Any] | None,
+        start_seq: int | None,
+        restore: CheckpointRestore | None,
+        environment_snapshot: EnvironmentSnapshotRef | None,
+        wait_until: float | None,
+    ) -> SharedSessionLease:
         # Durations are collected only for a selection this process can honour:
         # its own switch, its own run, and the caller's inherited deadline.
-        facts = SandboxActionFacts()
         recorder = start_stage_recording(profiling)
         call_id = context_call_id(profiling)
         self._registration.register_manifest(
@@ -187,12 +244,13 @@ class MemberSessions:
             observer=recorder,
             restore=restore,
             environment_snapshot=environment_snapshot,
+            wait_until=wait_until,
         )
         with self._state.lock:
             group, member = self._state.member(thread_id)
             self._state.wait_while_locked(
                 lambda: group.lifecycle.busy_reason(Operation.ACTIVATION_WAIT),
-                deadline=time.monotonic() + 30.0,
+                deadline=conflict_deadline(wait_until),
             )
             group.lifecycle.admit(Operation.RUN)
             if member.context_status == "lost":
@@ -227,6 +285,7 @@ class MemberSessions:
             start_seq=start_seq,
             facts=facts,
             observer=recorder,
+            wait_until=wait_until,
         )
         warm_observer = getattr(self._manager, "warm_guest_observer", None)
         if warm_observer is not None and facts.container_action in ("create", "start"):

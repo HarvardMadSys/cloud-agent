@@ -27,6 +27,7 @@ from cloud_agent_host.operation_call import closed
 from cloud_agent_host.retained_workspace import RetainedWorkspaceError
 from cloud_agent_host.session_lifecycle import (
     CONFLICT_HEADER,
+    CONTAINER_ACTION_HEADER,
     SessionBusy,
     SessionLeaseLost,
     conflict_kind,
@@ -84,10 +85,13 @@ def supervisor_error(exc: Exception, *, safe_detail: str | None = None) -> HTTPE
     if isinstance(exc, (SessionBusy, SessionLeaseLost)):
         # Both are 409, and the detail is prose: the header is what tells a
         # caller a momentary conflict from a stale lease.
+        headers = {CONFLICT_HEADER: conflict_kind(exc)}
+        if exc.container_action is not None:
+            headers[CONTAINER_ACTION_HEADER] = exc.container_action
         return HTTPException(
             status_code=409,
             detail=safe_detail if safe_detail is not None else str(exc),
-            headers={CONFLICT_HEADER: conflict_kind(exc)},
+            headers=headers,
         )
     if isinstance(exc, ValueError):
         return HTTPException(

@@ -215,6 +215,12 @@ class SharedSandboxAcquireRequest(SharedSandboxIdentityRequest):
     #: An installation snapshot a new group may start from; ignored for a
     #: group that already has a container here.
     environment_snapshot: EnvironmentSnapshotRef | None = None
+    #: The most this request may wait at conflicts, counted once, from its
+    #: arrival, across every wait it meets. A caller asking again within a
+    #: budget of its own sends what is left of it, so a repeat cannot wait out
+    #: more than that. Absent, as on a first request, each wait keeps its own
+    #: 30 seconds; a larger value is held to that.
+    conflict_wait_s: float | None = Field(None, ge=0, allow_inf_nan=False)
     #: The measurement selection the caller is profiling this path under.
     #: Deliberately unvalidated: a sandbox manager sees one call at a time and cannot
     #: know which attempt it belongs to, so the caller states the selection and

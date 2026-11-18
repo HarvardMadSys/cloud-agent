@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from cloud_agent_host.container.sandbox import SandboxError
 
 DEFAULT_CHAT_IDLE_TIMEOUT_S = 30 * 60.0
@@ -11,9 +13,16 @@ DEFAULT_SWEEP_INTERVAL_S = 5.0
 class SessionBusy(SandboxError):
     """Another fenced owner is already using this chat member."""
 
+    #: What the refused acquire had already done to the container; see
+    #: :data:`CONTAINER_ACTION_HEADER`. ``None`` outside an acquire.
+    container_action: str | None = None
+
 
 class SessionLeaseLost(SandboxError):
     """A local operation carried a stale or unknown activation lease."""
+
+    #: As :attr:`SessionBusy.container_action`.
+    container_action: str | None = None
 
 
 class SessionChanged(SessionLeaseLost):
@@ -46,6 +55,28 @@ CONFLICT_CHANGED = "changed"
 CONFLICT_LEASE_LOST = "lease_lost"
 CONFLICTS = frozenset({CONFLICT_BUSY, CONFLICT_CHANGED, CONFLICT_LEASE_LOST})
 
+#: The header a refused acquire's 409 carries to say what that request had
+#: already done to the group's container: ``create``, ``start`` or ``reuse``
+#: (``SandboxActionFacts``' literals), or ``none``. A repeat of the request
+#: finds the container the refused one created and reports only ``reuse``, so
+#: the caller keeps this to know what the whole acquire did.
+CONTAINER_ACTION_HEADER = "X-Sandbox-Container-Action"
+#: The refused request did nothing to the container.
+CONTAINER_ACTION_NONE = "none"
+CONTAINER_ACTIONS = frozenset({"create", "start", "reuse", CONTAINER_ACTION_NONE})
+#: Longest a sandbox manager request waits at any one conflict, unless the
+#: caller asks for less (``conflict_wait_s``).
+CONFLICT_WAIT_S = 30.0
+
+
+def conflict_deadline(shared: float | None) -> float:
+    """When one conflict wait gives up: at ``shared``, or :data:`CONFLICT_WAIT_S` from now.
+
+    ``shared`` is the deadline a request's caller set for every wait the
+    request meets (``conflict_wait_s``); without one, each wait has its own.
+    """
+    return shared if shared is not None else time.monotonic() + CONFLICT_WAIT_S
+
 
 def conflict_kind(exc: SessionBusy | SessionLeaseLost) -> str:
     """The :data:`CONFLICT_HEADER` value that names ``exc``."""
@@ -62,11 +93,16 @@ __all__ = [
     "CONFLICT_CHANGED",
     "CONFLICT_HEADER",
     "CONFLICT_LEASE_LOST",
+    "CONFLICT_WAIT_S",
+    "CONTAINER_ACTIONS",
+    "CONTAINER_ACTION_HEADER",
+    "CONTAINER_ACTION_NONE",
     "DEFAULT_CHAT_IDLE_TIMEOUT_S",
     "DEFAULT_SWEEP_INTERVAL_S",
     "SessionBusy",
     "SessionChanged",
     "SessionLeaseLost",
     "StaleStartFence",
+    "conflict_deadline",
     "conflict_kind",
 ]

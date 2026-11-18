@@ -24,7 +24,12 @@ from cloud_agent_host.manager_api.models import (
     SharedSettleRequest,
     SharedTurnRequest,
 )
-from cloud_agent_host.session_lifecycle import CONFLICT_HEADER, CONFLICTS
+from cloud_agent_host.session_lifecycle import (
+    CONFLICT_HEADER,
+    CONFLICTS,
+    CONTAINER_ACTION_HEADER,
+    CONTAINER_ACTIONS,
+)
 from cloud_agent_shared.environment import (
     ENVIRONMENT_CAPABILITY,
     ENVIRONMENT_INFERENCE_CAPABILITY,
@@ -82,6 +87,9 @@ class SandboxManagerError(RuntimeError):
     #: Which refusal a 409 is, as its :data:`CONFLICT_HEADER` names it.
     #: ``None`` for any other status, and from a sandbox manager too old to say.
     conflict: str | None = None
+    #: What a refused acquire had done to the container by then, as its
+    #: :data:`CONTAINER_ACTION_HEADER` says; ``None`` wherever that is unsaid.
+    container_action: str | None = None
 
     def __str__(self) -> str:
         return self.message
@@ -142,6 +150,14 @@ def _conflict(response: httpx.Response) -> str | None:
         return None
     kind = response.headers.get(CONFLICT_HEADER)
     return kind if kind in CONFLICTS else None
+
+
+def _container_action(response: httpx.Response) -> str | None:
+    """What a refused acquire's 409 says it did to the container, when it says so."""
+    if response.status_code != 409:
+        return None
+    action = response.headers.get(CONTAINER_ACTION_HEADER)
+    return action if action in CONTAINER_ACTIONS else None
 
 
 def _body(model: BaseModel, *, exclude: set[str] | None = None) -> dict[str, Any]:
@@ -298,6 +314,7 @@ class SandboxManagerClient:
                 response.status_code,
                 _error_detail(response, refused),
                 conflict=_conflict(response),
+                container_action=_container_action(response),
             )
         try:
             body = response.json()
@@ -438,8 +455,13 @@ class SandboxManagerClient:
         start_seq: int | None = None,
         restore: dict[str, Any] | None = None,
         environment_snapshot: dict[str, Any] | None = None,
+        conflict_wait_s: float | None = None,
     ) -> dict[str, Any]:
-        """Lease one member without excluding turns on sibling members."""
+        """Lease one member without excluding turns on sibling members.
+
+        ``conflict_wait_s`` caps how long the sandbox manager waits at
+        conflicts during this request; a first request leaves it out.
+        """
         return self._shared_request(
             "POST",
             thread_id,
@@ -459,6 +481,7 @@ class SandboxManagerClient:
                     if environment_snapshot is not None
                     else {}
                 ),
+                **({"conflict_wait_s": conflict_wait_s} if conflict_wait_s is not None else {}),
             },
         )
 

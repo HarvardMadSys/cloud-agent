@@ -25,6 +25,7 @@ from cloud_agent_host.container.sandbox import SandboxError
 from cloud_agent_host.session_lifecycle import (
     SessionBusy,
     SessionLeaseLost,
+    conflict_deadline,
 )
 from cloud_agent_host.supervisor.group_lifecycle import Operation
 from cloud_agent_host.supervisor.shared_session_state import (
@@ -68,6 +69,7 @@ class GroupRegistration:
         observer: StageRecorder | None = None,
         restore: CheckpointRestore | None = None,
         environment_snapshot: EnvironmentSnapshotRef | None = None,
+        wait_until: float | None = None,
     ) -> builtins.list[SharedSessionDescriptor]:
         """Install the control plane's authoritative member aliases.
 
@@ -75,11 +77,12 @@ class GroupRegistration:
         control plane rehomed under a later generation) is created only from
         ``restore``, its checkpoint, and never empty. A new group with an
         ``environment_snapshot`` starts from it when it can, and from the
-        sandbox image otherwise.
+        sandbox image otherwise. A creation or lifecycle check in progress is
+        waited for until ``wait_until`` (see :func:`conflict_deadline`).
         """
         validated_members = self._validated_members(spec, members)
         with self._state.lock:
-            deadline = time.monotonic() + 30.0
+            deadline = conflict_deadline(wait_until)
             group = self._state.groups.get(spec.sandbox_id)
             if group is not None and group.spec.generation < spec.generation:
                 # The control plane moved this group under a newer generation;

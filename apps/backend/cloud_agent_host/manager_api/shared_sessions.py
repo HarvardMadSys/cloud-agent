@@ -70,16 +70,24 @@ class SharedSessionRoutes:
                     if body.environment_snapshot is not None
                     else {}
                 ),
+                **(
+                    {"conflict_wait_s": body.conflict_wait_s}
+                    if body.conflict_wait_s is not None
+                    else {}
+                ),
             )
         except (SandboxError, ValueError) as exc:
             if isinstance(exc, (SessionBusy, SessionLeaseLost)):
                 # The runner logs only the kind of conflict: the refusal itself
                 # is this process's own words, so it is named here.
                 logger.warning(
-                    "shared_acquire_conflict thread_id=%s owner=%s conflict=%s detail=%s",
+                    "shared_acquire_conflict thread_id=%s owner=%s conflict=%s "
+                    "container_action=%s conflict_wait_s=%s detail=%s",
                     thread_id,
                     body.owner,
                     conflict_kind(exc),
+                    exc.container_action or "unknown",
+                    "default" if body.conflict_wait_s is None else f"{body.conflict_wait_s:.2f}",
                     str(exc)[:300],
                 )
             raise supervisor_error(exc) from exc
