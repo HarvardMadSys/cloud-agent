@@ -43,6 +43,15 @@ from cloud_agent_host.session_lifecycle import (
 from cloud_agent_host.turn import shared_live_attempt
 from cloud_agent_shared import operation_profiling
 
+
+@pytest.fixture(autouse=True)
+def _reset_profiling_cache():
+    """Keep the profiler's process-wide cache from leaking into later tests."""
+    operation_profiling.reset_cache()
+    yield
+    operation_profiling.reset_cache()
+
+
 # ── the sandbox manager names its conflicts ────────────────────────────────
 
 
