@@ -2274,11 +2274,22 @@ removes the objects instead. Add an `AbortIncompleteMultipartUpload` bucket
 lifecycle rule as defense in depth for a host that disappears before its
 bounded abort request completes.
 
-Changing the bucket changes where new archives go and where restores read.
-Checkpoints and environment snapshots are read back by object version, which a
-copy to another bucket does not keep, so those stored in the previous bucket
-are not restored after a change. Change it only when no retained group still
-needs a checkpoint from the previous bucket.
+The bucket is set once. It decides where new archives go and where restores
+read: checkpoints and environment snapshots are read back from the bucket the
+policy names now, by the exact object version their record names, and the
+record names no bucket. A copy to another bucket does not keep object
+versions. So the control plane refuses a bucket change (HTTP 409,
+`archive_bucket_locked`; the card shows the reason beside the bucket) while a
+checkpoint of a group that is neither lost nor deleted exists, or an
+environment snapshot that is being built, ready, or superseded. Disabling
+archives does not lift the refusal, and other edits to the policy still save.
+A new deployment chooses its bucket freely, and a mistyped bucket can be
+corrected until the first checkpoint or snapshot is stored: an upload to a
+bucket that does not exist fails, so none is recorded there. Moving an
+existing deployment to another bucket is not supported.
+
+The rest of this section is about the changes the control plane still accepts,
+and about a deployment that changed its bucket before the change was refused.
 
 A ready environment snapshot in the previous bucket is still offered to new
 groups. A host that already holds its image, because it built the snapshot or
@@ -2295,9 +2306,10 @@ that bucket's lifecycle rule.
 
 Redeploy every host before changing the bucket. Only a host that advertises
 `sandbox-archive-destination-v1` can archive to a bucket other than
-`freeinference`, and the settings card names the others only once archives are
-enabled with another bucket. This read-only query lists them, leaving out
-removed (`disabled`) hosts as the card does:
+`freeinference`. While a host that is not removed lacks it, the control plane
+also refuses to change the bucket of an enabled policy to any other bucket,
+with the same 409, and names the hosts. This read-only query lists them,
+leaving out removed (`disabled`) hosts as the refusal and the card do:
 
 ```sql
 SELECT host, status
@@ -2310,14 +2322,19 @@ ORDER BY host;
 While archives are disabled, such a host is sent the policy with the default
 bucket and keeps taking work. A disabled policy starts no new archive; a final
 already fenced under an earlier enabled revision still uploads under that
-revision. While archives are enabled, the host is sent no policy, and the card
-lists it as needing a redeploy. Until it is redeployed, its sandbox manager
-keeps the last policy it applied: it keeps archiving the groups it holds into
-the previous bucket, and the checkpoints it stores there are recorded, so a
-host that later restores one of those groups reads the new bucket and fails.
-With no confirmed revision, the host takes no work at all.
+revision. While archives are enabled in another bucket, which the refusal does
+not prevent when archives are enabled after a bucket change or a host that
+lacks the capability is enrolled later, the host is sent no policy, and the
+card lists it as needing a redeploy. Until it is redeployed, its sandbox
+manager keeps the last policy it applied. If that one was enabled, it keeps
+archiving the groups it holds into the previous bucket, and the checkpoints it
+stores there are recorded, so a host that later restores one of those groups
+reads the new bucket and fails. With no confirmed revision, the host takes no
+work at all.
 
-Redeployed hosts write to the previous bucket for a while too. A stop that any
+A change the control plane accepts can still leave objects in the previous
+bucket, because it counts only what hosts have reported: redeployed hosts
+write to the previous bucket for a while too. A stop that any
 host fenced before it applied the new revision finishes there: the sandbox
 manager pins the policy in force when it fences a stop, and stores that stop's
 final archive and checkpoint under it, also when it retries a failed final or,
@@ -2326,7 +2343,13 @@ checkpoint as the group's restore point, and a host that later has to download
 it to restore the group reads the new bucket and fails. If the previous bucket
 can no longer be written, such a final never completes. Nothing gives up on
 it: until the upload succeeds, its group refuses every start and every
-deletion, so its chats stay blocked.
+deletion, so its chats stay blocked. A mistyped bucket that cannot be written
+at all is the same: correcting it does not release a stop fenced under it, nor
+an initial archive pinned to it, which keeps retrying. So correct a mistyped
+bucket before any sandbox stops under it. After enabling archives or saving a
+bucket, check that the first initial archive is stored
+(`sandbox_initial_archive_uploaded`); a bucket that cannot be written shows as
+`sandbox_initial_archive_deferred_retry`.
 
 Keep the previous bucket writable by every host's workload identity, and by
 the saved access key if there is one, until every host reports the new
@@ -2335,6 +2358,8 @@ key and bucket owner it was fenced with, so keep that KMS key usable as well. A
 final retried by the same sandbox manager signs with the access key in force
 when it was fenced, and one recovered after a restart with the access key saved
 now, so if the access key changes with the bucket, both keys need that access.
+A recovered final whose previous bucket the current key cannot write retries
+until it can.
 
 Nothing in the database or on the admin pages shows a pending final: its group
 is recorded as `stopped`, like one whose final is stored. The sandbox manager
@@ -2362,10 +2387,12 @@ WHERE c.captured_at < '<cutoff>'::timestamptz
 ORDER BY g.host, c.captured_at;
 ```
 
-A control plane older than this release refuses a stored bucket other than the
+A control plane older than #977 refuses a stored bucket other than the
 default: its heartbeats and admin archive routes fail, and no turn is claimed.
 Reset the bucket to `freeinference` before rolling the control plane back past
-this release.
+#977. Once a checkpoint or snapshot is stored in another bucket, that reset is
+refused like any other bucket change, so such a deployment cannot roll its
+control plane back past #977.
 
 Enabling archives requires migration `0042_sandbox_archive_settings` and a
 runner/sandbox manager advertising `sandbox-archive-settings-v1`. The settings
@@ -2977,6 +3004,22 @@ the same exact host, token, and epoch predicates with `NOT drain_fence_active`;
 change status only when the separately verified recovery requires it. Never
 bulk-clear fence fields. If the owner, token, or epoch is uncertain, leave the
 host draining and restore the V2 fence-capable control plane.
+
+**A host rolled back past #977 can archive only to the default bucket.** Its
+Sandbox Manager refuses any other bucket, both in the policy a heartbeat sends
+and in the archive markers inside its sandboxes. While the
+[archive policy](#sandbox-archives) is enabled with another bucket, the host is
+sent no policy: it confirms no revision and takes no work, and its Sandbox
+Manager keeps the last policy it applied, archiving the groups it holds into
+that policy's bucket; after the restart that a rollback is, it has none. It also
+cannot decode a marker that names another bucket, so it fails to start a
+stopped group whose marker names one, to recover a stop fenced under one, and
+to upload an initial archive pinned to one. Once a checkpoint or snapshot is
+stored, the bucket cannot be reset to the default for the rollback. Roll a host
+back past #977 only while the policy names the default bucket and none of its
+groups has a marker that names another; otherwise
+[move its groups to another host](#restoring-a-removed-hosts-sandboxes) first,
+or roll it forward.
 
 **A Sandbox Manager rolled back past #763 cannot upload a deletion archive that
 a newer one prepared.** For **Archive to S3 and delete**, a Sandbox Manager

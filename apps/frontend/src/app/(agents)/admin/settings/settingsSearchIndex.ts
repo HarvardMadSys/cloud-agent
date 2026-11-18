@@ -86,7 +86,7 @@ const ARCHIVE_FIELDS: StaticSearchField[] = [
     key: 's3_uri',
     label: 'S3 bucket',
     description:
-      'Archives go to s3://<bucket>/cloud-agent/sandbox. Checkpoints and snapshots stored in a previous bucket are not restored after a change.',
+      'Archives go to s3://<bucket>/cloud-agent/sandbox. Choose the bucket once: it cannot be changed after the first checkpoint or environment snapshot is stored there, and moving a deployment to another bucket is not supported.',
     keywords: ['destination', 's3'],
   },
   {

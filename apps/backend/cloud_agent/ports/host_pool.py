@@ -538,7 +538,14 @@ class HostPoolRepository(Protocol):
         expected_revision: int,
         settings: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        """Atomically replace the archive policy, or return ``None`` on a stale revision."""
+        """Atomically replace the archive policy, or return ``None`` on a stale revision.
+
+        The bucket is set once. A change raises ``Refused`` (``conflict``,
+        ``archive_bucket_locked``) while a live group's checkpoint or an
+        environment snapshot that is offered or being built exists, and, for
+        an enabled policy in a bucket other than the default, while a host
+        that is not removed lacks ``sandbox-archive-destination-v1``.
+        """
         ...
 
     async def set_active_runner_host(self, *, host: str | None) -> bool:

@@ -183,6 +183,16 @@ terminated, or the host moves out before its lease ends, another host restores
 it on the group's next turn. If the source disk, its off-node copy and any checkpoint are
 all lost, native context cannot be recovered from Postgres.
 
+A checkpoint is restored only from the archive bucket it was written to, by
+the exact object version its record names, and the record does not name a
+bucket: a restore reads the bucket the archive policy names now. So a recovery
+set must keep that bucket, with its versioning, its object versions and the
+access the policy uses to read it. Restore into a deployment whose policy names
+the same bucket. Copying the objects to another bucket does not keep their
+versions, and once a checkpoint or environment snapshot is stored the control
+plane refuses to change the bucket; moving a deployment to another bucket is not
+supported ([Sandbox archives](operations.md#sandbox-archives)).
+
 ## Recover a previous artifact release
 
 The host deployer does not automatically restore an older artifact manifest: it

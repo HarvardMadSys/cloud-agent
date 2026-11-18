@@ -1,4 +1,5 @@
 import { config } from '@/config/env';
+import { APIError } from '@/lib/utils/errors';
 
 import { fetchWithAuth, jsonOrThrow } from './client';
 
@@ -54,6 +55,28 @@ export interface SandboxArchiveSettingsUpdate {
   multipart_part_bytes: number;
   revision: number;
   checkpoints_enabled: boolean;
+}
+
+/** The `error.type` of a refused bucket change: the bucket is set once. */
+export const ARCHIVE_BUCKET_LOCKED = 'archive_bucket_locked';
+
+/** Why the control plane kept the bucket, and which destination it refused. */
+export interface ArchiveBucketRefusal {
+  s3Uri: string;
+  message: string;
+}
+
+/**
+ * The refusal a failed save carries when the bucket change itself was refused,
+ * or `null` for any other failure. The message is the server's, shown as sent.
+ */
+export function archiveBucketRefusal(
+  cause: unknown,
+  update: SandboxArchiveSettingsUpdate,
+): ArchiveBucketRefusal | null {
+  return cause instanceof APIError && cause.code === ARCHIVE_BUCKET_LOCKED && update.s3_uri
+    ? { s3Uri: update.s3_uri, message: cause.message }
+    : null;
 }
 
 export async function getSandboxArchiveSettings(

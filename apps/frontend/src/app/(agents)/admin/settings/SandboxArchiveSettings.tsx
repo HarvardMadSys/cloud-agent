@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 
 import type { AgentRunnerHost } from '@/lib/api/admin';
 import type {
+  ArchiveBucketRefusal,
   SandboxArchiveSettings,
   SandboxArchiveSettingsUpdate,
 } from '@/lib/api/adminArchiveSettings';
@@ -237,15 +238,25 @@ function ErrorText({ id, error }: { id: string; error: string | undefined }) {
   ) : null;
 }
 
+/** The control plane's refusal of this draft's bucket, while the draft still names it. */
+function refusedBucket(refusal: ArchiveBucketRefusal | null, bucket: string): string | undefined {
+  return refusal && refusal.s3Uri === `s3://${bucket}/${SANDBOX_ARCHIVE_PREFIX}`
+    ? refusal.message
+    : undefined;
+}
+
 export default function SandboxArchiveSettingsCard({
   settings,
   hosts = [],
   busy,
+  refusal = null,
   onSave,
 }: {
   settings: SandboxArchiveSettings;
   hosts?: AgentRunnerHost[];
   busy: boolean;
+  /** A bucket change the control plane refused; shown beside the bucket. */
+  refusal?: ArchiveBucketRefusal | null;
   onSave: (update: SandboxArchiveSettingsUpdate) => void;
 }) {
   const [editor, setEditor] = useState<EditorState>(() => {
@@ -255,6 +266,7 @@ export default function SandboxArchiveSettingsCard({
   const [errors, setErrors] = useState<DraftErrors>({});
   const { draft } = editor;
   const dirty = !draftsMatch(draft, editor.saved);
+  const bucketError = errors.bucket ?? refusedBucket(refusal, draft.bucket);
   const stale = dirty && editor.revision !== settings.revision;
 
   useEffect(() => {
@@ -449,9 +461,9 @@ export default function SandboxArchiveSettingsCard({
                   value={draft.bucket}
                   disabled={busy}
                   aria-label="S3 bucket"
-                  aria-invalid={errors.bucket !== undefined}
+                  aria-invalid={bucketError !== undefined}
                   aria-describedby={
-                    errors.bucket
+                    bucketError
                       ? 'archive-destination-description archive-bucket-error'
                       : 'archive-destination-description'
                   }
@@ -463,11 +475,12 @@ export default function SandboxArchiveSettingsCard({
                   id="archive-destination-description"
                   className="mt-1 block text-xs font-normal text-gray-500 dark:text-gray-400"
                 >
-                  Archives go to s3://{draft.bucket || '<bucket>'}/{SANDBOX_ARCHIVE_PREFIX}.
-                  Checkpoints and snapshots stored in a previous bucket are not restored after a
-                  change.
+                  Archives go to s3://{draft.bucket || '<bucket>'}/{SANDBOX_ARCHIVE_PREFIX}. Choose
+                  the bucket once: it cannot be changed after the first checkpoint or environment
+                  snapshot is stored there, and moving a deployment to another bucket is not
+                  supported.
                 </span>
-                <ErrorText id="archive-bucket-error" error={errors.bucket} />
+                <ErrorText id="archive-bucket-error" error={bucketError} />
               </label>
 
               <label className="text-sm font-medium text-gray-800 dark:text-gray-200">
