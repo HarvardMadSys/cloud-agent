@@ -34,6 +34,7 @@ from cloud_agent_host.observe.guest_observer import (
 from cloud_agent_host.resident_probe import probe_refusal_message
 from cloud_agent_host.session_lifecycle import (
     SessionBusy,
+    SessionChanged,
     SessionLeaseLost,
 )
 from cloud_agent_host.supervisor.group_lifecycle import Operation
@@ -237,12 +238,12 @@ class MemberSessions:
             current_member = (
                 current_group.members.get(thread_id) if current_group is not None else None
             )
-            if (
-                current_group is not group
-                or current_member is not member
-                or group.life.generation != lifecycle_generation
-            ):
+            if current_group is not group or current_member is not member:
                 raise SessionLeaseLost("shared sandbox lifecycle changed during activation")
+            if group.life.generation != lifecycle_generation:
+                # The same group and member, moved on by an operation that
+                # began or ended meanwhile: the caller may simply ask again.
+                raise SessionChanged("shared sandbox lifecycle changed during activation")
             group.lifecycle.admit(Operation.MUTATION)
             existing = self._owner_lease_locked(
                 thread_id,

@@ -25,7 +25,12 @@ from cloud_agent_host.container.chat_sandbox import (
 from cloud_agent_host.container.sandbox import SandboxError
 from cloud_agent_host.operation_call import closed
 from cloud_agent_host.retained_workspace import RetainedWorkspaceError
-from cloud_agent_host.session_lifecycle import SessionBusy, SessionLeaseLost
+from cloud_agent_host.session_lifecycle import (
+    CONFLICT_HEADER,
+    SessionBusy,
+    SessionLeaseLost,
+    conflict_kind,
+)
 from cloud_agent_host.supervisor.shared_session_state import SharedMemberManifest
 
 if TYPE_CHECKING:
@@ -76,15 +81,13 @@ def supervisor_error(exc: Exception, *, safe_detail: str | None = None) -> HTTPE
             status_code=410,
             detail=safe_detail if safe_detail is not None else str(exc),
         )
-    if isinstance(exc, SessionBusy):
+    if isinstance(exc, (SessionBusy, SessionLeaseLost)):
+        # Both are 409, and the detail is prose: the header is what tells a
+        # caller a momentary conflict from a stale lease.
         return HTTPException(
             status_code=409,
             detail=safe_detail if safe_detail is not None else str(exc),
-        )
-    if isinstance(exc, SessionLeaseLost):
-        return HTTPException(
-            status_code=409,
-            detail=safe_detail if safe_detail is not None else str(exc),
+            headers={CONFLICT_HEADER: conflict_kind(exc)},
         )
     if isinstance(exc, ValueError):
         return HTTPException(

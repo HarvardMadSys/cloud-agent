@@ -9,6 +9,7 @@ from fastapi import HTTPException, Query
 
 from cloud_agent_host.container.sandbox import SandboxError
 from cloud_agent_host.drivers import DriverError
+from cloud_agent_host.logging_utils import get_logger
 from cloud_agent_host.manager_api.context import shared_manifest, shared_spec, supervisor_error
 from cloud_agent_host.manager_api.models import (  # noqa: TC001 — FastAPI resolves the request models.
     SharedAbandonRequest,
@@ -25,6 +26,7 @@ from cloud_agent_host.manager_api.models import (  # noqa: TC001 — FastAPI res
 )
 from cloud_agent_host.manager_api.routing import route
 from cloud_agent_host.resident_launch_config import resident_launch
+from cloud_agent_host.session_lifecycle import SessionBusy, SessionLeaseLost, conflict_kind
 from cloud_agent_shared.sandbox_manager_wire import member_manifest
 
 if TYPE_CHECKING:
@@ -32,6 +34,9 @@ if TYPE_CHECKING:
 
     from cloud_agent_host.archive.sandbox_checkpoints import SandboxCheckpointStore
     from cloud_agent_host.manager_api.context import ManagerContext
+
+# The sandbox manager's own logger, as its other routes use.
+logger = get_logger("cloud_agent_host.sandbox_manager")
 
 
 class SharedSessionRoutes:
@@ -67,6 +72,16 @@ class SharedSessionRoutes:
                 ),
             )
         except (SandboxError, ValueError) as exc:
+            if isinstance(exc, (SessionBusy, SessionLeaseLost)):
+                # The runner logs only the kind of conflict: the refusal itself
+                # is this process's own words, so it is named here.
+                logger.warning(
+                    "shared_acquire_conflict thread_id=%s owner=%s conflict=%s detail=%s",
+                    thread_id,
+                    body.owner,
+                    conflict_kind(exc),
+                    str(exc)[:300],
+                )
             raise supervisor_error(exc) from exc
         return asdict(lease)
 

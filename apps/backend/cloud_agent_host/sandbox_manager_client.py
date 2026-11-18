@@ -24,6 +24,7 @@ from cloud_agent_host.manager_api.models import (
     SharedSettleRequest,
     SharedTurnRequest,
 )
+from cloud_agent_host.session_lifecycle import CONFLICT_HEADER, CONFLICTS
 from cloud_agent_shared.environment import (
     ENVIRONMENT_CAPABILITY,
     ENVIRONMENT_INFERENCE_CAPABILITY,
@@ -78,6 +79,9 @@ class SandboxManagerError(RuntimeError):
 
     status_code: int
     message: str
+    #: Which refusal a 409 is, as its :data:`CONFLICT_HEADER` names it.
+    #: ``None`` for any other status, and from a sandbox manager too old to say.
+    conflict: str | None = None
 
     def __str__(self) -> str:
         return self.message
@@ -130,6 +134,14 @@ def _error_detail(response: httpx.Response, refused: str) -> str:
     reason = f"{refused}: HTTP {response.status_code} {response.reason_phrase}".rstrip()
     problems = _validation_problems(detail)
     return f"{reason} ({problems})" if problems else reason
+
+
+def _conflict(response: httpx.Response) -> str | None:
+    """The kind of conflict a 409 names, when it names one this client knows."""
+    if response.status_code != 409:
+        return None
+    kind = response.headers.get(CONFLICT_HEADER)
+    return kind if kind in CONFLICTS else None
 
 
 def _body(model: BaseModel, *, exclude: set[str] | None = None) -> dict[str, Any]:
@@ -282,7 +294,11 @@ class SandboxManagerClient:
         except httpx.HTTPError as exc:
             raise SandboxManagerError(503, unavailable) from exc
         if response.is_error:
-            raise SandboxManagerError(response.status_code, _error_detail(response, refused))
+            raise SandboxManagerError(
+                response.status_code,
+                _error_detail(response, refused),
+                conflict=_conflict(response),
+            )
         try:
             body = response.json()
         except ValueError as exc:
