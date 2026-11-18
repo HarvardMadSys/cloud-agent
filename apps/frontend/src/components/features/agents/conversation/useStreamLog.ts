@@ -6,7 +6,7 @@
 // rides along so projection can read one turn's slice without regrouping the
 // whole conversation.
 
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import type { AgentJobEventApi, AgentThreadEventApi } from '@/lib/api/agents';
 import {
@@ -41,7 +41,18 @@ export interface StreamLog {
   reset: () => void;
 }
 
-export function useStreamLog(): StreamLog {
+/** Buffered rows that belong to `jobId`; the two arrays are parallel by id. */
+function scopedBuffered(
+  buffered: { live: AgentJobEventApi[]; thread: AgentThreadEventApi[] },
+  jobId: string,
+): { live: AgentJobEventApi[]; thread: AgentThreadEventApi[] } {
+  if (buffered.thread.every((row) => row.job_id === jobId)) return buffered;
+  const thread = buffered.thread.filter((row) => row.job_id === jobId);
+  const ids = new Set(thread.map((row) => row.id));
+  return { live: buffered.live.filter((row) => ids.has(row.id)), thread };
+}
+
+export function useStreamLog(jobId: string): StreamLog {
   const [log, setLog] = useState<EventLog>({ live: [], thread: [] });
   const logRef = useRef<EventLog>({ live: [], thread: [] });
   const index = useRef<Map<string, AgentThreadEventApi[]>>(new Map());
@@ -50,12 +61,23 @@ export function useStreamLog(): StreamLog {
     thread: [],
   });
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const scope = useRef(jobId);
 
   const stopTimer = useCallback(() => {
     if (timer.current === undefined) return;
     clearTimeout(timer.current);
     timer.current = undefined;
   }, []);
+
+  // A turn switch drops what the old stream buffered. It belongs to the turn
+  // being left, and committing it into the new turn's log would show those
+  // rows under the wrong job.
+  useLayoutEffect(() => {
+    if (scope.current === jobId) return;
+    scope.current = jobId;
+    stopTimer();
+    pending.current = { live: [], thread: [] };
+  }, [jobId, stopTimer]);
 
   const publish = useCallback((next: EventLog) => {
     logRef.current = next;
@@ -68,13 +90,15 @@ export function useStreamLog(): StreamLog {
     const buffered = pending.current;
     if (!buffered.live.length && !buffered.thread.length) return;
     pending.current = { live: [], thread: [] };
-    appendToThreadIndex(index.current, buffered.thread);
+    const scoped = scopedBuffered(buffered, scope.current);
+    if (!scoped.live.length && !scoped.thread.length) return;
+    appendToThreadIndex(index.current, scoped.thread);
     // The transcript is not urgent: input and the status pill stay responsive
     // while the frames of one window are committed together.
     startTransition(() => {
       const next = {
-        live: mergeEventRows(logRef.current.live, buffered.live),
-        thread: mergeEventRows(logRef.current.thread, buffered.thread),
+        live: mergeEventRows(logRef.current.live, scoped.live),
+        thread: mergeEventRows(logRef.current.thread, scoped.thread),
       };
       logRef.current = next;
       setLog(next);
@@ -96,7 +120,7 @@ export function useStreamLog(): StreamLog {
     stopTimer();
     const buffered = pending.current;
     pending.current = { live: [], thread: [] };
-    return buffered;
+    return scopedBuffered(buffered, scope.current);
   }, [stopTimer]);
 
   const reset = useCallback(() => {

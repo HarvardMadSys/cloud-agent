@@ -205,7 +205,7 @@ export function useAgentJob(
     current: currentLog,
     drain: drainLog,
     reset: resetLog,
-  } = useStreamLog();
+  } = useStreamLog(jobId);
   const [gitMetadata, setGitMetadata] = useState<AgentGitWorkspaceMetadataApi | null | undefined>(
     undefined,
   );

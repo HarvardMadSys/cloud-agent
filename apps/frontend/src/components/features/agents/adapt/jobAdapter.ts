@@ -162,7 +162,7 @@ export function createDisplayJobAdapter(): typeof toDisplayJob {
   // rendered again.
   let live: { jobId: string; rows: AgentEvent[] } = { jobId: '', rows: [] };
   let factsCache:
-    | { thread: AgentThreadApi; turn: number | undefined; facts: ThreadFacts }
+    | { jobId: string; thread: AgentThreadApi; turn: number | undefined; facts: ThreadFacts }
     | undefined;
   return (job, options = {}) => {
     const nextScope = options.thread?.thread_id ?? job.thread_id ?? job.id;
@@ -175,11 +175,15 @@ export function createDisplayJobAdapter(): typeof toDisplayJob {
     let facts: ThreadFacts | undefined;
     if (options.thread) {
       const turn = job.turn_no ?? options.thread.jobs.find((row) => row.id === job.id)?.turn_no;
-      if (factsCache?.thread === options.thread && factsCache.turn === turn) {
+      if (
+        factsCache?.jobId === job.id &&
+        factsCache.thread === options.thread &&
+        factsCache.turn === turn
+      ) {
         facts = factsCache.facts;
       } else {
         facts = threadFacts(job, options.thread);
-        factsCache = { thread: options.thread, turn, facts };
+        factsCache = { jobId: job.id, thread: options.thread, turn, facts };
       }
     }
     const adapted = adaptJob(job, options, projectHistory, facts);
