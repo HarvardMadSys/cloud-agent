@@ -474,7 +474,7 @@ export function useAgentJob(
         queueLive(event, threadEvent);
         // The stream is also the fastest authority for a queued child
         // becoming active; keep the status pill in step without polling.
-        setApi((current) => (current ? applyAgentLifecycleEvent(current, event) : current));
+        setApi((cur) => (cur?.id === jobId ? applyAgentLifecycleEvent(cur, event) : cur));
       },
       onFinished: () => {
         finished = true;

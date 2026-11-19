@@ -78,13 +78,16 @@ describe('streamed frame batching', () => {
 
     rerender({ id: second.id });
     await waitFor(() => expect(result.current.job?.id).toBe(second.id));
-    // The old stream can still deliver while its passive cleanup runs. This
-    // frame reaches the new turn's buffer and must be filtered by `job_id`.
+    // The old stream can still deliver while its passive cleanup runs. These
+    // frames reach the new turn's buffer and must be filtered by `job_id`; the
+    // lifecycle frame must also not retarget the new turn's active attempt.
     act(() => oldStream.onEvent(event(101, 'message', { text: 'old after switch' })));
+    act(() => oldStream.onEvent(event(102, 'lifecycle', { phase: 'started' }, 99)));
     await flushStream();
 
     expect(result.current.events.map((row) => row.id)).toEqual([5]);
     expect(result.current.job?.events.some((row) => row.sourceEventId === 100)).toBe(false);
+    expect(result.current.job?.currentAttemptId).toBe(second.current_attempt_id);
   });
 
   it('commits the frames of one window together', async () => {
