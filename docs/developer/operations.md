@@ -123,44 +123,49 @@ shows the value in effect; save a valid value or confirm **Restore default**
 to clear the warning. Undecryptable or unencrypted stored credentials still
 stop the listener.
 
-For a new installation, copy `deploy/control-plane/.env.example` to `.env` and
-adjust only the web path and network lines if the defaults do not fit. Nothing
-secret is filled in by hand. Run the deployer's preparation phase once; on a
-root that has never deployed, with the bundled database and no Docker volume
-or container of the Compose project yet, it writes a random database password
-and matching `AGENT_DATABASE_URL`, `AGENT_LOCAL_SESSION_SECRET` and
-`AGENT_SETTINGS_ENCRYPTION_KEY` into `.env`. From the deployment checkout:
-
-```bash
-SOURCE_REPO="$PWD" DEPLOY_ROOT="$PWD" \
-  deploy/control-plane/deploy.sh --phase prepare "$(git rev-parse HEAD)"
-```
-
-An artifact deployment's `prepare` phase does the same
-([release artifacts](../../deploy/release/README.md)).
-
-To use another database, set `AGENT_DATABASE_URL` and `AGENT_POSTGRES_PASSWORD`
-yourself first; the deployer then cannot prove the database is new and asks for
-the account key and settings root key as well. It never replaces a value that
-is set. Back up `.env` with the database from now on: the settings root key in
-it decrypts every saved secret.
-
-Bootstrap the web application before enrolling execution hosts or running the
-normal deployment readiness gate:
+A new installation needs no `.env`: nothing is filled in by hand. Start the
+web application before enrolling execution hosts or running the normal
+deployment readiness gate. From the deployment checkout:
 
 ```bash
 AGENT_DEPLOYMENT_SHA=$(git rev-parse HEAD) docker compose -p cloudagent \
-  --env-file .env -f deploy/control-plane/docker-compose.yml \
-  up -d --build control-plane mcp-relay web
+  -f deploy/control-plane/docker-compose.yml --profile edge \
+  up -d --build control-plane mcp-relay web edge
 ```
 
+The browser reaches the web app and the API on one origin, with the API at
+`/api`. The `edge` profile is the nginx that splits that origin, on
+`127.0.0.1:3003` (`AGENT_EDGE_BIND`, `AGENT_EDGE_PORT`); point the TLS proxy or
+tunnel in front of the hostname at it. Leave the profile out only when that
+proxy already routes `/api/*` to the control plane with the prefix stripped and
+everything else to the web app.
+
+Before anything else starts, the `keys` service sees that the bundled
+database volume holds no database yet and generates a random database password
+with its matching `AGENT_DATABASE_URL`, `AGENT_LOCAL_SESSION_SECRET` and
+`AGENT_SETTINGS_ENCRYPTION_KEY` into the `agent-keys` volume
+([how the keys are kept](../../ENVIRONMENT.md#settings-and-bootstrap-configuration)).
+An artifact deployment's first `prepare` phase does the same
+([release artifacts](../../deploy/release/README.md)).
+
+To use another database, set `AGENT_DATABASE_URL` in the deployment's
+environment or a `.env` beside it, together with an `AGENT_LOCAL_SESSION_SECRET`
+and an `AGENT_SETTINGS_ENCRYPTION_KEY`: the `keys` service cannot prove such a
+database is new, so it refuses to generate them. It stores every value it is
+given, never replaces a stored value with a generated one, and after one start
+the lines can be deleted. Back the keys up apart from the database from now on
+([Disaster recovery](disaster-recovery.md)): the settings root key decrypts
+every saved secret.
+
 On its first start the control plane creates its settings with a random host
-signing key and user and compute credential encryption keys, and logs a
-one-time setup code (`agent_local_setup_pending`). Create the first
-administrator at `/setup/administrator` with that code, sign
-in, and complete the remaining required settings in Admin → Settings: the
-public web address and the sandbox manager credential your hosts share. Then
-enroll hosts and run the usual deployment command.
+signing key, user and compute credential encryption keys and sandbox manager
+credential (server setup writes that credential into each host), and logs a
+one-time setup code (`agent_local_setup_pending`). Open `/setup/administrator`,
+enter that code and create the first administrator, then confirm the site
+address the page offers (the public web address account emails link to). Setup
+ends on Admin → Servers: add the first server there with **Add server**, which
+writes that host's configuration ([Compute resources](operations-compute.md)),
+and run the usual deployment command.
 Optional integrations need setup only when their configuration has been started.
 The shared-live deployment gate continues to require qualified host readiness.
 
@@ -188,34 +193,34 @@ appear on the page with hidden values. See [the environment inventory](../../ENV
 
 ## Sandbox archive storage
 
-This section configures the archive required by the explicit **Archive to S3
-and delete** control. Automatic lifecycle archives use the separate policy
-under **Admin → Settings → Sandbox**, described in [Sandbox archives](#sandbox-archives).
+This section covers the archive the explicit **Archive to S3 and delete**
+control takes. It goes to the destination of the deployment's archive policy,
+the **Sandbox archives** card under **Admin → Settings → Sandbox** described in
+[Sandbox archives](#sandbox-archives), so one card configures both it and the
+automatic lifecycle archives. Deletion with an archive is available while that
+policy is enabled. While it is disabled, an administrator can only discard a
+sandbox, and a deleted chat's sandbox is retired without an archive.
 
-Configure **Admin → Settings → Application → Sandbox archives** before enabling stopped
-sandbox deletion. Set the S3 bucket and, optionally, its region, HTTPS
-S3-compatible endpoint and object prefix. The matching
-`AGENT_SANDBOX_ARCHIVE_S3_*` environment variables import once when these fields
-are first introduced; later environment changes do not override saved settings.
-An empty bucket leaves deletion unavailable.
+Each request's archive is one object,
+`s3://<bucket>/cloud-agent/sandbox/deletion/<sandbox>/<request>/archive.tar`,
+in the policy's bucket and region, next to the lifecycle archives under the
+same fixed prefix. The control plane signs its upload and verifies it with the
+policy's access key when one is saved. Without a saved key it uses the main
+control plane's standard AWS SDK credential chain, preferably an IAM workload
+role. That identity needs `s3:PutObject` and `s3:GetObject` on
+`arn:aws:s3:::<bucket>/cloud-agent/sandbox/deletion/*`; `HeadObject` uses
+`s3:GetObject`. The lifecycle grant on `cloud-agent/sandbox/*` in
+[Sandbox archives](#sandbox-archives) already includes both, so a saved access
+key that holds it needs nothing more. If the bucket applies SSE-KMS by default,
+also grant `kms:GenerateDataKey` and `kms:Decrypt` on its key, so the
+checksum-enabled `HeadObject` can verify the object. The policy's expected
+bucket owner, when set, is asserted on that `HeadObject`. The application does
+not need `s3:DeleteObject` for archive storage.
 
-The bucket field also accepts an S3 URI in the browser. Saving
-`s3://example-bucket/cloud-agent/sandbox` sets the bucket to `example-bucket`
-and the prefix to `cloud-agent/sandbox` in one update. A bucket-root URI clears the
-prefix; entering only a bucket name leaves the prefix unchanged. Direct API
-updates and initial environment imports require the bucket name and prefix in
-their separate settings.
-
-Provision the main control plane's AWS SDK credential chain, preferably with an
-IAM workload role. Its archive role needs `s3:PutObject` and `s3:GetObject` on the
-configured archive prefix; `HeadObject` uses `s3:GetObject`. If SSE-KMS is applied
-by the bucket, also grant the required KMS permissions, including
-`kms:GenerateDataKey` and `kms:Decrypt` so checksum-enabled HEAD can verify the
-object. The application does not need `s3:DeleteObject` for archive storage.
-Provision these manual-deletion credentials only on the main control plane;
-the owning sandbox manager receives a request-specific presigned upload URL. The base Compose
-does not forward AWS credential variables. For environment credentials, create
-a private override restricted to the main service, for example:
+A workload role is the preferred identity without a saved key. For environment
+or shared-profile credentials instead, the base Compose does not forward AWS
+credential variables: create a private override restricted to the main
+service, for example:
 
 ```yaml
 services:
@@ -230,15 +235,12 @@ Keep the override outside the checkout and set its absolute path as
 `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` in the deployment root's private
 `.env`. The deployer validates that it is a readable regular file and appends
 it after release-owned overlays for every stack operation in both source and
-artifact modes. Leaving the setting empty uses only the reviewed deployment
-files. For shared profiles, mount the credentials and configuration files read-only
-in this service and set `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE` and
-`AWS_PROFILE` to their container paths and selected profile. Use the saved
-archive region setting or provision `AWS_DEFAULT_REGION` in the same override.
-Apply these manual-deletion credential mounts and variables only to the main
-control plane. The automatic lifecycle archive policy separately uses the
-trusted sandbox manager's workload identity; neither path provides AWS
-credentials to sandbox containers, the web application or the MCP relay.
+artifact modes. For shared profiles, mount the credentials and configuration
+files read-only in this service and set `AWS_SHARED_CREDENTIALS_FILE`,
+`AWS_CONFIG_FILE` and `AWS_PROFILE` to their container paths and selected
+profile. A deployment whose policy has a saved access key needs no override.
+Neither path provides AWS credentials to sandbox containers, the web
+application or the MCP relay.
 
 The host receives a 15-minute presigned PUT for exactly one request object, with
 a fixed byte length, full-object SHA-256 checksum and `If-None-Match: *`. The
@@ -247,8 +249,7 @@ A retry may encounter HTTP 412 if the upload already succeeded. The control
 plane independently reads `HeadObject` with `ChecksumMode=ENABLED` and requires
 the exact service-verified SHA-256 and byte length before deletion can proceed.
 ETags, supplied metadata, missing checksums and composite checksums cannot
-substitute for that verification. S3-compatible storage must implement these
-conditional PUT and checksum semantics.
+substitute for that verification.
 
 Use a private bucket, block public access, and configure encryption, retention
 and recovery access for these archives. Conditional PUT prevents the issued
@@ -258,7 +259,8 @@ conditional writes, and versioning/Object Lock provide stronger protection
 against later administrative changes. Do not expire an archive while deletion
 or recovery may still depend on it. Persisted receipts include its original
 S3 URI, SHA-256, byte length and object version when available, so changing
-settings does not redirect verification of an existing deletion request.
+the policy's bucket does not redirect verification of an existing deletion
+request.
 
 ## Database browser
 
@@ -355,13 +357,15 @@ Concurrent setup attempts cannot replace the first credentials. The private
 `agent-pgadmin` during deployments. pgAdmin mounts the bootstrap volume read-only.
 
 Sign in with the pgAdmin email and password you chose. The initial server
-definition points to `postgres:5432`, database/user `cloudagent`. Enter the
-deployment's PostgreSQL password when connecting. If the database name or user
-differs, supply a custom `AGENT_PGADMIN_SERVERS_FILE` before initialization, or
-edit the connection in pgAdmin. Database passwords are not preloaded or exposed
-in the dashboard. Saved accounts and connections persist in the separate
-`agent-pgadmin` volume. Setup does not reset an existing account, including on a
-container restart. Manage later accounts and password changes in pgAdmin.
+definition points to `postgres:5432`, with the database `AGENT_POSTGRES_DB`
+names and the user `AGENT_POSTGRES_USER` names (`cloudagent` unless the
+deployment sets them). Enter the deployment's PostgreSQL password when
+connecting. pgAdmin imports that definition only at its first setup, so after
+changing either variable, edit the connection in pgAdmin to match. Database
+passwords are not preloaded or exposed in the dashboard. Saved accounts and
+connections persist in the separate `agent-pgadmin` volume. Setup does not
+reset an existing account, including on a container restart. Manage later
+accounts and password changes in pgAdmin.
 
 For the HTTP-only local stack, use `AGENT_PGADMIN_COOKIE_SECURE=False` alongside
 the existing local Agent-cookie setting. Keep the default `True` for HTTPS.
@@ -620,10 +624,11 @@ an offline host cannot complete it. New turns wait while the stop is pending.
 This action does not delete the container or reclaim its retained disk space.
 
 **Archive to S3 and delete** removes a stopped or dead, idle container after its
-complete retained filesystem has been uploaded and verified in S3. Configure
-the bucket, region, optional S3 endpoint, and object prefix under **Admin →
-Settings → Application → Sandbox archives**. [S3 storage setup](#sandbox-archive-storage)
-describes permissions, credential provisioning and compatible storage requirements.
+complete retained filesystem has been uploaded and verified in S3. It is
+available while the **Sandbox archives** policy under **Admin → Settings →
+Sandbox** is enabled, and archives to that policy's bucket.
+[S3 storage setup](#sandbox-archive-storage) describes the object key,
+permissions and credentials.
 
 Deletion blocks new turns, Fork, and workspace operations while the owning
 sandbox manager prepares the archive. The archive contains `manifest.json` and
@@ -659,6 +664,24 @@ budget is exhausted or its failure requires operator action, the worker still
 checks for this provider-confirmed outcome. That recovery makes no host call and
 does not consume another retry; it requires the same provider termination and
 10-minute silence conditions.
+
+A `cold` sandbox lives only in its
+[checkpoint](#restoring-a-removed-hosts-sandboxes), so it never stops and has no
+container to archive: **Archive to S3 and delete** refuses it. **Delete without
+archive** deletes it at once, with no host call and no deletion worker, once the
+host it still names is gone: removed from the pool, forgotten, or silent for 30
+minutes. One transaction marks the sandbox `lost` and deleted, marks its chats'
+native context lost, fails their queued turns, and retires its checkpoint
+receipts (`superseded`); its trajectory and audit record `checkpoint_only`. The
+checkpoint objects stay in S3 under the bucket's lifecycle and retention rules,
+as archives do; the control plane does not delete objects. A failed restore can
+leave a cold sandbox with no container at all; it is deleted the same way.
+Until its host is gone, the details say so: the next message to one of its chats
+restores it, and **Remove stale entry** hides it once that host has not reported
+for 90 seconds. A host claiming one of its turns to restore it at the same
+moment wins, and the deletion changes nothing; a deletion that commits first
+leaves no turn to restore. Should a removed host come back, a container it kept
+for a deleted sandbox is removable as superseded.
 
 One deletion worker handles requests one at a time, in the order they became
 due. Only transient failures retry automatically, with exponential backoff from
@@ -727,6 +750,12 @@ visibility control for stopped sandboxes. Use **Include removed sandboxes**
 with **All states**, then **Restore to inventory**, to inspect retained entries.
 Resuming a sandbox removed only from inventory makes it visible again.
 
+Each inventory row shows a requested deletion as pending, failed, or deleted; a
+request whose automatic retries stopped shows as failed. A finished deletion,
+with or without an S3 archive, leaves the default inventory as a removal does:
+**Include removed sandboxes** lists it, and **Restore to inventory** shows it
+again.
+
 For batch operations, select individual inventory rows or **Select all visible
 sandboxes**, choose an action, then **Review selected sandboxes**. Selection
 applies only to the current state, search, host, and activity filters; hidden
@@ -736,7 +765,9 @@ eligible entries. Stop, archive-and-delete, deletion without an archive,
 inventory removal, and inventory restoration use the same checks as individual
 controls. Up to four requests run at once, and each result is reported
 separately. A stop or deletion result means the request was accepted; host
-completion is still asynchronous. Failed or skipped entries remain selected
+completion is still asynchronous, except for a cold sandbox's deletion, which is
+done when accepted. Every skipped entry says why, and the confirmation counts
+them. Failed or skipped entries remain selected
 for a new explicit review. Expired reviews and changed containers are refused,
 without automatically retrying a new container identity. No batch feature flag
 or additional migration is required.
@@ -1409,13 +1440,16 @@ runner cannot claim until its exact replica attests the retained protocol,
 container image/runtime pins, sandbox manager configuration, execution profile, and
 host capacity.
 
-Standalone, the host stack needs more than an enrolment credential. Start from
-`deploy/host/.env.example`: `COMPOSE_PROJECT`, `AGENT_SANDBOX_IMAGE`,
-`AGENT_EGRESS_CHAT_NETWORK_POOL` and `AGENT_EGRESS_DNS_SERVER` are required
-(`docker-compose.sandbox.yml` interpolates each with `:?`, so an unset value
-stops the render), alongside `AGENT_SANDBOX_MANAGER_TOKEN`, the two tunnel
-destinations with their own keys and known-hosts files, and the sandbox manager
-reverse-forward trio for the separate control-plane and host Compose stacks.
+Standalone, the host stack needs more than an enrolment credential, and none of
+it is written by hand: Admin → Servers → **Add server** writes the host's `.env`
+([Compute resources](operations-compute.md)). `COMPOSE_PROJECT`,
+`AGENT_SANDBOX_IMAGE`, `AGENT_EGRESS_CHAT_NETWORK_POOL` and
+`AGENT_EGRESS_DNS_SERVER` are required (`docker-compose.sandbox.yml`
+interpolates each with `:?`, so an unset value stops the render), alongside
+`AGENT_SANDBOX_MANAGER_TOKEN`, the two tunnel destinations with their own keys
+and known-hosts files, and the sandbox manager reverse-forward trio for the
+separate control-plane and host Compose stacks. A unit test holds server setup
+to writing every required one.
 
 ### 2. Credentials
 
@@ -1610,7 +1644,11 @@ needs the App.
 Without the App and the relay, agents cannot push or open pull requests: jobs
 still run, and their changes stay in the retained workspace, where the owner
 can read them in the Git pane or download them as an archive. There is no
-static-token fallback; `AGENT_GITHUB_TOKEN` is no longer read.
+static-token fallback; `AGENT_GITHUB_TOKEN` is no longer read. A host with no
+relay also withholds the placeholder from the sandbox, so `git` and `gh` do
+not present a token GitHub would reject. The workspace is a shallow checkout
+of the pinned commit and its parent, and the conversation's base branch is a
+local branch at that commit, so a review can diff without fetching.
 
 ## Running self-hosted
 
@@ -1622,7 +1660,11 @@ Existing retained sandboxes remain on their original Host when this selection
 changes; neither Host Remove nor Forget destroys the underlying machine.
 
 Run the host agent as a **standing service** so queued jobs can be claimed after
-crashes and reboots. Configure enrollment and the shared sandbox manager token in `.env`.
+crashes and reboots. **Add server** writes the host's `.env` and runs the
+commands below for you; installing a host by hand from a hand-written `.env` is
+no longer a supported way to add one. What follows describes a host's
+configuration and lifecycle for operating one that exists. Its `.env` holds
+enrollment and the shared sandbox manager token.
 The example below includes the shared-kernel setting for trusted internal
 repositories. For untrusted repositories, use the default `kata` backend and
 complete [Kata provisioning](#provisioning-kata-on-a-runner-host).
@@ -1671,11 +1713,10 @@ network rules installed and read back) instead of leaving it in a detached
 log. Equivalent by hand:
 
 ```bash
-# Put a tested alternate version in the corresponding *_EXTRA_VERSIONS build
-# argument, then select it in Admin. Default versions are shared protocol pins
-# and change in source together with SHARED_SANDBOX_RUNTIME_PINS.
+# The image carries exactly the source-reviewed pins, which change together
+# with SHARED_SANDBOX_RUNTIME_PINS. Other agent versions are installed from
+# Admin -> Settings -> Agent versions, without a rebuild.
 docker build -f deploy/sandbox/Dockerfile.agent-sandbox \
-             --build-arg CLAUDE_CODE_EXTRA_VERSIONS="<exact-version>" \
              -t freeinference-cloud-agent-job:latest .
 
 AGENT_SANDBOX_IMAGE=freeinference-cloud-agent-job:latest \
@@ -1697,7 +1738,6 @@ with no leader and no sharding.
 | --- | --- | --- |
 | `AGENT_SANDBOX_BACKEND` | `kata` | `process` (no isolation) refuses to start unless `AGENT_SANDBOX_ALLOW_UNISOLATED=1`. On the default `kata`, deploy refuses until the host has the shim and one real container proves it gets its own kernel; `container` is an explicit, and loudly restated, shared-kernel downgrade |
 | `AGENT_SANDBOX_IMAGE` | required | Image built from `Dockerfile.agent-sandbox` or an equivalent deployment-owned image |
-| `*_EXTRA_VERSIONS` | blank | Comma-separated tested versions to bake beside each source-reviewed default. Select one for new chats in Admin; retained chats keep the version they started with. The five defaults are not host settings because runner/control-plane capability admission attests them as one protocol unit |
 | `AGENT_RUNTIME_DOWNLOAD_NETWORK` | `bridge` | Docker network for the download step of an agent update from the admin Settings page. Only npm runs there, with package scripts off; the scripts and the check run with no network ([design](../agents/specs/2026-10-15-agent-cli-updates-design.zh-CN.md)) |
 | `AGENT_RUNTIME_REGISTRY_URL` | public npm | Registry a host downloads updated agents from before its first heartbeat answer. Afterwards the host uses **Agent package registry** in Admin → Settings → Agent versions, which the control plane also lists versions from. pi updates come from `@earendil-works/pi-coding-agent`; a private mirror must carry that package as well as the image's `@mariozechner` one |
 | `AGENT_EGRESS_CHAT_NETWORK_POOL` | required | This deployment's RFC1918 IPv4 pool, one daemon-arbitrated `/29` per active group bridge. No default: it must be disjoint from every other deployment's pool on the machine — of two that overlap, the host rules refuse the one installed later — and from the host's Docker, VPN and private-service routes. A group's bridge is removed on stop and rebuilt on wake |
@@ -2165,8 +2205,9 @@ flagged.
 #### Sandbox archives
 
 This policy captures automatic initial and final lifecycle archives. The
-explicit **Archive to S3 and delete** control has its own control-plane storage
-configuration, documented in [Sandbox archive storage](#sandbox-archive-storage).
+explicit **Archive to S3 and delete** control archives to the same bucket while
+the policy is enabled, under `cloud-agent/sandbox/deletion`; its upload and
+verification are described in [Sandbox archive storage](#sandbox-archive-storage).
 
 Use the **Sandbox archives** card under **Admin → Settings → Sandbox** to store
 the deployment-wide archive policy in the Agent database. Archives go to
@@ -2458,8 +2499,10 @@ see [Restoring a removed host's sandboxes](#restoring-a-removed-hosts-sandboxes)
   state, and anything installed outside `/workspace`. Credential tmpfs mounts
   are not part of a commit. It also holds the Sandbox Manager's own archive
   markers for the generation that stopped; a restored container reads a marker
-  from an earlier generation of its group as absent and writes its own. Bucket lifecycle and retention rules apply to the
-  `v2/` prefix like the rest of the archives.
+  from an earlier generation of its group as absent and writes its own. Host
+  reconciliation reads it the same way, so a restored container left stopped
+  before its first start owes no final archive. Bucket lifecycle and retention
+  rules apply to the `v2/` prefix like the rest of the archives.
 
 #### Restoring a removed host's sandboxes
 
@@ -2489,7 +2532,9 @@ credential and any deployment drain fence are left to the removal flow.
 A `cold` group does not keep its old host from being forgotten, by **Forget**
 or by permanently removing the server: it no longer needs that machine. It
 keeps naming the host it last ran on until a claim moves it to the claiming
-host. Every other undeleted group still blocks forgetting.
+host. Every other undeleted group still blocks forgetting. Once that host is
+gone, **Delete without archive** deletes a `cold` group at once, without any
+host (see [sandbox inventory](#sandbox-inventory-resource-usage-and-controls)).
 
 The next turn of any chat in a `cold` group is claimed by any host that
 advertises `sandbox-restore-v1` with archives enabled, except the host that
@@ -3091,14 +3136,19 @@ The runner holds no database connection — its heartbeats are HTTP calls to the
 control plane — so stopping the control plane, the MCP relay and the web tier
 leaves the database with no writer.
 
+The `psql` commands below run in the bundled Postgres container and open its
+`POSTGRES_DB`, the database `AGENT_POSTGRES_DB` names. That must be the one
+`AGENT_DATABASE_URL` uses ([database settings](../../ENVIRONMENT.md#database)).
+
 1. Drain the hosts, keep the generated `cloudagent-undrain-*.sql`, and wait for
    two counts to reach zero. Neither can be settled once the writers stop, so
    both are waited out here, as in step 1 of the rebuild above:
 
    ```bash
-   docker exec cloudagent-postgres-1 psql -U cloudagent -d cloudagent -Atc \
-     "SELECT count(*) FROM agent_attempts WHERE status = 'running'; \
-      SELECT count(*) FROM agent_session_forks WHERE state IN ('preparing', 'materialized')"
+   docker exec -i cloudagent-postgres-1 sh -c 'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At' <<'SQL'
+   SELECT count(*) FROM agent_attempts WHERE status = 'running';
+   SELECT count(*) FROM agent_session_forks WHERE state IN ('preparing', 'materialized');
+   SQL
    ```
 
    A fork still `preparing` or `materialized` is one its coordinator has not
@@ -3119,7 +3169,8 @@ leaves the database with no writer.
 
    ```bash
    export AGENT_DEPLOYMENT_SHA="$(git rev-parse HEAD)"
-   docker compose -p cloudagent --env-file .env -f deploy/control-plane/docker-compose.yml build migrate
+   # `keys` builds the control-plane image that `migrate` runs.
+   docker compose -p cloudagent --env-file .env -f deploy/control-plane/docker-compose.yml build keys
    docker compose -p cloudagent --env-file .env -f deploy/control-plane/docker-compose.yml \
      run --rm --no-deps migrate
    ```
@@ -3129,7 +3180,8 @@ leaves the database with no writer.
    claim:
 
    ```bash
-   docker exec -i cloudagent-postgres-1 psql -U cloudagent -d cloudagent -v ON_ERROR_STOP=1 < cloudagent-undrain-$(date +%F).sql
+   docker exec -i cloudagent-postgres-1 sh -c 'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1' \
+     < cloudagent-undrain-$(date +%F).sql
    deploy/control-plane/deploy.sh "${AGENT_DEPLOYMENT_SHA}"
    ```
 
@@ -3659,6 +3711,8 @@ Allowed:
   checked before the protected ranges, so a resolver on a private address or
   on this host works — on port 53 only;
 - the group's own MCP relay, by exact bridge, address and port;
+- the model relay, the same way, on a host configured with one
+  ([Provided models](#provided-models));
 - the exact public IPv4 address and port of each SSH server the group's owner
   registered, checked and enabled for one of its chats, by exact bridge, in the
   `ssh_targets` set. It is consulted after the protected ranges, so a protected
@@ -4062,7 +4116,7 @@ leave it, and leave anything you cannot attribute.
    the cleanup. A `down` run from the previous release will already have
    removed some of them.
 
-7. Update `.env` from the new `deploy/host/.env.example`. Set
+7. Update the host's `.env`. Set
    `AGENT_EGRESS_CHAT_NETWORK_POOL`, which no longer has a default, and
    `AGENT_EGRESS_DNS_SERVER`. The old default pool was `10.240.0.0/16`: if two
    deployments on this machine both kept it, give one of them another, or the
@@ -4182,7 +4236,7 @@ and the owner SSH servers entry in [AGENTS.md](../../AGENTS.md) §7.
 
 An owner adds their own inference endpoint under **Settings → My settings →
 Personal model connections** (`/settings/my-settings`): a name, a Base URL,
-an API key and up to eight model ids. **Verify and save** verifies every model
+an API key and up to sixteen model ids. **Verify and save** verifies every model
 before anything is stored, and Cloud Agent works out which APIs each model
 serves. The models then appear in the composer, for the agents that can use
 them; they are the only models anything runs on. A turn runs on the owner's
@@ -4225,14 +4279,37 @@ and the owner model connections entry in [AGENTS.md](../../AGENTS.md) §7.
   derived from the stored facts, never stored. A saved model always has
   facts and at least one agent; one without current facts (a backstop that
   should not occur) runs on nothing, and the composer does not offer it.
-  A turn on a connection runs at its provider's default reasoning effort: a
-  task or message naming an effort is refused (`model_connection_unusable`,
-  reason `effort_unsupported`), the composer offers no effort control, and
-  nothing is stored for it.
   A pairing a model cannot serve is refused when the task or message is
   submitted, and again at every claim and residency; nothing falls back to
   another connection, model or API, and there is no trial and error
   at inference time.
+- **Reasoning levels come from the provider's declaration.** Beside every
+  verification, and when the owner chooses **Refresh reasoning levels** on a
+  saved connection (one hourly check), the control plane reads the provider's
+  two model listings once, under the same address rules: `GET <Base URL>/models`
+  with the bearer key, read for each model's `reasoning.supported_efforts`
+  (OpenRouter's and the HybridInference gateway's field) and its
+  `effort.supported_levels` (DeepSeek's List Models field, which describes
+  Chat Completions only and never lists `none`, so `none` is never inferred;
+  where an entry carries both fields and they disagree, Chat Completions is
+  unknown), and `GET /v1/models?limit=1000` at the Anthropic base with
+  `x-api-key`, read for `capabilities.effort` (the Anthropic Models API's,
+  also answered by the gateway). That is at most two requests per read and no
+  inference. Per model
+  and API it stores `supported` with the levels, `unsupported` (declared: none)
+  or `unknown` (the listing failed, does not list the model, or declares
+  nothing or something malformed); unknown is never read as unsupported, and
+  nothing is inferred from a model's name or from a request being accepted. An
+  agent is offered the declared levels of the API its plan finally calls (Chat
+  Completions on a translated plan) that its pinned CLI can send, and Auto.
+  Auto adds nothing to the launch, so a turn at Auto sends what it always did.
+  A chosen level is stored with the turn, inherited by follow-ups, queued
+  messages, goal rounds and Fork like the model, and checked again at every
+  submission, claim and residency; a level the model does not offer is
+  refused with the offered ones (`effort_level_unsupported`), never renamed or
+  dropped. On a translated plan the helper sends the turn's level as
+  `reasoning_effort` on every Chat request; the CLI's own effort field, which
+  Claude Code fills with `high` even at Auto, is never forwarded.
 - **Verify before saving.** Creating a connection, and an edit that changes
   its key or Base URL or adds models, verifies inside the saving request
   before anything is written: every model the connection would list for a
@@ -4250,8 +4327,8 @@ and the owner model connections entry in [AGENTS.md](../../AGENTS.md) §7.
   save answers `409 model_connection_changed`. A rename, removing models,
   enabling or disabling makes no provider call. The request carries the
   normalized endpoint, key and models it commits, so nothing a client sends
-  can stand in for a verification. At most eight models per connection keep
-  one save to at most 48 provider requests and two waves of four models.
+  can stand in for a verification. At most sixteen models per connection keep
+  one save to at most 96 provider requests and four waves of four models.
   Verification has a 240-second overall deadline; exceeding it answers
   `504 model_connection_verification_timeout` without writing anything. The
   deployment edge permits this duration; any additional proxy must permit it
@@ -4356,6 +4433,156 @@ and the owner model connections entry in [AGENTS.md](../../AGENTS.md) §7.
   admin run detail and the Usage pages show the tokens the agent reported and
   say the provider bills it; there is no cost. What is and is not counted is
   in [Usage](#usage).
+
+## Provided models
+
+A deployment can offer models of its own beside owners' connections. An
+administrator saves a provider's Base URL and the deployment's key under
+**Admin → Settings → Models**; the connection offers every model the provider
+lists for that key, and every admitted owner then finds them in the composer
+with nothing to set up. A new owner starts on the first of them an agent can
+use, on the oldest enabled connection. Design and the boundaries it
+changes: [provided models](../agents/specs/2026-11-12-platform-model-relay.zh-CN.md),
+and the provided models entry in [AGENTS.md](../../AGENTS.md) §7.
+
+**Where the key is.** Only in the control plane, encrypted under the settings
+root key. A member's CLI on a provided model is told its provider is the
+host's `model-tunnel` (at the connection's own path) and holds a residency
+placeholder (`amd.`) as its API key. The tunnel ends at the control plane's
+model relay, a listener of its own (`create_model_relay_app`, port 8002). On
+every request the relay resolves the placeholder to the running turn it
+speaks for, checks the turn runs on that connection, forwards the request to
+the connection's Base URL with the deployment's key, and records for the owner
+what the answer says it used. It
+forwards only the inference and model-listing paths an agent CLI calls, for
+the models the connection lists.
+Stop, a finished turn, a rotated residency and a removed host take effect on
+the next request; nothing has to be revoked at the provider.
+
+**Models and prices.** The save reads the provider's model listing
+(`GET …/models`) with the key and lists what it lists, in its order. So the
+provider decides what the deployment offers: limit the key at the provider to
+the models to provide. A listing that cannot be read, is empty or names more
+than 16 models is refused, and nothing is saved. Every listed model is
+verified as an owner's model is; one no agent can use stays on the connection
+with its result and is offered to nobody, and only a listing in which no
+model can be used is refused. **Read models again** on the connection's card
+follows a key whose models changed at the provider. Each model's prices are
+read from the same listing: a `pricing` object with `prompt`, `completion`
+and, optionally, `input_cache_reads` and `input_cache_writes`, in US dollars
+per million tokens, as an inference gateway of the hybridInference family
+lists them. A model listed without them is recorded by its tokens alone.
+
+**One model, one source.** A model ID is offered by one provided connection at
+most: a save, a new key or **Read models again** whose listing adds a model
+another provided connection already lists is refused, and nothing changes.
+Limit the keys at the provider so that they do not overlap. An owner's own
+connections follow the same rule among themselves. Where an owner's enabled
+connection of their own offers a model the deployment also provides, the
+owner chose their own key for it: the composer lists theirs, and the
+deployment's copy is not offered to that owner. Other owners still see it.
+
+**What a request records.** When an answer ends, the relay reads the usage
+record the provider put in it (the three inference APIs each carry one, in a
+stream on its last events) and adds the tokens, and what they cost at the
+model's listed prices, to what the owner used today. The cost is computed as the inference gateway
+computes it, step for step, rounded half up to a millionth of a dollar per
+request, and a test holds the two to the same micro-dollar. Output tokens include reasoning. An answer that named no
+usage, was cut short before it could (Stop, a dropped connection) or arrived
+in a content encoding the relay did not ask for is recorded by estimate, as
+the gateway bills a stream its client closed: the request's text as input,
+and the text the answer had produced as output, at one token per four bytes;
+an image, an audio clip or a video in the request counts as 85, 200 or 1,000
+tokens whatever its size. The usage table counts those requests separately.
+A request the provider did not serve (unreachable, or answered with an error)
+records nothing, and neither do listing models and counting tokens.
+
+**Nothing limits use here.** There is no budget, quota or cap on requests in
+flight, per owner or per model: the provider's own budget and limits on the
+deployment's key are what bound spending, so give the key both at the
+provider. They are shared by every owner: one owner's heavy use can spend the
+day's budget, or hold the key's concurrency, for everyone. The cost in the
+usage table is the relay's arithmetic on the listed prices and the tokens the
+provider reported, not a bill; it can differ from what the provider charges,
+for example when the provider prices by time of day or routes a model to
+endpoints with different prices.
+
+Nothing has to be configured on the machines. The control plane always runs
+the `model-relay` service, bound to `127.0.0.1:8002`
+(`AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT`; keep it off the public
+edge), and refuses every request until a provided connection is enabled. Every
+host has a `model-tunnel` service, which waits idle until the host is given a
+destination. **Admin → Servers → Add server** gives each new server one: its
+own SSH key, an account of its own on the control-plane machine allowed only
+that forward, and `AGENT_SANDBOX_MODEL_RELAY_URL` with `AGENT_MODEL_TUNNEL_*`
+in the host's configuration. The host then advertises `model-relay-v1`; a host
+without it is never handed a turn on a provided model, and the admin page
+warns while no host advertises it.
+
+To turn it on:
+
+1. Make sure at least one host advertises the model relay. A server set up
+   before this release has no model tunnel: prepare a new setup for it under
+   Admin → Servers, and retire the old one. A host that Add server did not set
+   up gets the values by hand, from whatever deploys it: give the
+   `model-tunnel` an SSH key of its own (`AGENT_MODEL_TUNNEL_*`), on an
+   account of its own on the control-plane machine, allowed that one forward
+   and nothing else, and set
+   `AGENT_SANDBOX_MODEL_RELAY_URL=http://agent-models:8000`:
+
+   ```text
+   command="",restrict,port-forwarding,permitopen="127.0.0.1:8002" ssh-ed25519 AAAA... models
+   ```
+
+2. In **Admin → Settings → Models**, add the connection: a name, the Base
+   URL and the key. The save reads what the key lists and verifies it, as
+   above, then enable the connection.
+
+Things to know when operating it:
+
+- **A new key closes nothing.** No process holds the key, so the next request
+  uses the new one. A new Base URL, disabling and deleting close every member
+  process on the connection, as for an owner's connection.
+- **The relay is on the path.** Requests and answers of provided models pass
+  through the control plane; nothing of them is stored or logged. A request
+  leaves one line (job, account id, model, status, duration) and, when its
+  use is recorded, a second (`agent_model_relay_charged`: its tokens, its cost
+  and whether that was an estimate). Restarting the `model-relay` service,
+  which a control-plane release does, cuts answers in flight; agent CLIs
+  retry, and each answer that was cut is recorded by estimate. Turns on
+  owners' own connections do not pass through it.
+- **Use that could not be written.** If the database is away when an answer
+  ends, the answer is still relayed and its record is kept, and written again
+  after 1, 2, 5, 10, 30, 60 and 120 seconds and then every 5 minutes until it
+  lands
+  (`agent_model_relay_charge_retry`, then `agent_model_relay_charged_late`).
+  A relay process that stops tries each record it still keeps once more, and
+  logs `agent_model_relay_charge_lost` with the amount for any that still
+  fails. A write whose connection broke after the statement was sent may
+  have landed and is not written again: `agent_model_relay_charge_unknown`,
+  with the amount.
+- **A refused key.** If the provider answers `401` to the deployment's key,
+  the relay answers `502` to the agent, logs
+  `agent_model_relay_key_refused` and the admin page shows since when. It
+  clears on the next request the provider accepts, or when the key is
+  replaced.
+- **Nothing falls back.** A turn on a provided model never moves to the
+  owner's own connection, or the reverse. A disabled or deleted connection
+  refuses its turns with that reason.
+- **`AGENT_MODEL_CONNECTIONS_ENABLED`** switches provided models off together
+  with owners' connections.
+- **Rolling back.** The release before this one reads a connection saved by
+  this one as having no daily budget chosen, so it offers it to nobody until
+  an administrator chooses one there. Downgrading `0120` drops prices,
+  budgets and recorded costs; a release from before it limits requests per
+  model instead, and offers a model priced since then to nobody until it is
+  given a request limit. Downgrading `0118` refuses while a provided connection exists or any
+  turn or waiting message names one. The release before that reads such a
+  turn's source as a connection it cannot find and refuses its next message.
+- **Claude Code and the first-party host.** Claude Code decides some features
+  from the host name it is pointed at. Through the relay it sees the relay's
+  name, so a provided connection to its vendor's own API behaves as any
+  third-party endpoint does.
 
 ## Reusable cloud environments
 

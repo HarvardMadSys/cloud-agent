@@ -119,3 +119,26 @@ class ModelConnectionRepository(Protocol):
         released residency, for the caller to close its process.
         """
         ...
+
+    async def operator_connection(self, *, connection_id: str) -> dict[str, Any] | None:
+        """A connection the deployment provides, deleted ones included; ``None`` otherwise.
+
+        Not scoped to an owner: it is every admitted owner's.
+        """
+        ...
+
+    async def bind_operator_residency(
+        self,
+        *,
+        user_id: str,
+        connection_id: str,
+        revision: int,
+        thread_id: str,
+        generation: int,
+    ) -> bool:
+        """Record that a residency's process runs on this provided connection revision.
+
+        Fenced as :meth:`bind_residency` is. Nothing is kept for scanning: no
+        key of the connection ever enters the sandbox.
+        """
+        ...

@@ -1884,6 +1884,17 @@
             ],
             "title": "Host Last Heartbeat At"
           },
+          "host_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Status"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -2180,6 +2191,42 @@
           "recorded_at"
         ],
         "title": "AdminSandboxCheckpoint",
+        "type": "object"
+      },
+      "AdminSandboxDeleteRequest": {
+        "additionalProperties": false,
+        "description": "The exact sandbox and activity the administrator reviewed for deletion.\n\n``container_id`` may be ``None`` only for a ``cold`` sandbox, which lives in\nits checkpoint and may have no container at all; every other deletion\nnames the exact container its host removes.",
+        "properties": {
+          "container_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Id"
+          },
+          "generation": {
+            "minimum": 1.0,
+            "title": "Generation",
+            "type": "integer"
+          },
+          "last_activity_at": {
+            "format": "date-time",
+            "title": "Last Activity At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "generation",
+          "container_id",
+          "last_activity_at"
+        ],
+        "title": "AdminSandboxDeleteRequest",
         "type": "object"
       },
       "AdminSandboxDeletionAttempt": {
@@ -4002,7 +4049,7 @@
           },
           "model_connection_required": {
             "default": false,
-            "description": "True while none of this owner's enabled model connections has a model verified for any Agent: nothing can run until one is set up.",
+            "description": "True while neither one of this owner's enabled model connections nor a connection the deployment provides has a model this owner can run: nothing can run until one is set up.",
             "title": "Model Connection Required",
             "type": "boolean"
           },
@@ -4026,6 +4073,14 @@
               "type": "string"
             },
             "title": "Plugin Runtimes",
+            "type": "array"
+          },
+          "provided_sources": {
+            "description": "Connections this deployment provides to every admitted owner, each with this owner's daily budget on its models and what they spent of it today. A model chosen from one is submitted with the source's id as `model_connection_id`.",
+            "items": {
+              "$ref": "#/components/schemas/ProvidedModelSource"
+            },
+            "title": "Provided Sources",
             "type": "array"
           },
           "repos": {
@@ -4903,7 +4958,7 @@
           "model_connection_id": {
             "anyOf": [
               {
-                "pattern": "^mconn_[0-9a-f]{32}$",
+                "pattern": "^[mo]conn_[0-9a-f]{32}$",
                 "type": "string"
               },
               {
@@ -6414,7 +6469,7 @@
           "model_connection_id": {
             "anyOf": [
               {
-                "pattern": "^mconn_[0-9a-f]{32}$",
+                "pattern": "^[mo]conn_[0-9a-f]{32}$",
                 "type": "string"
               },
               {
@@ -7817,7 +7872,7 @@
           "model_connection_id": {
             "anyOf": [
               {
-                "pattern": "^mconn_[0-9a-f]{32}$",
+                "pattern": "^[mo]conn_[0-9a-f]{32}$",
                 "type": "string"
               },
               {
@@ -13580,6 +13635,42 @@
         "title": "DnaRequest",
         "type": "object"
       },
+      "EffortFactView": {
+        "description": "What the provider's listings declared about one API's reasoning levels for a model.\n\n``supported`` with its ``levels``; ``unsupported``; or ``unknown`` with a\n``reason`` (``not_read``: never read, ``listing_unavailable``,\n``not_listed``, ``not_declared``). Unknown offers Auto only.",
+        "properties": {
+          "levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Levels",
+            "type": "array"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "supported",
+              "unsupported",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "EffortFactView",
+        "type": "object"
+      },
       "EmailRequest": {
         "additionalProperties": false,
         "description": "Resend verification, and forgot password.",
@@ -16736,6 +16827,21 @@
           "runtime": {
             "$ref": "#/components/schemas/RuntimeUsage"
           },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "personal",
+                  "provided"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
           "version": {
             "anyOf": [
               {
@@ -17543,6 +17649,7 @@
         "description": "One connection, as the claim of a turn running on it hands it to a host.\n\n``revision`` is the connection's credential revision. It is part of the\nmember process's fixed launch, so a turn after the key, Base URL or\nprotocols changed starts a new process rather than borrowing one that holds\nthe old key. ``api_key`` is the owner's own secret; it is masked in every\ndurable output of the turn and written only into the member's private\nenvironment and activation tmpfs.",
         "properties": {
           "api_key": {
+            "default": "",
             "title": "Api Key",
             "type": "string"
           },
@@ -17571,6 +17678,11 @@
             "title": "Protocol",
             "type": "string"
           },
+          "relayed": {
+            "default": false,
+            "title": "Relayed",
+            "type": "boolean"
+          },
           "revision": {
             "minimum": 1.0,
             "title": "Revision",
@@ -17581,8 +17693,7 @@
           "connection_id",
           "revision",
           "base_url",
-          "protocol",
-          "api_key"
+          "protocol"
         ],
         "title": "ModelConnectionAccess",
         "type": "object"
@@ -17605,7 +17716,7 @@
             "items": {
               "type": "string"
             },
-            "maxItems": 32,
+            "maxItems": 64,
             "title": "Models",
             "type": "array"
           },
@@ -17649,7 +17760,7 @@
             "type": "boolean"
           },
           "max_models": {
-            "default": 8,
+            "default": 16,
             "title": "Max Models",
             "type": "integer"
           }
@@ -17667,6 +17778,16 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "model_efforts": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/ModelEffortOffer"
+              },
+              "type": "object"
+            },
+            "title": "Model Efforts",
+            "type": "object"
           },
           "model_runtimes": {
             "additionalProperties": {
@@ -17743,7 +17864,7 @@
                 "items": {
                   "type": "string"
                 },
-                "maxItems": 32,
+                "maxItems": 64,
                 "type": "array"
               },
               {
@@ -17836,6 +17957,42 @@
         "title": "ModelConnectionView",
         "type": "object"
       },
+      "ModelEffortOffer": {
+        "description": "Which reasoning levels one agent may run one connection model at.\n\n``status`` is what the model's provider declared for the API this agent's\nplan calls: ``supported`` (``levels`` are the declared ones this agent's\nCLI can send, weakest first), ``unsupported`` (the provider declares none,\nor none this agent can send) or ``unknown`` (nothing the provider said\nsettles it). Auto -- no level -- is always available and is not listed.",
+        "properties": {
+          "levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Levels",
+            "type": "array"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "supported",
+              "unsupported",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ModelEffortOffer",
+        "type": "object"
+      },
       "ModelStatusView": {
         "description": "One listed model as its owner sees it.\n\n``status`` is ``ready``, ``failed``, ``unsupported`` or (a backstop that a\nsaved model never shows) ``unverified``; ``runtimes`` are the agents a task\nmay run it with now, exactly what the execution gates accept. ``paths``\nand ``protocols`` are read-only diagnostics.",
         "properties": {
@@ -17860,6 +18017,24 @@
               }
             ],
             "title": "Checked At"
+          },
+          "efforts": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EffortFactView"
+            },
+            "title": "Efforts",
+            "type": "object"
+          },
+          "efforts_checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Efforts Checked At"
           },
           "message": {
             "default": "",
@@ -17973,6 +18148,318 @@
           }
         },
         "title": "OkResponse",
+        "type": "object"
+      },
+      "OperatorModelConnectionCreate": {
+        "additionalProperties": false,
+        "description": "A new provided connection: its models are what the provider lists for the key.",
+        "properties": {
+          "api_key": {
+            "maxLength": 4160,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "maxLength": 1024,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "base_url",
+          "api_key"
+        ],
+        "title": "OperatorModelConnectionCreate",
+        "type": "object"
+      },
+      "OperatorModelConnectionList": {
+        "description": "Every provided connection, and whether any host can run a turn on one.",
+        "properties": {
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorModelConnectionView"
+            },
+            "title": "Connections",
+            "type": "array"
+          },
+          "feature_enabled": {
+            "default": true,
+            "title": "Feature Enabled",
+            "type": "boolean"
+          },
+          "relay_hosts": {
+            "default": 0,
+            "title": "Relay Hosts",
+            "type": "integer"
+          }
+        },
+        "title": "OperatorModelConnectionList",
+        "type": "object"
+      },
+      "OperatorModelConnectionUpdate": {
+        "additionalProperties": false,
+        "description": "Change some fields; an omitted field keeps its value. ``api_key`` rotates the key.\n\nA new key or Base URL reads the provider's listing again and verifies\nevery model it lists before anything is saved.",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "maxLength": 4160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "OperatorModelConnectionUpdate",
+        "type": "object"
+      },
+      "OperatorModelConnectionView": {
+        "description": "One provided connection, as an administrator reads it. Never its key.",
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key_refused_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Refused At"
+          },
+          "model_status": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Model Status",
+            "type": "array"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "prices": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OperatorModelPrices"
+            },
+            "title": "Prices",
+            "type": "object"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "base_url",
+          "models",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OperatorModelConnectionView",
+        "type": "object"
+      },
+      "OperatorModelPrices": {
+        "description": "What one model costs, as the provider's listing gives it.",
+        "properties": {
+          "cache_read_price": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The price of input tokens the provider read from its prompt cache. Without one they are recorded at the input price. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "title": "Cache Read Price"
+          },
+          "cache_write_price": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The price of input tokens the provider wrote to its prompt cache. Without one they are recorded at the input price. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "title": "Cache Write Price"
+          },
+          "input_price": {
+            "description": "The price of input tokens. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "title": "Input Price",
+            "type": "integer"
+          },
+          "output_price": {
+            "description": "The price of output tokens, reasoning included. In millionths of a US dollar per million tokens: 2800000 is $2.80.",
+            "title": "Output Price",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input_price",
+          "output_price"
+        ],
+        "title": "OperatorModelPrices",
+        "type": "object"
+      },
+      "OperatorModelUsageResponse": {
+        "description": "Use per day, account and model, newest day first and the dearest first within a day.",
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorModelUsageRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "title": "OperatorModelUsageResponse",
+        "type": "object"
+      },
+      "OperatorModelUsageRow": {
+        "description": "What one account used of one model on one UTC day, and what it cost.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "cache_read_tokens": {
+            "default": 0,
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "default": 0,
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "cost_microusd": {
+            "default": 0,
+            "title": "Cost Microusd",
+            "type": "integer"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "email": {
+            "default": "",
+            "title": "Email",
+            "type": "string"
+          },
+          "estimated_requests": {
+            "default": 0,
+            "title": "Estimated Requests",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "default": 0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "output_tokens": {
+            "default": 0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "day",
+          "account_id",
+          "model",
+          "requests"
+        ],
+        "title": "OperatorModelUsageRow",
         "type": "object"
       },
       "OwnJoinRequestListResponse": {
@@ -19116,6 +19603,53 @@
           "message"
         ],
         "title": "ProtocolResultView",
+        "type": "object"
+      },
+      "ProvidedModelSource": {
+        "description": "One connection the deployment provides, as the composer offers it to every owner.\n\nThe same shape as an owner's own connection option. Only the models an\nagent can use are listed, in the order the provider lists them.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_efforts": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/ModelEffortOffer"
+              },
+              "type": "object"
+            },
+            "title": "Model Efforts",
+            "type": "object"
+          },
+          "model_runtimes": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Model Runtimes",
+            "type": "object"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "models"
+        ],
+        "title": "ProvidedModelSource",
         "type": "object"
       },
       "ProviderTokens": {
@@ -30492,6 +31026,403 @@
         "summary": "Get Measurement"
       }
     },
+    "/admin/agent/operator-model-connections": {
+      "get": {
+        "description": "Every provided connection, with its models, their prices and their verification.",
+        "operationId": "list_connections_admin_agent_operator_model_connections_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorModelConnectionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Connections",
+        "tags": [
+          "operator-model-connections"
+        ]
+      },
+      "post": {
+        "description": "Read what the key lists, verify it, then add the connection, disabled.\n\nNothing is stored when the listing cannot be read, lists nothing or more\nthan ``MAX_MODELS``, or no model it lists has an agent that can use it.",
+        "operationId": "create_connection_admin_agent_operator_model_connections_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorModelConnectionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorModelConnectionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationRefusalBody"
+                }
+              }
+            },
+            "description": "A model has no agent that can use it; nothing was saved."
+          },
+          "429": {
+            "description": "The owner's hourly checks cannot cover the models to verify."
+          },
+          "504": {
+            "description": "Verification outlasted the save's bound; nothing was saved."
+          }
+        },
+        "summary": "Create Connection",
+        "tags": [
+          "operator-model-connections"
+        ]
+      }
+    },
+    "/admin/agent/operator-model-connections/{connection_id}": {
+      "delete": {
+        "description": "Delete a provided connection: its key is erased and its running processes are closed.\n\nTurns that name it are refused from now on, never moved elsewhere.",
+        "operationId": "delete_connection_admin_agent_operator_model_connections__connection_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Connection",
+        "tags": [
+          "operator-model-connections"
+        ]
+      },
+      "patch": {
+        "description": "Rename, rotate the key of, move, enable or disable a provided connection.\n\nA new key or Base URL reads the provider's listing with it and verifies\nevery model it lists; the edit is committed only if that passes and the\nconnection did not change meanwhile (409). A field sent with the value it\nalready has is not a change.",
+        "operationId": "update_connection_admin_agent_operator_model_connections__connection_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorModelConnectionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorModelConnectionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationRefusalBody"
+                }
+              }
+            },
+            "description": "A model has no agent that can use it; nothing was saved."
+          },
+          "429": {
+            "description": "The owner's hourly checks cannot cover the models to verify."
+          },
+          "504": {
+            "description": "Verification outlasted the save's bound; nothing was saved."
+          }
+        },
+        "summary": "Update Connection",
+        "tags": [
+          "operator-model-connections"
+        ]
+      }
+    },
+    "/admin/agent/operator-model-connections/{connection_id}/refresh-models": {
+      "post": {
+        "description": "Read the provider's listing again with the stored key, and follow it.\n\nA model the key now lists is verified and added, one it no longer lists\nis removed, and every model's prices are read again. For a key whose\nmodels were changed at the provider. Nothing is saved unless the listing\ncould be read and every added model was verified.",
+        "operationId": "refresh_models_admin_agent_operator_model_connections__connection_id__refresh_models_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorModelConnectionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationRefusalBody"
+                }
+              }
+            },
+            "description": "A model has no agent that can use it; nothing was saved."
+          },
+          "429": {
+            "description": "The owner's hourly checks cannot cover the models to verify."
+          },
+          "504": {
+            "description": "Verification outlasted the save's bound; nothing was saved."
+          }
+        },
+        "summary": "Refresh Models",
+        "tags": [
+          "operator-model-connections"
+        ]
+      }
+    },
+    "/admin/agent/operator-model-connections/{connection_id}/usage": {
+      "get": {
+        "description": "What each account used of each model per UTC day, and what it cost.\n\nRead outside the sandbox, from the provider's own answers: the requests it\nserved, the tokens each answer said it used, and those tokens at the\nmodel's listed prices at the time. Not the provider's bill. The last seven days\nwhen no range is given, and at most ``_MAX_USAGE_DAYS`` of them.",
+        "operationId": "usage_admin_agent_operator_model_connections__connection_id__usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorModelUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Usage",
+        "tags": [
+          "operator-model-connections"
+        ]
+      }
+    },
     "/admin/agent/profiling-control": {
       "get": {
         "description": "Return the control mode, the current experiment and what has confirmed it.\n\n``mode`` is the deployment's answer to \"who may control this\", and it is\nwhat stops the page from offering a switch that would do nothing. The three\nanswers are deliberately different:\n\n* ``disabled`` -- no control at all, and no collection either.\n* ``environment`` -- a static descriptor decides; Admin reports that the\n  deployment is configuration-managed and offers no switch, because there is\n  nothing for this API to turn off.\n* ``admin`` -- the persisted configuration decides, and everything below\n  applies.\n\nA deployment whose mode is not ``admin`` still gets an answer rather than a\n404: \"you cannot control this here, and here is why\" is the useful reply.",
@@ -32396,7 +33327,7 @@
     },
     "/admin/agent/sandboxes/{sandbox_id}/delete": {
       "post": {
-        "description": "Queue deletion, with fail-closed recovery for a stale running or dead container.\n\nThe discard query removes the exact stopped or dead container without an S3 upload.\nThe default path still requires a configured archive bucket.",
+        "description": "Queue deletion, with fail-closed recovery for a stale running or dead container.\n\nThe discard query removes the exact stopped or dead container without an S3 upload.\nThe default path still requires enabled sandbox archives. A discard of a\n``cold`` sandbox, which only its checkpoint holds, completes immediately once\nits host is gone: no host holds anything to remove.",
         "operationId": "delete_admin_sandbox_admin_agent_sandboxes__sandbox_id__delete_post",
         "parameters": [
           {
@@ -32449,7 +33380,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AdminSandboxStopRequest"
+                "$ref": "#/components/schemas/AdminSandboxDeleteRequest"
               }
             }
           },
@@ -42680,6 +43611,65 @@
           }
         },
         "summary": "Update Connection",
+        "tags": [
+          "model-connections"
+        ]
+      }
+    },
+    "/v1/agent/model-connections/{connection_id}/refresh-efforts": {
+      "post": {
+        "description": "Read again which reasoning levels the provider declares for this connection's models.\n\nFor a connection saved before these were read, or after the provider\nchanged what it declares. With the saved key at the saved Base URL: one of\nthe owner's hourly checks, at most two listing requests, no inference.\nOnly the effort facts of models verified at the connection's current state\nare written, and only while it is still that state (409 otherwise); a\nlisting that fails leaves its APIs ``unknown``. Nothing else changes and\nno running process is closed: a turn re-checks its level when it is\nclaimed.",
+        "operationId": "refresh_efforts_v1_agent_model_connections__connection_id__refresh_efforts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConnectionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Efforts",
         "tags": [
           "model-connections"
         ]

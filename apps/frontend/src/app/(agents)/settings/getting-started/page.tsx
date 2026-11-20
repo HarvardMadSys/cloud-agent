@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useT } from '@/components/providers';
 import { GettingStartedSettings } from '@/components/features/settings/GettingStartedSettings';
 import { SettingsPage } from '@/components/features/settings/SettingsPage';
+import { ModelConnectionsLink } from '@/components/features/settings/ModelConnectionsLink';
 import { SETTINGS_PATHS } from '@/components/features/settings/navigation';
 
 export default function GettingStartedPage() {
@@ -11,6 +12,11 @@ export default function GettingStartedPage() {
   return (
     <SettingsPage title={t('gettingStarted.title')} description={t('settings.helpDescription')}>
       <ol className="mt-6 space-y-4 text-sm leading-6 text-muted">
+        <li>
+          <ModelConnectionsLink className="ui-focus-ring rounded text-foreground underline underline-offset-4">
+            {t('settings.helpModel')}
+          </ModelConnectionsLink>
+        </li>
         <li>
           <Link
             href={SETTINGS_PATHS.integrations}

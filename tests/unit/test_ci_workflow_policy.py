@@ -418,6 +418,131 @@ def test_builder_configuration_is_disposable_for_prs_and_persistent_for_pushes(
         assert outputs["BUILDER"] == "ci-trusted-runner"
 
 
+def _builder_script(job: str) -> str:
+    return next(
+        step["run"]
+        for step in _document()["jobs"][job]["steps"]
+        if step.get("name") == "Reuse this runner's builder, or make one"
+    ).replace("${{ matrix.artifact.name }}", "sandbox")
+
+
+def test_the_jobs_sharing_a_runners_builder_set_it_up_identically() -> None:
+    """Two configs for one builder would have each job recreate it, cold, for the other."""
+    assert _builder_script("artifacts") == _builder_script("mcp")
+
+
+@pytest.mark.parametrize("removal_fails", [False, True])
+def test_a_persistent_builder_caps_its_cache_and_is_recreated_when_the_cap_changes(
+    tmp_path: Path, removal_fails: bool
+) -> None:
+    """buildkitd keeps up to 100GB per builder by default; one per runner filled a disk."""
+    script = _builder_script("artifacts")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "docker-calls"
+    made = shlex.quote(str(tmp_path / "made"))
+    docker = bin_dir / "docker"
+    # Records each call. A builder exists from `buildx create` until `buildx rm`,
+    # which leaves it in place (and fails) when the removal is to fail.
+    docker.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> {shlex.quote(str(calls))}\n'
+        'case "$1 $2" in\n'
+        f'  "buildx create") touch {made} ;;\n'
+        f'  "buildx inspect") [ -e {made} ] || exit 1 ;;\n'
+        f'  "buildx rm") [ -e "$REMOVAL_FAILS" ] && exit 1; rm -f {made} ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    docker.chmod(0o755)
+    runner_workspace = tmp_path / "persistent-runner" / "work"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "GITHUB_EVENT_NAME": "push",
+        "GITHUB_REPOSITORY": "HarvardMadSys/cloud-agent",
+        "GITHUB_RUN_ID": "123",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_ENV": str(tmp_path / "github-env"),
+        "RUNNER_TEMP": str(tmp_path / "job-temp"),
+        "RUNNER_WORKSPACE": str(runner_workspace),
+        "RUNNER_NAME": "trusted-runner",
+        "REMOVAL_FAILS": str(tmp_path / "removal-fails"),
+    }
+    config = runner_workspace.parent / "buildx" / "trusted-runner" / "buildkitd.toml"
+
+    def run() -> list[str]:
+        calls.write_text("")
+        subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, check=True)
+        return calls.read_text().splitlines()
+
+    def creates(log: list[str]) -> list[str]:
+        return [call for call in log if call.startswith("buildx create")]
+
+    first = run()
+    assert 'maxUsedSpace = "20GB"' in config.read_text()
+    assert [f"--buildkitd-config {config}" in call for call in creates(first)] == [True]
+
+    # The same cap again: the warm builder is kept.
+    second = run()
+    assert not [call for call in second if call.startswith("buildx rm")]
+    assert not creates(second)
+
+    # A builder made under another cap is replaced by one made under this one.
+    config.write_text(config.read_text().replace("20GB", "100GB"))
+    if removal_fails:
+        (tmp_path / "removal-fails").touch()
+    third = run()
+    assert "buildx rm ci-trusted-runner" in third
+    if removal_fails:
+        # Nothing recorded, so the next job tries the removal again.
+        assert not creates(third)
+        assert '"100GB"' in config.read_text()
+        assert not config.with_name("buildkitd.toml.next").exists()
+        (tmp_path / "removal-fails").unlink()
+        third = run()
+        assert "buildx rm ci-trusted-runner" in third
+    rebuilt = creates(third)
+    assert len(rebuilt) == 1 and f"--buildkitd-config {config}" in rebuilt[0]
+    assert third.index("buildx rm ci-trusted-runner") < third.index(rebuilt[0])
+    assert 'maxUsedSpace = "20GB"' in config.read_text()
+
+
+def test_the_test_database_leaves_no_volume_on_a_persistent_runner() -> None:
+    """postgres declares its data directory a volume; the runner removes services without it."""
+    service = _document()["jobs"]["test-db"]["services"]["postgres"]
+    assert "--tmpfs /var/lib/postgresql/data:rw,size=4g" in service["options"]
+
+
+_ROOT = Path(__file__).parents[2]
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", "publish.yml"])
+def test_removed_containers_take_their_anonymous_volumes(workflow: str) -> None:
+    """`docker rm -f` leaves an image's declared volumes behind on a persistent runner."""
+    text = (_ROOT / ".github" / "workflows" / workflow).read_text()
+    assert not re.findall(r"docker rm -f(?![a-z])", text)
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(
+        str(path.relative_to(_ROOT))
+        for directory in ("deploy/release", "tests/external")
+        for path in (_ROOT / directory).glob("*.py")
+    ),
+)
+def test_what_ci_runs_removes_containers_with_their_volumes(path: str) -> None:
+    """The scripts and live tests CI runs on persistent runners, not just the workflows.
+
+    A forced removal without its volumes is how the smoke job's postgres left a
+    data volume per run on spark2 after the workflows themselves were fixed.
+    """
+    text = (_ROOT / path).read_text()
+    removals = r"""(?<!["']image["'], )(?<!["']volume["'], )["']rm["'],\s*["'](?:-f|--force)["'](?!,\s*["']--volumes)"""
+    assert not re.findall(removals, text)
+
+
 def test_pull_request_builder_is_always_removed_after_the_artifact_job() -> None:
     """Whatever happened, on any persistent runner. A hosted VM is deleted with it."""
     steps = _document()["jobs"]["artifacts"]["steps"]
@@ -565,3 +690,102 @@ def test_real_kata_probe_is_unreachable_from_pull_requests_and_reported_as_skipp
     )
     assert report["if"] == "github.event_name == 'pull_request'"
     assert "skipped" in report["run"] and "GITHUB_STEP_SUMMARY" in report["run"]
+
+
+# The persistent pools run under accounts that have no sudo, beside other
+# repositories' runner accounts on the same machines. So every workflow is
+# checked for every event and cell that routes a job to them: a step that calls
+# sudo must be unreachable there, Chromium's system packages (which Playwright
+# installs through sudo) are a hosted runner's alone, and no step uses a fixed
+# name in the machines' shared /tmp.
+WORKFLOWS = sorted(WORKFLOW.parent.glob("*.yml"))
+SUDO = re.compile(r"(?:^|[\s;&|(!`{])sudo(?=\s|$)")
+SHARED_TMP = re.compile(r"(?:^|[\s=:'\"(])/tmp/")
+
+
+def _script(step: dict) -> str:
+    """A step's shell without its comment lines, which may name sudo freely."""
+    lines = str(step.get("run", "")).splitlines()
+    return "\n".join(line for line in lines if not line.lstrip().startswith("#"))
+
+
+def _self_hosted_routes(document: dict) -> list[tuple[str, dict, str, dict]]:
+    """Every (job, event, cell) of a workflow whose runner labels are self-hosted."""
+    triggers = document.get("on") or document[True]
+    events = [triggers] if isinstance(triggers, str) else sorted(triggers)
+    return [
+        (name, job, event, cell)
+        for name, job in document["jobs"].items()
+        for event in events
+        for cell in _cells(job)
+        if "self-hosted" in _runner_labels(job, event, cell)
+    ]
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
+def test_no_step_a_self_hosted_runner_can_run_calls_sudo(path: Path) -> None:
+    """A sudo step is unreachable wherever its job lands on a persistent runner."""
+    guarded = 0
+    for name, job, event, cell in _self_hosted_routes(yaml.safe_load(path.read_text())):
+        for step in job.get("steps", []):
+            if not SUDO.search(_script(step)):
+                continue
+            where = (path.name, name, step.get("name"), event, cell.get("name"))
+            assert "if" in step, where
+            reachable = _expression(step["if"], event, cell, runner_environment="self-hosted")
+            assert reachable is False, where
+            guarded += 1
+    if path == WORKFLOW:
+        # The hosted sandbox cells' SDK cleanup, in `artifacts` and `mcp`: the
+        # check above did see the steps it exists for.
+        assert guarded > 0
+
+
+@pytest.mark.parametrize("environment", ["github-hosted", "self-hosted"])
+def test_only_a_hosted_runner_installs_the_browser_system_packages(
+    tmp_path: Path, environment: str
+) -> None:
+    """`playwright install --with-deps` apt-installs Chromium's libraries through sudo.
+
+    A persistent runner has them provisioned and no sudo to install them with,
+    so it downloads the browser alone. The step runs here with recorders in place
+    of npx, npm and sudo, as each kind of runner would run it.
+    """
+    steps = {
+        id(step): step
+        for _, job, _, _ in _self_hosted_routes(_document())
+        for step in job.get("steps", [])
+        if "playwright install" in _script(step)
+    }
+    assert len(steps) == 1
+    (step,) = steps.values()
+    script = re.sub(r"\$\{\{\s*runner\.environment\s*\}\}", environment, step["run"])
+    assert "${{" not in script
+    commands = tmp_path / "commands"
+    recorders = "\n".join(
+        f'{tool}() {{ printf "%s\\n" "{tool} $*" >> {shlex.quote(str(commands))}; }}'
+        for tool in ("npx", "npm", "sudo")
+    )
+    env = {key: value for key, value in os.environ.items() if key != "BASH_ENV"}
+    subprocess.run(["bash", "-c", f"{recorders}\n{script}"], cwd=tmp_path, env=env, check=True)
+    recorded = commands.read_text().splitlines()
+    installs = [line for line in recorded if line.startswith("npx playwright install")]
+    assert installs == [
+        "npx playwright install --with-deps chromium"
+        if environment == "github-hosted"
+        else "npx playwright install chromium"
+    ]
+    assert not [line for line in recorded if line.startswith("sudo")]
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
+def test_no_self_hosted_step_uses_a_fixed_name_in_the_shared_tmp(path: Path) -> None:
+    """Every runner account on a machine shares its sticky /tmp.
+
+    A file another account left at a fixed name there cannot be replaced
+    (fs.protected_regular), so the step fails on whichever account comes second.
+    RUNNER_TEMP belongs to one runner process, and mktemp picks a fresh name.
+    """
+    for name, job, _, _ in _self_hosted_routes(yaml.safe_load(path.read_text())):
+        for step in job.get("steps", []):
+            assert not SHARED_TMP.search(_script(step)), (path.name, name, step.get("name"))

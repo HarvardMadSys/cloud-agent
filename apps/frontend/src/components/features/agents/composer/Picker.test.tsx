@@ -160,6 +160,75 @@ describe('Picker', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('reads a note as part of the option', () => {
+    render(
+      <Picker
+        label="Model"
+        value="first"
+        options={['first', 'second']}
+        optionNotes={{ first: 'A quieter line' }}
+        onChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'first A quieter line',
+      'second',
+    ]);
+  });
+
+  it('shows a disabled option without letting the pointer or the keyboard choose it', () => {
+    const onChange = vi.fn();
+    render(
+      <Picker
+        label="Model"
+        value="first"
+        options={['first', 'spent', 'last']}
+        disabledOptions={['spent']}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+    const spent = screen.getByRole('option', { name: 'spent' });
+    expect(spent).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(spent);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // The arrows pass over it, and typing its name does not land on it.
+    const list = screen.getByRole('listbox');
+    fireEvent.keyDown(list, { key: 'ArrowDown' });
+    expect(list).toHaveAttribute(
+      'aria-activedescendant',
+      screen.getByRole('option', { name: 'last' }).id,
+    );
+    fireEvent.keyDown(list, { key: 's' });
+    fireEvent.keyDown(list, { key: 'Enter' });
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('last');
+  });
+
+  it('highlights the first option that can be chosen when the current one cannot', () => {
+    const onChange = vi.fn();
+    render(
+      <Picker
+        label="Model"
+        value="spent"
+        options={['spent', 'open']}
+        disabledOptions={['spent']}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+    const list = screen.getByRole('listbox');
+    expect(screen.getByRole('option', { name: 'spent' })).toHaveAttribute('aria-selected', 'true');
+    expect(list).toHaveAttribute(
+      'aria-activedescendant',
+      screen.getByRole('option', { name: 'open' }).id,
+    );
+    fireEvent.keyDown(list, { key: 'Enter' });
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('open');
+  });
+
   it('removes an open panel when its options disappear', () => {
     const view = render(
       <Picker label="Model" value="glm-5.3" options={models} onChange={vi.fn()} />,

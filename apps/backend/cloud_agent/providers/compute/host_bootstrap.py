@@ -624,15 +624,13 @@ _ALLOWED_NON_AGENT_ENV = {
     "COMPOSE_PROJECT",
     "SIBLING_COMPOSE_PROJECTS",
     "SHARED_READY_TIMEOUT",
-    "CLAUDE_CODE_EXTRA_VERSIONS",
-    "CODEX_EXTRA_VERSIONS",
-    "PI_EXTRA_VERSIONS",
-    "OPENCODE_EXTRA_VERSIONS",
-    "KILO_EXTRA_VERSIONS",
 }
 #: The relays a host's sandboxes and runner reach: the MCP-only relay and the
 #: control-plane API. Each has its own key and known_hosts file.
 _TUNNEL_PREFIXES = ("AGENT_MCP_TUNNEL", "AGENT_CONTROL_PLANE_TUNNEL")
+#: Tunnels a profile may leave out: the model relay's, absent from setups
+#: saved before server setup wrote it. Present, it is held to the same rule.
+_OPTIONAL_TUNNEL_PREFIXES = ("AGENT_MODEL_TUNNEL",)
 _FORBIDDEN_ENV = {
     "AGENT_COMPUTE_SECRET_KEY",
     "AGENT_SOURCE_CONTROL_ENCRYPTION_KEY",
@@ -1009,9 +1007,14 @@ class SshHostBootstrap:
             # OpenSSH refuses a private key without its final newline, and
             # profiles saved before inputs were kept exactly have lost it.
             assets[name] = ((await self._resolver.resolve(ref)).rstrip() + "\n").encode()
-        for prefix in _TUNNEL_PREFIXES:
+        prefixes = _TUNNEL_PREFIXES + tuple(
+            prefix
+            for prefix in _OPTIONAL_TUNNEL_PREFIXES
+            if values.get(f"{prefix}_SSH_DESTINATION")
+        )
+        for prefix in prefixes:
             for suffix in ("SSH_KEY", "SSH_KNOWN_HOSTS"):
-                path = values[f"{prefix}_{suffix}"] or ""
+                path = values.get(f"{prefix}_{suffix}") or ""
                 relative = path.removeprefix(profile.deploy_root + "/")
                 if relative not in assets or not relative.startswith(".compute-secrets/"):
                     raise ProviderError(

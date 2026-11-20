@@ -4,6 +4,8 @@ from __future__ import annotations
 
 # Imported pytest fixtures are intentionally named by test parameters.
 # ruff: noqa: F811
+from unittest.mock import AsyncMock
+
 from tests.integration.storage.test_agent_job_store import (  # noqa: F401 - pytest fixtures
     UTC,
     Storage,
@@ -139,7 +141,7 @@ async def test_sandbox_of_deleted_sessions_is_stopped_then_deleted(
 
     async def sweep() -> int:
         return await retire_deleted_session_sandboxes(
-            store, archive_available=lambda: archive_available
+            store, archive_available=AsyncMock(return_value=archive_available)
         )
 
     async def group() -> dict:
@@ -482,8 +484,6 @@ async def test_side_chat_follow_up_http_receipt_matches_retained_owner_read(
     turn but leave every side-chat send looking like a rejected workspace
     identity on the client; the receipt has to be the owner read.
     """
-    from unittest.mock import AsyncMock
-
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
     from tests.support.model_connections import use_test_cipher, verified_connection

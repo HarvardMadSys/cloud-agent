@@ -119,6 +119,7 @@ from cloud_agent.schemas.admin_sandboxes import (
     AdminSandbox,
     AdminSandboxArchiveRequest,
     AdminSandboxCheckpoint,
+    AdminSandboxDeleteRequest,
     AdminSandboxDeletionAttempt,
     AdminSandboxDetail,
     AdminSandboxList,
@@ -174,6 +175,8 @@ from cloud_agent.schemas.compute import (
 from cloud_agent.schemas.config import (
     AgentConfigResponse,
     ModelConnectionOption,
+    ModelEffortOffer,
+    ProvidedModelSource,
 )
 from cloud_agent.schemas.conversations import (
     AgentConversation,
@@ -286,6 +289,13 @@ from cloud_agent.schemas.messages import (
 from cloud_agent.schemas.model_preferences import ModelPreferenceView
 from cloud_agent.schemas.notification_state import (
     NotificationStateCursor,
+)
+from cloud_agent.schemas.operator_models import (
+    OperatorModelConnectionList,
+    OperatorModelConnectionView,
+    OperatorModelPrices,
+    OperatorModelUsageResponse,
+    OperatorModelUsageRow,
 )
 from cloud_agent.schemas.resources import (
     MAX_TRAJECTORY_TIMING_ATTEMPTS,
@@ -453,6 +463,7 @@ __all__ = [
     "AdminSandbox",
     "AdminSandboxArchiveRequest",
     "AdminSandboxCheckpoint",
+    "AdminSandboxDeleteRequest",
     "AdminSandboxDeletionAttempt",
     "AdminSandboxDetail",
     "AdminSandboxHostObservation",
@@ -624,10 +635,16 @@ __all__ = [
     "McpConnectionSummary",
     "McpIntegrationResponse",
     "ModelConnectionOption",
+    "ModelEffortOffer",
     "ModelPreferenceView",
     "NotificationStateCursor",
     "OAuthConnectRequest",
     "OkResponse",
+    "OperatorModelConnectionList",
+    "OperatorModelConnectionView",
+    "OperatorModelPrices",
+    "OperatorModelUsageResponse",
+    "OperatorModelUsageRow",
     "OwnJoinRequestListResponse",
     "OwnJoinRequestResponse",
     "OwnedTeamEntry",
@@ -641,6 +658,7 @@ __all__ = [
     "PhoneVerifyRequest",
     "ProcessObservation",
     "ProfileView",
+    "ProvidedModelSource",
     "PurgedResponse",
     "QueuePausedReason",
     "ReleaseHostDrainFenceRequest",

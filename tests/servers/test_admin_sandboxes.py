@@ -30,6 +30,7 @@ from cloud_agent.schemas.admin_sandboxes import (
     sandbox_cursor_scope,
     sandbox_trajectory_cursor_scope,
 )
+from cloud_agent_shared.sandbox_archive_settings import SandboxArchivePolicy
 
 PREFIX = "/admin/agent/sandboxes"
 
@@ -1525,7 +1526,7 @@ async def test_delete_without_archive_configuration_does_not_fence_sandbox(setup
             },
         )
     assert response.status_code == 503
-    assert "S3 bucket" in response.json()["detail"]
+    assert "Enable Sandbox archives" in response.json()["detail"]
     commands.request_admin_delete.assert_not_awaited()
 
 
@@ -1567,6 +1568,104 @@ async def test_discard_deletion_does_not_require_archive_configuration(setup):
         confirmed_docker_status=None,
         discard=True,
     )
+
+
+async def test_a_cold_sandbox_without_a_container_is_deleted_without_its_host(setup):
+    """A failed restore leaves a cold sandbox no container: its deletion names none."""
+    from cloud_agent.schemas.admin_sandboxes import AdminSandboxDetail
+
+    app, queries, _ = setup
+    queries.detail = AsyncMock(
+        return_value=AdminSandboxDetail(
+            sandbox=sandbox()
+            | {
+                "state": "lost",
+                "container_id": None,
+                "deletion_state": "deleted",
+                "deletion_discard": True,
+                "host_status": None,
+            },
+            members=[],
+            observed_at=END,
+        )
+    )
+    commands = SimpleNamespace(request_admin_delete=AsyncMock(return_value="accepted"))
+    app.dependency_overrides[get_storage] = lambda: SimpleNamespace(
+        local_accounts=SESSIONS, sandbox=commands, admin_sandboxes=queries
+    )
+    app.dependency_overrides[admin_sandboxes.admin_sandbox_deletion_available] = lambda: False
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"{PREFIX}/asbx_other/delete?discard=true",
+            headers=ADMIN,
+            json={"generation": 2, "container_id": None, "last_activity_at": END.isoformat()},
+        )
+    assert response.status_code == 202
+    body = response.json()["sandbox"]
+    assert (body["deletion_state"], body["state"], body["host_status"]) == ("deleted", "lost", None)
+    commands.request_admin_delete.assert_awaited_once_with(
+        sandbox_id="asbx_other",
+        generation=2,
+        container_id=None,
+        last_activity_at=END,
+        actor_id="admin-token",
+        admin_ip="127.0.0.1",
+        sandbox_manager_confirmed_stopped=False,
+        confirmed_docker_status=None,
+        discard=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("result", "discard", "says"),
+    [
+        ("checkpoint_only", False, "no container to archive. Use Delete without archive."),
+        (
+            "host_present",
+            True,
+            "once that host is removed or has been silent for 30 minutes",
+        ),
+        ("claimed", True, "A host is claiming a turn of this sandbox to restore it."),
+        ("no_container", True, "The retained container identity is unavailable."),
+    ],
+)
+async def test_a_refused_cold_deletion_says_what_happens_instead(setup, result, discard, says):
+    """None of these asks the administrator to wait for a stop that never comes."""
+    app, queries, _ = setup
+    queries.detail = AsyncMock()
+    commands = SimpleNamespace(request_admin_delete=AsyncMock(return_value=result))
+    app.dependency_overrides[get_storage] = lambda: SimpleNamespace(
+        local_accounts=SESSIONS, sandbox=commands, admin_sandboxes=queries
+    )
+    app.dependency_overrides[admin_sandboxes.admin_sandbox_deletion_available] = lambda: True
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"{PREFIX}/asbx_other/delete{'?discard=true' if discard else ''}",
+            headers=ADMIN,
+            json={"generation": 1, "container_id": None, "last_activity_at": END.isoformat()},
+        )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert says in detail
+    assert "Stop the sandbox" not in detail and "clean stop" not in detail
+    queries.detail.assert_not_awaited()
+
+
+async def test_the_stop_control_still_names_the_reviewed_container(setup):
+    """Only a deletion may name no container; a stop always acts on one."""
+    app, queries, _ = setup
+    commands = SimpleNamespace(request_admin_stop=AsyncMock())
+    app.dependency_overrides[get_storage] = lambda: SimpleNamespace(
+        local_accounts=SESSIONS, sandbox=commands, admin_sandboxes=queries
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"{PREFIX}/asbx_other/stop",
+            headers=ADMIN,
+            json={"generation": 1, "container_id": None, "last_activity_at": END.isoformat()},
+        )
+    assert response.status_code == 422
+    commands.request_admin_stop.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -1621,3 +1720,18 @@ def test_sandboxes_are_only_on_the_main_listener():
     assert PREFIX + "/{sandbox_id}/restore" not in create_mcp_app().openapi()["paths"]
     assert PREFIX + "/{sandbox_id}/delete" in create_app().openapi()["paths"]
     assert PREFIX + "/{sandbox_id}/delete" not in create_mcp_app().openapi()["paths"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("enabled", "available"), [(True, True), (False, False)])
+async def test_deletion_with_an_archive_follows_the_sandbox_archive_policy(enabled, available):
+    stored = SandboxArchivePolicy(
+        enabled=enabled,
+        region="us-east-2",
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    )
+    store = SimpleNamespace(
+        host_pool=SimpleNamespace(sandbox_archive_policy=AsyncMock(return_value=stored))
+    )
+    assert await admin_sandboxes.admin_sandbox_deletion_available(store) is available

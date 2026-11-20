@@ -496,6 +496,22 @@ jobs:
             --junitxml="${RUNNER_TEMP}/host-release.xml"
           uv run python scripts/ci_tests_ran.py "${RUNNER_TEMP}/host-release.xml"
 
+      # A relay's tunnel needs a way out to the control plane's machine, and
+      # the relay network has none. `config` renders a tunnel left on that
+      # network alone without complaint; on a host it restarts forever while
+      # the deployment reports success (the GitHub relay's, on staging). Start
+      # the tunnels as the shipped Compose file wires them.
+      - name: Every relay tunnel reaches its far host
+        timeout-minutes: 5
+        env:
+          AGENT_RELAY_TUNNEL_TEST_IMAGE: alpine:3.21
+        run: |
+          set -euo pipefail
+          docker pull "${AGENT_RELAY_TUNNEL_TEST_IMAGE}"
+          uv run pytest -q -m external tests/external/test_relay_tunnel_upstream_real_docker.py \
+            --junitxml="${RUNNER_TEMP}/relay-tunnels.xml"
+          uv run python scripts/ci_tests_ran.py "${RUNNER_TEMP}/relay-tunnels.xml"
+
       # Completion can precede the native CLI's history flush. Unit doubles
       # cannot catch that race; exercise the shipped pin before CI can deploy.
       # Inference is a loopback protocol fixture, with no API key or model cost.
@@ -589,11 +605,20 @@ jobs:
         # 10.3s to healthy at `10s`, 2.5s at `1s` — the server is ready in
         # about two. `pg_isready` is a connect-and-exit, so probing it every
         # second costs nothing worth counting.
+        #
+        # The data directory on tmpfs. postgres:15 declares it a volume, and
+        # the runner removes a service container without its volumes, so on a
+        # persistent runner every job left a database volume behind: 30 to 150
+        # a day on spark2. A mount at that path means no volume is made. The tier
+        # peaks at 1.5GB on a shard and 1.9GB unsharded (measured 2026-11-15);
+        # 4g leaves room for that to grow and still bounds the memory a runaway
+        # test can take from the host. tmpfs holds only what is written.
         options: >-
           --health-cmd pg_isready
           --health-interval 1s
           --health-timeout 5s
           --health-retries 15
+          --tmpfs /var/lib/postgresql/data:rw,size=4g
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -664,14 +689,32 @@ jobs:
               # with fsync on, 10ms with it off, across 329 tests. The
               # container is deleted with the job; there is nothing to lose.
               await conn.execute("ALTER SYSTEM SET fsync = off")
+              # What a hung test leaves behind. pytest-timeout reports where the
+              # test was waiting, not what the server was doing, and this
+              # container's log, printed when the job ends, is the only record
+              # of the server's side. A lock wait longer than deadlock_timeout
+              # (1s) is logged with the sessions holding the lock, and a
+              # statement slower than 5s with its duration. Bind parameters are
+              # left out: some tests bind megabytes.
+              await conn.execute("ALTER SYSTEM SET log_lock_waits = on")
+              await conn.execute("ALTER SYSTEM SET log_min_duration_statement = '5s'")
+              await conn.execute("ALTER SYSTEM SET log_parameter_max_length = 0")
               await conn.execute("SELECT pg_reload_conf()")
               # The reload is asynchronous. Confirm it landed before pytest
-              # opens its own connections, or the saving disappears silently.
+              # opens its own connections, or the settings disappear silently.
+              wanted = {
+                  "fsync": "off",
+                  "log_lock_waits": "on",
+                  "log_min_duration_statement": "5s",
+                  "log_parameter_max_length": "0",
+              }
               for _ in range(50):
-                  if await conn.fetchval("SHOW fsync") == "off":
+                  shown = {name: await conn.fetchval(f"SHOW {name}") for name in wanted}
+                  if shown == wanted:
                       break
                   await asyncio.sleep(0.1)
-              print("fsync:", await conn.fetchval("SHOW fsync"))
+              for name, value in shown.items():
+                  print(f"{name}:", value)
               # One database per xdist worker. The fixtures already derive their
               # name from PYTEST_XDIST_WORKER and each runs its own
               # `alembic upgrade head`; the service container creates only the
@@ -1196,9 +1239,42 @@ jobs:
                 2>/dev/null || true
             )
           fi
+          # A cap on the builder's cache. Left to its defaults buildkitd keeps up
+          # to 100GB per builder, and a persistent pool keeps one builder per
+          # runner: on spark2, 21 of them held 2TB of a 3.6TB disk (2026-11-14).
+          # A pull request's disposable builder gets the same config, which on a
+          # hosted VM also keeps buildkitd off the last 15% of the disk. These
+          # are BuildKit 0.17's GC keys; the builder image is buildx's default,
+          # which has them.
+          #
+          # buildkitd reads the config when the builder is created, so a builder
+          # made under a different one is removed first, dropping its cache once.
+          # The config is recorded only once that builder is gone: a removal that
+          # fails is tried again by the next job, rather than leaving an uncapped
+          # builder behind a config file that says otherwise.
+          #
+          # The artifacts and mcp jobs share this builder and this directory, so
+          # this step must stay the same in both, or each would undo the other.
+          buildkitd_config="${buildx_config}/buildkitd.toml"
+          printf '%s\n' \
+            '[worker.oci]' \
+            '  gc = true' \
+            '  reservedSpace = "2GB"' \
+            '  maxUsedSpace = "20GB"' \
+            '  minFreeSpace = "15%"' > "${buildkitd_config}.next"
+          if ! cmp -s "${buildkitd_config}.next" "${buildkitd_config}"; then
+            docker buildx rm "${builder}" >/dev/null 2>&1 || true
+            if docker buildx inspect "${builder}" >/dev/null 2>&1; then
+              echo "::warning::builder ${builder} could not be removed; it keeps its old cache settings until a later job removes it"
+            else
+              mv "${buildkitd_config}.next" "${buildkitd_config}"
+            fi
+          fi
+          rm -f "${buildkitd_config}.next"
           if ! docker buildx inspect "${builder}" --bootstrap >/dev/null 2>&1; then
             docker buildx rm "${builder}" >/dev/null 2>&1 || true
-            docker buildx create --name "${builder}" --driver docker-container --use >/dev/null
+            docker buildx create --name "${builder}" --driver docker-container \
+              --buildkitd-config "${buildkitd_config}" --use >/dev/null
             docker buildx inspect "${builder}" --bootstrap >/dev/null
           fi
           docker buildx use "${builder}" >/dev/null
@@ -1313,7 +1389,9 @@ jobs:
         run: |
           set -euo pipefail
           database="mcp-db-${SUFFIX}"
-          trap 'docker rm -f "${database}" >/dev/null 2>&1 || true' EXIT
+          # `-v`: postgres declares its data directory a volume, which plain
+          # `rm -f` leaves behind on a persistent runner.
+          trap 'docker rm -fv "${database}" >/dev/null 2>&1 || true' EXIT
           docker run -d --name "${database}" \
             --label "io.hybridinference.smoke.run=${SUFFIX}" \
             -e POSTGRES_DB="${TEST_DB_NAME}" -e POSTGRES_PASSWORD="${TEST_DB_PASSWORD}" \
@@ -1373,7 +1451,7 @@ jobs:
           # runner hosts several cells at once, so `--filter name=smoke-`
           # reaches into the others and kills their containers mid-check.
           docker ps -aq --filter "label=io.hybridinference.smoke.run=${SUFFIX}" \
-            | xargs -r docker rm -f || true
+            | xargs -r docker rm -fv || true
           # Not `-f`. Forced removal untags an image another cell or run may
           # still be starting containers from; a plain `rm` refuses while any
           # container references it, so the worst case is a leftover image
@@ -1488,9 +1566,42 @@ jobs:
                 2>/dev/null || true
             )
           fi
+          # A cap on the builder's cache. Left to its defaults buildkitd keeps up
+          # to 100GB per builder, and a persistent pool keeps one builder per
+          # runner: on spark2, 21 of them held 2TB of a 3.6TB disk (2026-11-14).
+          # A pull request's disposable builder gets the same config, which on a
+          # hosted VM also keeps buildkitd off the last 15% of the disk. These
+          # are BuildKit 0.17's GC keys; the builder image is buildx's default,
+          # which has them.
+          #
+          # buildkitd reads the config when the builder is created, so a builder
+          # made under a different one is removed first, dropping its cache once.
+          # The config is recorded only once that builder is gone: a removal that
+          # fails is tried again by the next job, rather than leaving an uncapped
+          # builder behind a config file that says otherwise.
+          #
+          # The artifacts and mcp jobs share this builder and this directory, so
+          # this step must stay the same in both, or each would undo the other.
+          buildkitd_config="${buildx_config}/buildkitd.toml"
+          printf '%s\n' \
+            '[worker.oci]' \
+            '  gc = true' \
+            '  reservedSpace = "2GB"' \
+            '  maxUsedSpace = "20GB"' \
+            '  minFreeSpace = "15%"' > "${buildkitd_config}.next"
+          if ! cmp -s "${buildkitd_config}.next" "${buildkitd_config}"; then
+            docker buildx rm "${builder}" >/dev/null 2>&1 || true
+            if docker buildx inspect "${builder}" >/dev/null 2>&1; then
+              echo "::warning::builder ${builder} could not be removed; it keeps its old cache settings until a later job removes it"
+            else
+              mv "${buildkitd_config}.next" "${buildkitd_config}"
+            fi
+          fi
+          rm -f "${buildkitd_config}.next"
           if ! docker buildx inspect "${builder}" --bootstrap >/dev/null 2>&1; then
             docker buildx rm "${builder}" >/dev/null 2>&1 || true
-            docker buildx create --name "${builder}" --driver docker-container --use >/dev/null
+            docker buildx create --name "${builder}" --driver docker-container \
+              --buildkitd-config "${buildkitd_config}" --use >/dev/null
             docker buildx inspect "${builder}" --bootstrap >/dev/null
           fi
           docker buildx use "${builder}" >/dev/null
@@ -1564,7 +1675,9 @@ jobs:
         run: |
           set -euo pipefail
           database="mcp-db-${SUFFIX}"
-          trap 'docker rm -f "${database}" >/dev/null 2>&1 || true' EXIT
+          # `-v`: postgres declares its data directory a volume, which plain
+          # `rm -f` leaves behind on a persistent runner.
+          trap 'docker rm -fv "${database}" >/dev/null 2>&1 || true' EXIT
           docker run -d --name "${database}" \
             --label "io.hybridinference.smoke.run=${SUFFIX}" \
             -e POSTGRES_DB="${TEST_DB_NAME}" -e POSTGRES_PASSWORD="${TEST_DB_PASSWORD}" \
@@ -1608,7 +1721,7 @@ jobs:
           # runner hosts several cells at once, so `--filter name=smoke-`
           # reaches into the others and kills their containers mid-check.
           docker ps -aq --filter "label=io.hybridinference.smoke.run=${SUFFIX}" \
-            | xargs -r docker rm -f || true
+            | xargs -r docker rm -fv || true
           # Not `-f`. Forced removal untags an image another cell or run may
           # still be starting containers from; a plain `rm` refuses while any
           # container references it, so the worst case is a leftover image
@@ -1681,11 +1794,13 @@ jobs:
           AGENT_EGRESS_CHAT_NETWORK_POOL=10.240.0.0/16
           AGENT_EGRESS_DNS_SERVER=192.0.2.53
           ENVFILE
-          # With the GitHub relay's profile, so its tunnel is part of what is checked.
+          # With the GitHub and model relays' profiles, so their tunnels are
+          # part of what is checked.
           docker compose \
             -f deploy/host/docker-compose.sandbox.yml \
             --env-file .env \
             --profile github-relay \
+            --profile model-relay \
             config > ${RUNNER_TEMP}/rendered.yml
           echo "--- rendered services ---"
           docker compose -f ${RUNNER_TEMP}/rendered.yml config --services
@@ -1732,12 +1847,43 @@ jobs:
 
           CP=deploy/control-plane/docker-compose.yml
           HOST=deploy/host/docker-compose.sandbox.yml
-          for required in AGENT_DATABASE_URL AGENT_POSTGRES_PASSWORD AGENT_DEPLOYMENT_SHA; do
-            check "$CP" .env.control-plane "$required"
-          done
+          # The deployment keys are not here: the `keys` service supplies them
+          # (the next step). Only the exact commit served stays required.
+          check "$CP" .env.control-plane AGENT_DEPLOYMENT_SHA
           for required in AGENT_SANDBOX_MANAGER_TOKEN AGENT_EGRESS_CHAT_NETWORK_POOL AGENT_EGRESS_DNS_SERVER; do
             check "$HOST" .env "$required"
           done
+
+      # A new installation writes no env file: the `keys` service generates the
+      # deployment keys into their own volume, and every reader waits for it.
+      - name: A control plane with no deployment keys renders around the keys service
+        run: |
+          set -euo pipefail
+          printf 'AGENT_DEPLOYMENT_SHA=ci-deployment-sha\n' > .env.new-installation
+          docker compose -f deploy/control-plane/docker-compose.yml \
+            --env-file .env.new-installation config > "${RUNNER_TEMP}/new-installation.yml"
+          uv run --no-project --with pyyaml python - <<'PY'
+          import os, yaml
+          stack = yaml.safe_load(open(os.environ["RUNNER_TEMP"] + "/new-installation.yml"))
+          services = stack["services"]
+          keys = services["keys"]
+          assert keys["network_mode"] == "none", keys
+          assert keys["cap_drop"] == ["ALL"], keys
+          postgres = services["postgres"]["environment"]
+          assert "POSTGRES_PASSWORD" not in postgres, postgres
+          assert postgres["POSTGRES_PASSWORD_FILE"] == "/run/cloud-agent/keys/AGENT_POSTGRES_PASSWORD"
+          for name in ("migrate", "control-plane", "mcp-relay"):
+              mounts = {(m["source"], m["target"]) for m in services[name]["volumes"]}
+              assert ("agent-keys", "/run/cloud-agent/keys") in mounts, (name, mounts)
+              assert not services[name]["environment"].get("AGENT_DATABASE_URL"), name
+          # One build, one image: automatic Server setup refuses an API and MCP
+          # relay that run different images.
+          builders = sorted(name for name, service in services.items() if "build" in service)
+          assert builders == ["keys", "web"], builders
+          images = {services[name]["image"] for name in ("keys", "migrate", "control-plane", "mcp-relay")}
+          assert len(images) == 1, images
+          print("a new installation renders with its keys left to the keys service")
+          PY
 
       - name: Missing runtime keys permit administrator setup without default secrets
         run: |
@@ -1784,8 +1930,9 @@ jobs:
               for name, svc in stack["services"].items()
               if "agent-relays" in (svc.get("networks") or {})
           }
-          # The GitHub relay's tunnel is the second, rendered with its profile.
-          if on_relays != {"mcp-tunnel", "github-tunnel"}:
+          # The GitHub relay's tunnel is the second and the model relay's the
+          # third, each rendered with its profile.
+          if on_relays != {"mcp-tunnel", "github-tunnel", "model-tunnel"}:
               failures.append(f"unexpected services on the relay network: {sorted(on_relays)}")
 
           # Either process may build or wake a group, so both must build the
@@ -1843,7 +1990,8 @@ jobs:
       - name: Upload limits match encoded attachments through nginx
         timeout-minutes: 5
         env:
-          AGENT_UPLOAD_TEST_NGINX_IMAGE: nginx:1.27.5-alpine
+          # The image the edge runs, as deploy/control-plane/docker-compose.yml pins it.
+          AGENT_UPLOAD_TEST_NGINX_IMAGE: nginx:1.27.5-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
         run: |
           set -euo pipefail
           docker --host=unix:///var/run/docker.sock pull "${AGENT_UPLOAD_TEST_NGINX_IMAGE}"

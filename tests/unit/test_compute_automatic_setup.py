@@ -25,7 +25,11 @@ from cloud_agent.ports.external.host_bootstrap import DeploymentProfile
 from cloud_agent.providers.compute.compute_config import ComputeConfiguration, ComputeSecretResolver
 from cloud_agent.providers.compute.compute_registry import ComputeProviderRegistry
 from cloud_agent.providers.compute.compute_secrets import ComputeSecretStore
-from cloud_agent.providers.compute.setup_tunnels import ControlPlaneEndpoint, generate_tunnel_key
+from cloud_agent.providers.compute.setup_tunnels import (
+    ControlPlaneEndpoint,
+    generate_tunnel_key,
+    tunnel_username,
+)
 from cloud_agent.schemas.compute import AutomaticDeploymentSetup
 
 if TYPE_CHECKING:
@@ -37,6 +41,7 @@ SANDBOX_MANAGER_TOKEN = "private-existing-sandbox-manager-credential"
 ENDPOINT = ControlPlaneEndpoint(
     main_port=8000,
     mcp_port=8001,
+    model_port=8002,
     gateway_ip="172.30.0.1",
     machine_identity="b" * 64,
 )
@@ -117,6 +122,8 @@ class FakeTunnels:
         self.fail_control_once = False
         self.calls: list[tuple[Any, ...]] = []
         self.authorizations: dict[tuple[str, str], str] = {}
+        #: The model tunnel key each profile was provisioned with, if any.
+        self.model_keys: dict[str, str | None] = {}
 
     async def discover_control_plane(
         self, connection: SshConnection, deployment_sha: str
@@ -150,15 +157,19 @@ class FakeTunnels:
         endpoint: ControlPlaneEndpoint,
         reverse_port: int,
         profile_id: str,
+        model_key: str | None = None,
     ) -> None:
         self.calls.append(
             ("control", connection.address, mcp_key, control_key, reverse_port, profile_id)
         )
+        self.model_keys[profile_id] = model_key
         if self.fail_control_once:
             self.fail_control_once = False
             raise ProviderError("setup_failed", "Stable machine temporarily unavailable")
         self.authorize(profile_id, "mcp", mcp_key)
         self.authorize(profile_id, "control", control_key)
+        if model_key is not None:
+            self.authorize(profile_id, "model", model_key)
         await asyncio.sleep(0)
 
 
@@ -378,8 +389,8 @@ async def test_responses_expose_only_profile_names_and_credentials_are_encrypted
     assert "OPENSSH PRIVATE KEY" not in responses
     for profile in result["profiles"]:
         assets = harness.assets(profile["id"])
-        assert len(set(assets["public_keys"].values())) == 2
-        assert len(assets["files"]) == 4
+        assert len(set(assets["public_keys"].values())) == 3
+        assert len(assets["files"]) == 6
         for value in assets["files"].values():
             assert value not in responses
         row = harness.repository.profiles[profile["id"]]
@@ -583,7 +594,7 @@ async def test_concurrent_identical_requests_reuse_the_winners_saved_keys(harnes
     )
     assert first == second
     assert len(harness.repository.profiles) == 2
-    assert len(harness.tunnels.authorizations) == 4
+    assert len(harness.tunnels.authorizations) == 6
 
 
 @pytest.mark.asyncio
@@ -601,7 +612,7 @@ async def test_concurrent_different_inputs_for_one_request_admit_only_the_winner
     assert len(successes) == len(refusals) == 1
     assert refusals[0].code == "idempotency_conflict"
     assert len(harness.repository.profiles) == 1
-    assert len(harness.tunnels.authorizations) == 2
+    assert len(harness.tunnels.authorizations) == 3
 
 
 @pytest.mark.asyncio
@@ -667,7 +678,7 @@ async def test_hosts_pull_the_release_s_published_sandbox_image_when_there_is_on
 
 
 @pytest.mark.asyncio
-async def test_setup_only_uses_control_and_mcp_and_records_no_inference_machine(
+async def test_setup_uses_only_the_control_machine_and_records_no_inference_machine(
     harness: Harness,
 ) -> None:
     result = await harness.restart().create(request())
@@ -680,12 +691,14 @@ async def test_setup_only_uses_control_and_mcp_and_records_no_inference_machine(
         env = dotenv_values(stream=io.StringIO(assets["environment"]))
         assert "AGENT_AUTH_MODE" not in env
         assert not any(name.startswith("AGENT_TUNNEL_") for name in env)
-        assert set(assets["public_keys"]) == {"mcp", "control"}
+        assert set(assets["public_keys"]) == {"mcp", "control", "model"}
         assert set(assets["files"]) == {
             ".compute-secrets/mcp.key",
             ".compute-secrets/mcp.known_hosts",
             ".compute-secrets/control.key",
             ".compute-secrets/control.known_hosts",
+            ".compute-secrets/model.key",
+            ".compute-secrets/model.known_hosts",
         }
     calls = len(harness.tunnels.calls)
     assert await harness.restart().create(request()) == result
@@ -708,3 +721,43 @@ async def test_setup_status_does_not_suggest_an_inference_machine(
     status = await harness.restart().read_status()
     assert "gateway" not in status["defaults"]
     assert "gateway_port" not in status["defaults"]
+
+
+async def test_a_host_gets_the_model_relays_tunnel_on_its_own_account(harness: Harness) -> None:
+    result = await harness.restart().create(request(slots=1))
+    profile = result["profiles"][0]["id"]
+    assets = harness.assets(profile)
+    env = dotenv_values(stream=io.StringIO(assets["environment"]))
+    assert env["AGENT_SANDBOX_MODEL_RELAY_URL"] == "http://agent-models:8000"
+    assert env["AGENT_MODEL_TUNNEL_SSH_DESTINATION"].startswith(
+        tunnel_username(profile, "model") + "@"
+    )
+    assert env["AGENT_MODEL_TUNNEL_REMOTE_HOST"] == "127.0.0.1"
+    assert env["AGENT_MODEL_TUNNEL_REMOTE_PORT"] == str(ENDPOINT.model_port)
+    assert env["AGENT_MODEL_TUNNEL_SSH_KEY"] == "{deploy_root}/.compute-secrets/model.key"
+    # Its own key, authorized on its own account, never one of the others'.
+    assert harness.tunnels.model_keys[profile] == assets["public_keys"]["model"]
+    assert len(set(assets["public_keys"].values())) == 3
+    assert tunnel_username(profile, "model") not in {
+        tunnel_username(profile, "mcp"),
+        tunnel_username(profile, "control"),
+    }
+
+
+async def test_a_setup_saved_before_the_model_tunnel_keeps_its_route(harness: Harness) -> None:
+    """A retry of an older setup is not refused for the port it never recorded,
+    and provisions no model tunnel it has no key for."""
+    harness.tunnels.endpoint = ENDPOINT.model_copy(update={"model_port": None})
+    result = await harness.restart().create(request(slots=1))
+    profile = result["profiles"][0]["id"]
+    assert "model" not in harness.assets(profile)["public_keys"]
+    env = dotenv_values(stream=io.StringIO(harness.assets(profile)["environment"]))
+    assert "AGENT_SANDBOX_MODEL_RELAY_URL" not in env
+    assert not any(name.startswith("AGENT_MODEL_TUNNEL_") for name in env)
+    saved = harness.repository.profiles[profile]["configuration"]["automatic_setup"]
+    saved["ready"] = False
+    saved["endpoint"].pop("model_port")
+    harness.tunnels.endpoint = ENDPOINT
+    harness.tunnels.calls.clear()
+    assert await harness.restart().create(request(slots=1)) == result
+    assert harness.tunnels.model_keys[profile] is None

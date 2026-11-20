@@ -117,6 +117,12 @@ def _setting(name: str, target: str) -> AuditAction:
     return AuditAction(name, "settings", "setting", fixed_target=target)
 
 
+def _provided(name: str) -> AuditAction:
+    return AuditAction(
+        f"agent.operator_model_connection.{name}", "settings", "model_source", "connection_id"
+    )
+
+
 def _sandbox(name: str, *, correlated: bool = False) -> AuditAction:
     return AuditAction(
         f"agent.sandbox.{name}",
@@ -147,6 +153,10 @@ _DECLARED: tuple[AuditAction, ...] = (
             "transfer_team",
             "setup_admin",
             "import",
+            # Written while accounts were invited to a connected inference
+            # service; rows remain, so they still read as what they were.
+            "provision_invite",
+            "provision_revoke",
         )
     ),
     # An account changing itself.
@@ -177,6 +187,31 @@ _DECLARED: tuple[AuditAction, ...] = (
     AuditAction("agent.runtime_version.set", "settings", "runtime", "runtime"),
     AuditAction("agent.runtime_version.upgrade", "settings", "runtime", "runtime"),
     _host("set_settings", category="settings"),
+    # Models the deployment provides.
+    *(
+        _provided(name)
+        for name in (
+            "create",
+            "update",
+            "rotate_key",
+            "enable",
+            "disable",
+            "delete",
+            # No longer written: written while an administrator set a model's
+            # prices (``set_terms``) or its daily request limit (``set_limit``),
+            # and each account's budget and models (below). Rows remain, so
+            # they still read as what they were.
+            "set_terms",
+            "set_limit",
+        )
+    ),
+    AuditAction("agent.operator_model_user_budget.set", "accounts", "account"),
+    AuditAction("agent.operator_model_user_budget.clear", "accounts", "account"),
+    AuditAction("agent.operator_model_user_access.set", "accounts", "account"),
+    AuditAction("agent.operator_model_user_access.clear", "accounts", "account"),
+    # An account's own request limit on one model, from the same time.
+    AuditAction("agent.operator_model_user_limit.set", "accounts", "account"),
+    AuditAction("agent.operator_model_user_limit.clear", "accounts", "account"),
     # Servers in the pool.
     # Placement: no host named means "any available server".
     AuditAction("agent.runner_host.set_active", "servers", "host", "new_host", fixed_target="any"),

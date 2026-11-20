@@ -70,6 +70,16 @@
     "kind": "change"
   },
   {
+    "action": "agent.local_account.provision_invite",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
+    "action": "agent.local_account.provision_revoke",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
     "action": "agent.local_account.signup",
     "category": "accounts",
     "kind": "self_service"
@@ -172,6 +182,76 @@
   {
     "action": "agent.runner_host.set_settings",
     "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_connection.create",
+    "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_connection.update",
+    "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_connection.rotate_key",
+    "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_connection.enable",
+    "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_connection.disable",
+    "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_connection.delete",
+    "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_connection.set_terms",
+    "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_connection.set_limit",
+    "category": "settings",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_budget.set",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_budget.clear",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_access.set",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_access.clear",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_limit.set",
+    "category": "accounts",
+    "kind": "change"
+  },
+  {
+    "action": "agent.operator_model_user_limit.clear",
+    "category": "accounts",
     "kind": "change"
   },
   {

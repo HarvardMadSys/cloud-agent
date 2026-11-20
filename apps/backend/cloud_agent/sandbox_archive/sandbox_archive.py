@@ -1,8 +1,14 @@
 """Control-plane S3 storage for immutable, verified sandbox deletion archives.
 
-AWS credentials are resolved only by the control plane's standard SDK chain.
-The host receives a short-lived upload capability for one checksum-bound object,
-never an AWS credential or a caller-selected bucket/key.
+The destination and credentials are the deployment's sandbox archive policy
+(**Admin → Settings → Sandbox → Sandbox archives**), the same one sandbox
+managers use for lifecycle archives: its bucket and region, and its saved
+access key when it has one. A policy without an access key uses the control
+plane's standard AWS SDK chain, such as a workload role. Deletion archives
+are kept under :data:`DELETION_ARCHIVE_PREFIX`, inside the policy's fixed
+prefix, so one IAM grant on that prefix covers both. The host receives a
+short-lived upload capability for one checksum-bound object, never an AWS
+credential or a caller-selected bucket/key.
 """
 
 from __future__ import annotations
@@ -11,7 +17,7 @@ import asyncio
 import base64
 import hmac
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 from urllib.parse import quote, urlsplit
 
@@ -19,13 +25,20 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-from cloud_agent.settings import text_setting
+from cloud_agent_shared.sandbox_archive_settings import (
+    SANDBOX_ARCHIVE_PREFIX,
+    SandboxArchivePolicy,
+    SandboxArchivePolicyError,
+)
 
 MAX_ARCHIVE_BYTES = 5 * 1024**3
 UPLOAD_EXPIRES_SECONDS = 900
 ARCHIVE_CONTENT_TYPE = "application/octet-stream"
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}\Z")
 _BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]\Z")
+#: Where deletion archives go in the policy's bucket. Lifecycle archives use
+#: the ``v1/`` and ``v2/`` key spaces beside it.
+DELETION_ARCHIVE_PREFIX = f"{SANDBOX_ARCHIVE_PREFIX}/deletion"
 
 
 class SandboxArchiveError(RuntimeError):
@@ -38,6 +51,10 @@ class SandboxArchiveUnavailable(SandboxArchiveError):
 
 class SandboxArchiveVerificationError(SandboxArchiveError):
     """The stored object does not attest the expected complete archive."""
+
+
+class _ArchivePolicySource(Protocol):
+    async def sandbox_archive_policy(self) -> SandboxArchivePolicy: ...
 
 
 class _S3Client(Protocol):
@@ -54,21 +71,30 @@ class _S3Client(Protocol):
 
 @dataclass(frozen=True)
 class SandboxArchiveConfiguration:
-    """Nonsecret archive settings; AWS credentials remain deployment-owned."""
+    """Where deletion archives go and how the control plane authenticates there.
+
+    ``bucket`` is empty when the deployment's archive policy is disabled, which
+    leaves deletion with an archive unavailable.
+    """
 
     bucket: str = ""
     region: str = ""
-    endpoint: str = ""
-    prefix: str = "sandbox-archives"
+    expected_bucket_owner: str = ""
+    prefix: str = DELETION_ARCHIVE_PREFIX
+    aws_access_key_id: str = field(default="", repr=False)
+    aws_secret_access_key: str = field(default="", repr=False)
 
     @classmethod
-    def from_settings(cls) -> SandboxArchiveConfiguration:
-        """Read the synchronized admin settings without contacting AWS."""
+    def from_policy(cls, policy: SandboxArchivePolicy) -> SandboxArchiveConfiguration:
+        """The deletion destination of an enabled policy; none of a disabled one."""
+        if not policy.enabled:
+            return cls()
         return cls(
-            bucket=text_setting("sandbox_archive.bucket"),
-            region=text_setting("sandbox_archive.region"),
-            endpoint=text_setting("sandbox_archive.endpoint"),
-            prefix=text_setting("sandbox_archive.prefix"),
+            bucket=policy.bucket,
+            region=policy.region,
+            expected_bucket_owner=policy.expected_bucket_owner,
+            aws_access_key_id=policy.aws_access_key_id,
+            aws_secret_access_key=policy.aws_secret_access_key,
         )
 
 
@@ -132,9 +158,17 @@ class S3SandboxArchiveStore:
         self._client = client
 
     @classmethod
-    def from_settings(cls) -> S3SandboxArchiveStore:
-        """Snapshot current configuration; SDK creation is deferred until an action."""
-        return cls(SandboxArchiveConfiguration.from_settings())
+    async def for_deployment(cls, host_pool: _ArchivePolicySource) -> S3SandboxArchiveStore:
+        """Snapshot the stored archive policy; SDK creation is deferred until an action.
+
+        A stored policy that does not parse, or whose access key does not open,
+        leaves deletion with an archive unavailable rather than guessing.
+        """
+        try:
+            policy = await host_pool.sandbox_archive_policy()
+        except SandboxArchivePolicyError:
+            return cls(SandboxArchiveConfiguration())
+        return cls(SandboxArchiveConfiguration.from_policy(policy))
 
     @property
     def available(self) -> bool:
@@ -143,25 +177,33 @@ class S3SandboxArchiveStore:
 
     def _require_available(self) -> None:
         if not self.available:
-            raise SandboxArchiveUnavailable(
-                "Configure the sandbox archive S3 bucket before deletion"
-            )
+            raise SandboxArchiveUnavailable("Enable sandbox archives before deletion")
 
     def _get_client(self) -> _S3Client:
         if self._client is None:
+            configuration = self.configuration
+            # A saved access key authenticates as it does for sandbox managers;
+            # without one the SDK's standard chain applies.
+            credentials = (
+                {
+                    "aws_access_key_id": configuration.aws_access_key_id,
+                    "aws_secret_access_key": configuration.aws_secret_access_key,
+                }
+                if configuration.aws_access_key_id
+                else {}
+            )
             self._client = cast(
                 "_S3Client",
                 boto3.client(
                     "s3",
-                    region_name=self.configuration.region or None,
-                    endpoint_url=self.configuration.endpoint or None,
+                    region_name=configuration.region or None,
                     config=Config(
                         signature_version="s3v4",
                         connect_timeout=5,
                         read_timeout=30,
                         retries={"max_attempts": 2, "mode": "standard"},
-                        s3={"addressing_style": "path" if self.configuration.endpoint else "auto"},
                     ),
+                    **credentials,
                 ),
             )
         return self._client
@@ -256,8 +298,15 @@ class S3SandboxArchiveStore:
         ):
             raise SandboxArchiveVerificationError("The archive object is outside the request scope")
 
+        request: dict[str, Any] = {"Bucket": bucket, "Key": key, "ChecksumMode": "ENABLED"}
+        owner = self.configuration.expected_bucket_owner
+        if owner and bucket == self.configuration.bucket:
+            # The policy names who owns its bucket; a receipt in a previous
+            # bucket is read without that assertion.
+            request["ExpectedBucketOwner"] = owner
+
         def inspect() -> dict[str, Any]:
-            return self._get_client().head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
+            return self._get_client().head_object(**request)
 
         try:
             remote = await asyncio.to_thread(inspect)

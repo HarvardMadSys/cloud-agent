@@ -51,6 +51,13 @@ The `agents` web variant (base path `/agents`) is retired: it is no longer
 built, and the schema keeps accepting it in published v1 manifests
 (`manifest_contract.retired_web_variants`) so a rollback still validates.
 
+New manifests name the source repository `HarvardMadSys/cloud-agent`, and the
+generator accepts a `publisher_run_url` only under that name. The repository
+was `HarvardMadSys/hybridInference-cloud-agent` until 2026-11-10, and releases
+published before then carry that name in `source_repository`,
+`publisher_run_url`, and the recipe URL. The schema accepts exactly these two
+names, so those releases still validate.
+
 Image references must use digests under this organization's registry. The
 schema enforces role and web-variant cardinality, and the generator validates
 its output against that schema before writing it. The generator also checks
@@ -109,7 +116,7 @@ uv run python deploy/release/build_recipe.py \
 RECIPE_SHA256=$(sha256sum release/recipe.tar.gz | cut -d' ' -f1)
 uv run python -m deploy.release.release_manifest \
   --inputs release/inputs.json \
-  --recipe-url "https://github.com/HarvardMadSys/hybridInference-cloud-agent/releases/download/agent-${SOURCE_COMMIT}/recipe.tar.gz" \
+  --recipe-url "https://github.com/HarvardMadSys/cloud-agent/releases/download/agent-${SOURCE_COMMIT}/recipe.tar.gz" \
   --recipe-sha256 "${RECIPE_SHA256}" \
   --publisher-run-url "${PUBLISHER_RUN_URL:?Set the publisher Actions run URL}" \
   --output release/release.json
@@ -230,13 +237,17 @@ python3.12 -m venv /opt/cloud-agent/deployer
   -r /opt/cloud-agent/release/recipe/deploy/release/requirements.txt
 ```
 
-Keep `DEPLOY_ROOT` stable across releases. Its `.env`, `.deployed-sha`, and
-`.shared-live-ready` describe the persistent deployment, while each extracted
-recipe can live elsewhere. For a new installation, create that root and fill
-its `.env` using the appropriate recipe's control-plane or host `.env.example`.
-On the control plane, leave the database, account and settings keys empty: the
-first `prepare` phase generates them into that `.env`, as described in
-[the new-installation steps](../../docs/developer/operations.md#admin-settings).
+Keep `DEPLOY_ROOT` stable across releases. Its optional `.env`,
+`.deployed-sha`, and `.shared-live-ready` describe the persistent deployment,
+while each extracted recipe can live elsewhere. For a new installation, create
+that root. The control plane needs no `.env`: its first `prepare` phase starts
+the `keys` service, which generates the database, account and settings keys
+into the `agent-keys` volume, as described in
+[the new-installation steps](../../docs/developer/operations.md#admin-settings);
+a `.env` holds only the overrides the deployment chooses. A host's `.env` is
+the one server setup writes; a downstream deployer that manages its hosts
+itself writes the same variables
+([host configuration](../../docs/developer/operations.md#host-configuration-reference)).
 For an existing installation, retain its configuration, Compose project name,
 host enrollment root, and Docker data root. Generated Compose files stay under
 `DEPLOY_ROOT` so relative mounts preserve their data paths; the edge proxy

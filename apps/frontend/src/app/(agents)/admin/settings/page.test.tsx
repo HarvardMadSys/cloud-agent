@@ -123,8 +123,6 @@ function organizedApplicationSnapshot(): AgentAdminSettings {
     ['github_app_id', 'Source control', 'GitHub App ID'],
     ['github_coauthor', 'Source control', 'Agent commit co-author'],
     ['github_request_timeout_s', 'Source control', 'GitHub request timeout'],
-    ['sandbox_archive.bucket', 'Sandbox archives', 'Sandbox archive S3 bucket'],
-    ['sandbox_archive.endpoint', 'Sandbox archives', 'Sandbox archive S3 endpoint'],
   ];
   return applicationSnapshot({
     definitions: fields.map(([key, category, label]) => ({
@@ -423,8 +421,8 @@ describe('admin Settings', () => {
     await screen.findByText('No application settings are available.');
     const tablist = screen.getByRole('tablist', { name: 'Settings sections' });
     const names: SettingsTab[] = ['Application', 'Agent versions', 'Sandbox', 'CloudLab'];
-    expect(within(tablist).getAllByRole('tab')).toHaveLength(4);
-    expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(4);
+    expect(within(tablist).getAllByRole('tab')).toHaveLength(names.length + 1);
+    expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(names.length + 1);
 
     for (const name of names) {
       selectSettingsTab(name);
@@ -683,79 +681,6 @@ describe('application category tabs', () => {
     );
   });
 
-  it('puts deletion archive storage in the existing Sandbox page and saves its own setting key', async () => {
-    const current = organizedApplicationSnapshot();
-    vi.mocked(getAgentAdminSettings).mockResolvedValue(current);
-    vi.mocked(setAgentAdminSettings).mockResolvedValue({
-      ...current,
-      revision: 2,
-      values: { ...current.values, 'sandbox_archive.bucket': 'deletion-archive-bucket' },
-    });
-    window.history.replaceState(
-      null,
-      '',
-      `/admin/settings?tab=${encodeURIComponent(categoryTabId('Sandbox archives'))}`,
-    );
-    renderSettings();
-    const input = await loadedField('Sandbox archive S3 bucket');
-    expect(screen.queryByRole('tab', { name: 'Sandbox archives' })).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Sandbox' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getAllByRole('tabpanel')).toEqual([
-      screen.getByRole('tabpanel', { name: 'Sandbox' }),
-    ]);
-    expect(screen.getByRole('region', { name: 'Deletion archive destination' })).toContainElement(
-      input,
-    );
-    expect(await screen.findByLabelText('Enable sandbox archives')).toBeVisible();
-    expect(screen.getByLabelText('S3 bucket')).toHaveValue('freeinference');
-    fireEvent.change(input, { target: { value: 'deletion-archive-bucket' } });
-    submit(input);
-    await waitFor(() =>
-      expect(setAgentAdminSettings).toHaveBeenCalledWith(
-        { 'sandbox_archive.bucket': 'deletion-archive-bucket' },
-        1,
-        expect.any(AbortSignal),
-      ),
-    );
-    expect(updateArchiveSettings).not.toHaveBeenCalled();
-  });
-
-  it('reveals a deletion archive link in the existing Sandbox tab', async () => {
-    vi.mocked(getAgentAdminSettings).mockResolvedValue(organizedApplicationSnapshot());
-    window.history.replaceState(
-      null,
-      '',
-      '/admin/settings#application-setting-sandbox_archive.endpoint',
-    );
-    renderSettings();
-    const input = await screen.findByLabelText('Sandbox archive S3 endpoint');
-    await waitFor(() => expect(input).toHaveFocus());
-    expectVisibleSetting(input);
-    expect(screen.getByRole('tabpanel', { name: 'Sandbox' })).toBeVisible();
-    expect(new URLSearchParams(window.location.search).get('tab')).toBe('sandbox');
-  });
-
-  it('keeps application settings errors and retry available on a legacy Sandbox archives URL', async () => {
-    vi.mocked(getAgentAdminSettings)
-      .mockRejectedValueOnce(new Error('Deletion archive settings unavailable'))
-      .mockResolvedValue(organizedApplicationSnapshot());
-    window.history.replaceState(
-      null,
-      '',
-      `/admin/settings?tab=${encodeURIComponent(categoryTabId('Sandbox archives'))}`,
-    );
-    renderSettings();
-    const panel = screen.getByRole('tabpanel', { name: 'Sandbox' });
-    expect(await within(panel).findByRole('alert')).toHaveTextContent(
-      'Deletion archive settings unavailable',
-    );
-    fireEvent.click(within(panel).getByRole('button', { name: 'Retry application settings' }));
-    expect(await screen.findByLabelText('Sandbox archive S3 bucket')).toBeVisible();
-    expect(screen.getByRole('tab', { name: 'Sandbox' })).toHaveAttribute('aria-selected', 'true');
-    expect(within(panel).queryByRole('alert')).not.toBeInTheDocument();
-    expect(getAgentAdminSettings).toHaveBeenCalledTimes(2);
-  });
-
   it('places every API category beside the other settings tabs with one visible panel', async () => {
     renderSettings();
     await screen.findByRole('tab', { name: 'Appearance' });
@@ -772,13 +697,13 @@ describe('application category tabs', () => {
       within(tablist)
         .getAllByRole('tab')
         .map((tab) => tab.textContent),
-    ).toEqual(names);
+    ).toEqual([...names.slice(0, -1), 'Models', ...names.slice(-1)]);
     expect(screen.getAllByRole('tablist')).toEqual([tablist]);
     expect(screen.queryByRole('tab', { name: 'Application' })).not.toBeInTheDocument();
     expect(
       screen.queryByRole('navigation', { name: 'Application setting categories' }),
     ).not.toBeInTheDocument();
-    expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(names.length);
+    expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(names.length + 1);
     expect(screen.getAllByRole('button', { name: 'Refresh settings', hidden: true })).toHaveLength(
       1,
     );
@@ -1776,26 +1701,6 @@ describe('settings search', () => {
     expect(screen.getByRole('tabpanel', { name: 'Sandbox' })).toBeVisible();
     expect(new URLSearchParams(window.location.search).get('tab')).toBe('sandbox');
     expect(updateArchiveSettings).not.toHaveBeenCalled();
-  });
-
-  it('routes deletion archive metadata to the existing Sandbox page', async () => {
-    vi.mocked(getAgentAdminSettings).mockResolvedValue(organizedApplicationSnapshot());
-    renderSettings();
-    await screen.findByRole('tab', { name: 'Appearance' });
-    fireEvent.click(
-      within(searchFor('sandbox_archive.endpoint')).getByRole('button', {
-        name: 'Open Sandbox archive S3 endpoint in Sandbox',
-      }),
-    );
-
-    const input = screen.getByLabelText('Sandbox archive S3 endpoint');
-    await waitFor(() => expect(input).toHaveFocus());
-    expectVisibleSetting(input);
-    expect(screen.getByRole('tabpanel', { name: 'Sandbox' })).toBeVisible();
-    expect(screen.getByRole('region', { name: 'Deletion archive destination' })).toContainElement(
-      input,
-    );
-    expect(screen.queryByRole('tab', { name: 'Sandbox archives' })).not.toBeInTheDocument();
   });
 
   it('does not offer deployment notes as search results or a settings section', async () => {

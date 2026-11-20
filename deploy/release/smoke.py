@@ -62,6 +62,10 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only, and they are strings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+#: The control plane's stack, whose `postgres` service is the database the
+#: control check migrates: the pinned image a deployment runs, not a second name.
+CONTROL_PLANE_COMPOSE = REPO_ROOT / "deploy/control-plane/docker-compose.yml"
+
 #: The runtime label namespace the sandbox image writes and the host reads.
 SMOKE_RUN_LABEL = "io.hybridinference.smoke.run"
 
@@ -293,7 +297,9 @@ class Container:
         )
 
     def stop(self) -> None:
-        run("docker", "rm", "-f", self.name, check=False)
+        # `-v`: postgres declares its data directory a volume, which plain
+        # `rm -f` leaves behind on a persistent runner.
+        run("docker", "rm", "-fv", self.name, check=False)
 
 
 @dataclass
@@ -452,7 +458,7 @@ def verify_control(image: str, *, suffix: str, keep: bool) -> list[str]:
         # handles is a network left behind on a shared runner.
         try:
             postgres.start(
-                "postgres:16-alpine",
+                deployed_postgres_image(),
                 env={
                     "POSTGRES_USER": "cloudagent",
                     "POSTGRES_PASSWORD": "smoke",
@@ -511,6 +517,20 @@ def verify_control(image: str, *, suffix: str, keep: bool) -> list[str]:
             _drop_image(image)
 
 
+def deployed_postgres_image() -> str:
+    """The Postgres image the control-plane stack runs, as that file pins it.
+
+    Read rather than named again here: this check used to start
+    `postgres:16-alpine`, which migrated whatever minor version that tag
+    pointed to that day, not necessarily the one a deployment of this
+    release runs.
+    """
+    import yaml
+
+    stack = yaml.safe_load(CONTROL_PLANE_COMPOSE.read_text())
+    return str(stack["services"]["postgres"]["image"])
+
+
 def _control_environment(dsn: str) -> dict[str, str]:
     """The smallest environment a control plane boots in, from deploy/local.
 
@@ -525,8 +545,9 @@ def _control_environment(dsn: str) -> dict[str, str]:
     return {
         "AGENT_DATABASE_URL": dsn,
         # The account system's key. It must differ from any settings root, which
-        # two independent draws do. `deploy/control-plane/.env.example` is the
-        # authority for this list, and a deployment supplies it in `.env`.
+        # two independent draws do. A Compose deployment keeps both in its
+        # agent-keys volume (`cloud_agent.deployment.deployment_keys`); this
+        # single container has no volume, so they are supplied here.
         "AGENT_LOCAL_SESSION_SECRET": base64.b64encode(os.urandom(32)).decode(),
         "AGENT_SETTINGS_ENCRYPTION_KEY": base64.b64encode(os.urandom(32)).decode(),
         "AGENT_CONTROL_TOKEN_SECRET": base64.b64encode(os.urandom(32)).decode(),

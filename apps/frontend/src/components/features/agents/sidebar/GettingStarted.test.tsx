@@ -13,6 +13,8 @@ import {
   type AgentJobApi,
 } from '@/lib/api/agents';
 
+import { providedSource } from '@/test/connectionConfig';
+
 import { FirstRunProvider, NEW_TASK_PROMPT_ID, useFirstRun } from '../firstRun';
 import { GettingStarted, UNDO_SKIP_MS } from './GettingStarted';
 import { onGitHubAccessRequest } from '../githubReturn';
@@ -145,6 +147,48 @@ describe('GettingStarted', () => {
     expect(step).toHaveAttribute('href', '/');
     fireEvent.click(step);
     expect(screen.getByRole('textbox', { name: 'task' })).toHaveFocus();
+  });
+
+  it('starts with the model connection, and goes to its settings for it', async () => {
+    newcomer({ model_connections_enabled: true, model_connection_required: true });
+
+    sidebar();
+
+    expect(await screen.findByRole('region', { name: 'Getting started' })).toHaveTextContent('0/4');
+    expect(screen.getByRole('link', { name: 'Connect a model' })).toHaveAttribute(
+      'href',
+      '/settings/models#settings-connections',
+    );
+    expect(screen.queryByText('Run your first task')).not.toBeInTheDocument();
+  });
+
+  it('never sends someone with a provided model to set up a connection', async () => {
+    newcomer({
+      model_connections_enabled: true,
+      model_connection_required: false,
+      model_connections: [],
+      provided_sources: [providedSource(['house-fast'])],
+    });
+
+    sidebar();
+
+    // The model step is behind them: the next one is GitHub.
+    expect(await screen.findByRole('region', { name: 'Getting started' })).toHaveTextContent('1/4');
+    expect(screen.queryByRole('link', { name: 'Connect a model' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument();
+  });
+
+  it('goes from the model to the first task where there is no GitHub to connect', async () => {
+    newcomer({
+      model_connections_enabled: true,
+      model_connection_required: false,
+      github_install_url: null,
+    });
+
+    sidebar();
+
+    expect(await screen.findByRole('region', { name: 'Getting started' })).toHaveTextContent('1/2');
+    expect(screen.getByRole('link', { name: 'Run your first task' })).toHaveAttribute('href', '/');
   });
 
   it('stays away for someone with a conversation, even an archived one', async () => {

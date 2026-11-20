@@ -1,7 +1,7 @@
 """Owner routes for their own model connections.
 
 A connection is the owner's own inference endpoint: a name, a Base URL, an
-API key and up to eight model ids. Which APIs each model is reached on is
+API key and up to sixteen model ids. Which APIs each model is reached on is
 found by verifying it, and verification happens before anything is saved:
 creating a connection, and an edit that changes its key or Base URL or adds
 models, verifies the models it would list inside the same request and writes
@@ -19,6 +19,12 @@ Base URL replaces every model's verification; that, disabling or deleting a
 connection closes every member process still running on its old state. A field
 sent with its stored value changes nothing, and a rename, removing models,
 enabling or disabling makes no provider call.
+
+Which reasoning levels each model takes is read from the provider's own model
+listings (``application.model_connection_efforts``): inside every verifying
+save, and on the owner's ``refresh-efforts`` for a saved connection, which
+spends one hourly check, makes at most two listing requests and no inference,
+changes nothing else and closes no process.
 
 Listing a provider's model ids (``discover-models``) is a convenience for
 filling in the form, before or after a connection exists. It writes nothing,
@@ -45,6 +51,7 @@ from cloud_agent.application.model_connection_check import (
     CheckStop,
     discover_models,
 )
+from cloud_agent.application.model_connection_efforts import read_effort_facts, with_efforts
 from cloud_agent.application.model_connection_save import (
     CheckLimitReached,
     EditPlan,
@@ -70,6 +77,7 @@ from cloud_agent.domain.model_connections import (
     clean_models,
     clean_name,
     is_connection_id,
+    taken_model,
 )
 from cloud_agent_shared.model_connections import (
     MAX_API_KEY_CHARS,
@@ -206,6 +214,20 @@ class ProtocolResultView(BaseModel):
     http_status: int | None = None
 
 
+class EffortFactView(BaseModel):
+    """What the provider's listings declared about one API's reasoning levels for a model.
+
+    ``supported`` with its ``levels``; ``unsupported``; or ``unknown`` with a
+    ``reason`` (``not_read``: never read, ``listing_unavailable``,
+    ``not_listed``, ``not_declared``). Unknown offers Auto only.
+    """
+
+    status: Literal["supported", "unsupported", "unknown"]
+    levels: list[str] = Field(default_factory=list)
+    source: str = ""
+    reason: str = ""
+
+
 class AgentPathView(BaseModel):
     """How one agent reaches a model: directly, or through the member's helper."""
 
@@ -232,6 +254,9 @@ class ModelStatusView(BaseModel):
     paths: list[AgentPathView] = Field(default_factory=list)
     protocols: dict[str, ProtocolResultView] = Field(default_factory=dict)
     checked_at: str | None = None
+    #: Per API, what the provider declared about reasoning levels.
+    efforts: dict[str, EffortFactView] = Field(default_factory=dict)
+    efforts_checked_at: str | None = None
 
 
 class VerificationRefusal(BaseModel):
@@ -360,6 +385,31 @@ def _taken(name: str) -> HTTPException:
     )
 
 
+async def _model_taken(
+    store: _Storage, user_id: str, models: list[str], *, other_than: str = ""
+) -> None:
+    """Refuse a model another of the owner's connections lists, before spending a check.
+
+    Each model id is on one of the owner's connections at most, so the
+    composer never lists one name twice.
+    """
+    rows = await store.model_connections.list_model_connections(user_id=user_id)
+    taken = taken_model(models, rows, other_than=other_than)
+    if taken is None:
+        return
+    model, name = taken
+    raise HTTPException(
+        409,
+        {
+            "error": {
+                "type": "model_connection_model_taken",
+                "message": f"{model} is already on your connection {name}.",
+                "taken": {"model": model, "connection": name},
+            }
+        },
+    )
+
+
 @router.get("", response_model=ModelConnectionList)
 async def list_connections(
     user: dict[str, Any] = Depends(require_agent_owner),
@@ -452,6 +502,7 @@ async def create_connection(
     cipher = _cipher()
     if await _name_taken(store, user["user_id"], body.name):
         raise _taken(body.name)
+    await _model_taken(store, user["user_id"], body.models)
     checks = await _verified(
         store, user["user_id"], base_url=body.base_url, api_key=body.api_key, models=body.models
     )
@@ -499,6 +550,9 @@ async def update_connection(
         requested=body.model_dump(exclude_unset=True, exclude={"api_key"}),
         new_key=new_key,
     )
+    if "models" in plan.changes:
+        added = [model for model in plan.changes["models"] if model not in row["models"]]
+        await _model_taken(store, user_id, added, other_than=connection_id)
     if plan.verify or plan.changes.get("enabled") is True:
         # Turning the feature off stops anything that would make a connection
         # usable again; disabling, deleting, renaming and removing models still work.
@@ -672,3 +726,56 @@ async def discover_for_form(
     return DiscoveredModels(
         models=await _listing(store, user_id, base_url=body.base_url, api_key=api_key)
     )
+
+
+@router.post("/{connection_id}/refresh-efforts", response_model=ModelConnectionView)
+async def refresh_efforts(
+    connection_id: str,
+    user: dict[str, Any] = Depends(require_agent_owner),
+    store: _Storage | None = Depends(get_storage),
+) -> ModelConnectionView:
+    """Read again which reasoning levels the provider declares for this connection's models.
+
+    For a connection saved before these were read, or after the provider
+    changed what it declares. With the saved key at the saved Base URL: one of
+    the owner's hourly checks, at most two listing requests, no inference.
+    Only the effort facts of models verified at the connection's current state
+    are written, and only while it is still that state (409 otherwise); a
+    listing that fails leaves its APIs ``unknown``. Nothing else changes and
+    no running process is closed: a turn re-checks its level when it is
+    claimed.
+    """
+    _require_enabled()
+    store = require_store(store)
+    user_id = user["user_id"]
+    row = await _live(store, user_id, connection_id)
+    current = kept_checks(row, list(row["models"]))
+    if not current:
+        raise _refused(
+            409,
+            "model_connection_unverified",
+            "No model on this connection is verified; save it again to verify it.",
+        )
+    reserved = await store.model_connections.reserve_model_connection_checks(
+        user_id=user_id, count=1, limit=CHECKS_PER_HOUR, seconds=3600
+    )
+    if not reserved:
+        raise _refused(
+            429,
+            "model_connection_check_limit",
+            "Too many checks in the last hour. Try again later.",
+        )
+    efforts = await read_effort_facts(
+        base_url=row["base_url"], api_key=_key(row), models=list(current)
+    )
+    updated = await store.model_connections.commit_verified_update(
+        user_id=user_id,
+        connection_id=row["id"],
+        expected=row,
+        changes={},
+        model_checks=with_efforts(current, efforts),
+    )
+    if updated is None:
+        await _live(store, user_id, row["id"])
+        raise _changed()
+    return _view(updated)

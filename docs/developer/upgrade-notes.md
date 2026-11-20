@@ -9,7 +9,7 @@ this page. The deployment order itself, and how to roll back, are in
 ## Before starting this release
 
 Before starting this release, run `alembic upgrade head` through
-`0115_mcp_retire_dead_locations`. The supported deployment scripts run migrations
+`0120_operator_model_budgets`. The supported deployment scripts run migrations
 before replacing the API; every migration listed here is additive and safe
 under the running previous release unless it says otherwise. The few
 transitions that need stopped writers are listed in
@@ -18,6 +18,203 @@ transitions that need stopped writers are listed in
 After migrating, start the main control-plane listener with its existing
 complete environment: it imports newly registered settings once, as described
 in [Admin Settings](operations.md#admin-settings).
+
+## One destination for every sandbox archive
+
+**Archive to S3 and delete** now archives to the **Sandbox archives** policy
+under **Admin → Settings → Sandbox**, the one sandbox managers already use:
+its bucket and region, under `cloud-agent/sandbox/deletion`, and its saved
+access key when it has one
+([how](operations.md#sandbox-archive-storage)). The four settings it had of its
+own under **Admin → Settings → Application → Sandbox archives**
+(`sandbox_archive.bucket`, `.region`, `.endpoint` and `.prefix`) and their
+`AGENT_SANDBOX_ARCHIVE_S3_*` imports are gone. Their stored values are no longer
+read; a later release removes them.
+
+Before upgrading, check what this changes for a deployment:
+
+- Deletion with an archive is available only while the policy is enabled.
+  With it disabled, an administrator can only discard a sandbox, and a deleted
+  chat's sandbox is retired without an archive, as with no bucket before. A
+  deployment that archived deletions to a bucket of its own enables the policy
+  first, with that bucket if it should stay the destination.
+- There is no S3-compatible endpoint any more: the policy names an AWS bucket.
+- With a saved access key, the control plane needs no AWS credentials of its
+  own, so a Compose override that only provided them
+  (`AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE`) can be removed once this
+  release runs. That key needs `s3:PutObject` and `s3:GetObject` on
+  `cloud-agent/sandbox/deletion/*`, which the documented lifecycle grant on
+  `cloud-agent/sandbox/*` already includes.
+
+Completed deletions keep their receipts, each naming the full `s3://` location
+it was verified at. A request not yet archived is archived to the policy's
+destination when it next runs.
+
+## Drain a host without `ADMIN_TOKEN`
+
+A deployment that drains a host around its rollout can now do it with
+`python -m cloud_agent.deployment.host_fence` in the control-plane container
+instead of the admin API, so it no longer needs `ADMIN_TOKEN`
+([how](deployment-reliability.md#reaching-the-fence-without-a-credential)).
+The running control plane is the one that answers a drain, so switch an
+orchestrator to the command only once every control plane it drains through
+runs this release. Then `ADMIN_TOKEN` can be removed, unless it is kept as the
+recovery door; without it, `python -m cloud_agent.accounts.bootstrap_admin`
+in the same container restores an administrator.
+
+## No `.env` needed
+
+A control plane no longer needs a `.env`, and releases no longer ship
+`deploy/control-plane/.env.example` or `deploy/host/.env.example`. The database
+connection, the bundled database's password, the account key and the settings
+root key now live in the `agent-keys` Docker volume, kept by the Compose
+`keys` service ([how](../../ENVIRONMENT.md#settings-and-bootstrap-configuration)).
+A host's `.env` is written by Admin → Servers → **Add server**; a host is no
+longer installed from a hand-written one.
+
+An existing deployment keeps working unchanged. On its first start on this
+release, the `keys` service stores the values its `.env` sets for
+`AGENT_DATABASE_URL`, `AGENT_POSTGRES_PASSWORD`, `AGENT_LOCAL_SESSION_SECRET`,
+`AGENT_SETTINGS_ENCRYPTION_KEY` and `AGENT_SESSION_SECRET` in that volume. After
+that start, those lines can be deleted; a value still set in `.env` keeps
+winning over the stored one, as before. Keep them until rolling back to an
+earlier release is no longer an option: an earlier release reads them only from
+`.env`, and its Compose file refuses to start without them. Before deleting
+them, save the keys apart from the database
+([Disaster recovery](disaster-recovery.md)): they now live in a Docker volume,
+and `docker compose down -v` deletes it. `deploy.sh` no longer refuses a
+deployment root without a `.env`, and no longer writes keys into one. A new
+deployment's control plane also generates the sandbox manager credential into
+its settings, since server setup writes it into each host; an existing
+deployment keeps its own.
+
+The host build-time `*_EXTRA_VERSIONS` menus were removed: the sandbox image
+carries exactly its reviewed pins, and other versions of Claude Code, Codex,
+OpenCode and pi are installed from Admin → Settings → Agent versions. Before
+upgrading a host, check its `.env` for `CLAUDE_CODE_EXTRA_VERSIONS`,
+`CODEX_EXTRA_VERSIONS`, `PI_EXTRA_VERSIONS`, `OPENCODE_EXTRA_VERSIONS` and
+`KILO_EXTRA_VERSIONS`. A version listed there and selected in Admin, or in use
+by a retained chat, is no longer in the new image, and selecting or updating to
+it before the upgrade is not enough: while the old image still carries it, the
+update marks it ready without downloading it. After the new image is deployed,
+open Admin → Settings → Agent versions and check that every online host offers
+the version; where one does not, run **Update** to it again, and until it
+reports ready, new chats there run the default version and chats that need the
+old one cannot be forked. The lines are then ignored and can be deleted.
+
+First-run setup now also asks for the site address, prefilled from the page's
+own address, and ends on Admin → Servers.
+
+## A deployment can provide models
+
+An administrator can now save a provider's endpoint and key once, under
+**Admin → Settings → Models**, and every admitted owner runs with no setup on
+the models the provider lists for that key
+([Provided models](operations.md#provided-models)). The relay records each
+request's tokens and their cost at the listed prices, and limits nothing: the
+provider's own budget on the key does. Owners' own model connections work as
+before, and nothing changes for a deployment that adds no provided connection.
+
+`0118_operator_model_connections` only adds tables, and
+`0120_operator_model_budgets` adds prices, budgets and recorded costs to them.
+Builds since then had an administrator choose the models, a default model, a
+daily budget per account, prices, caps on requests in flight, an end-user
+header and per-account answers. None of that is read any more. A connection
+saved on such a build keeps its model list and verification until it is
+saved again with a new key or Base URL, or its models are read again, which
+replaces the list with the key's; its prices stay until then too. Its
+budgets, caps and per-account answers stay in the database, unread, for a
+later revision to drop.
+
+The feature needs two new services, which every stack now runs with no
+profile: `model-relay` on the control plane and `model-tunnel` on each host.
+Remove `model-relay` from `COMPOSE_PROFILES` if you added it; it no longer
+names anything. A server that **Add server** sets up from this release gets
+its model tunnel and `AGENT_SANDBOX_MODEL_RELAY_URL`; one set up before has
+none, keeps working, and is not handed turns on provided models until it is
+set up again. On such a host, and on one that Add server did not set up, the
+`model-tunnel` waits idle. Roll hosts first, as usual. A host from the
+previous release does not advertise `model-relay-v1` and is not handed them
+either.
+
+A host that Add server set up from this release still names its model relay
+after a rollback, and the previous release starts that host's `model-tunnel`
+only with the `model-relay` profile: add it to that host's `COMPOSE_PROFILES`
+when rolling back, or its turns on provided models fail.
+
+Rolling back to the previous release needs no downgrade while no provided
+connection was created. Once one exists, delete it and let its conversations
+go first: the previous release cannot read a turn that names one.
+
+## Inference provisioning is withdrawn
+
+The option to invite approved accounts to a connected inference service
+(`accounts.inference_provisioning_*`, off by default, added one release
+earlier) is removed. A deployment that wants its accounts on models of its own
+[provides them](#a-deployment-can-provide-models) instead: its key stays in
+the control plane, and no account needs a key anywhere else.
+
+- **Settings and variables.** The four settings and their
+  `AGENT_LOCAL_INFERENCE_PROVISIONING_*` variables are no longer read; take the
+  variables out of the environment. `0119_drop_account_provisioning` deletes
+  the stored values, the dispatch token among them, and drops the two tables.
+- **The backfill command** `python -m cloud_agent.accounts.provision_backfill`
+  is gone.
+- **Keys already issued** at the inference service are not revoked by the
+  upgrade, and this service no longer revokes one when an account's Agent
+  access ends. Revoke them at that service if they should stop working.
+- **The audit log** no longer records an invitation or a revocation; rows
+  already recorded still read as what they were.
+
+## The bundled database is the one `AGENT_POSTGRES_DB` names
+
+The bundled `postgres` service's healthcheck, pgAdmin's bundled server and the
+documented backup, drain and undrain commands open the database
+`AGENT_POSTGRES_DB` names, `cloudagent` by default. A deployment that went
+through the [cutover](#independent-accounts-cutover) on the bundled service by
+pointing `AGENT_DATABASE_URL` at a new database there, and left
+`AGENT_POSTGRES_DB` unset, still has all of them on the archived database:
+pgAdmin and `psql` show its old state, and the documented backup dumps it. The
+`keys` service now logs a warning at every start while the two differ. To fix
+such a deployment:
+
+1. Set `AGENT_POSTGRES_DB` in its `.env` to the database `AGENT_DATABASE_URL`
+   uses, and deploy. Postgres restarts with its healthcheck on that database.
+   Both databases stay as they are: `POSTGRES_DB` creates nothing in a data
+   directory that already holds one.
+2. pgAdmin imported its server once, at its first setup. Edit that server in
+   pgAdmin and set its maintenance database to the same name.
+3. Take a new backup. Every dump taken before step 1 is of the archive.
+4. Optionally, after step 1, rename the archive so nothing opens it by default,
+   for example `ALTER DATABASE cloudagent RENAME TO cloudagent_archive`, run
+   from another database with no session connected to the archive. Its
+   contents do not change; record the new name with its dump and keys.
+
+## Postgres and the edge run pinned images
+
+The control plane's Compose file now names the bundled `postgres` service's
+image and the optional `edge`'s by version tag and multi-architecture index
+digest, as it already named pgAdmin's:
+`postgres:16.16-alpine@sha256:0adbf25a…` and
+`nginx:1.27.5-alpine@sha256:65645c7b…`. They were named by tag alone
+(`postgres:16-alpine`, `nginx:1.27.5-alpine`), so a deployment ran whatever its
+machine's copy of the tag pointed to, and an artifact deployment pulls every
+image again on each deploy: a new upstream build could restart Postgres on
+another minor version during an unrelated deploy. A new Postgres or nginx now
+comes only with a release that changes the pin, and this page says when one
+does.
+
+The first deploy of this release recreates `postgres`, and `edge` where its
+profile is enabled, once, because the image they name changed. Postgres is
+unavailable for the few seconds its restart takes, as at any deploy that
+changes its configuration. A deployment already on PostgreSQL 16.16 keeps that
+version. Check before deploying with `docker exec
+"${COMPOSE_PROJECT:?}-postgres-1" postgres --version`: a deployment on an
+earlier 16.x moves to 16.16 in that restart, and one that has already pulled a
+later 16.x moves back to it. A minor release keeps the data directory's
+format, so neither needs a dump or restore, but read the PostgreSQL release
+notes between the two versions for any step they ask for. The edge stays on
+nginx 1.27.5, and pgAdmin's pin is unchanged.
 
 ## The audit log names who acted on whom
 
@@ -170,7 +367,10 @@ model connections. Nothing migrates old tasks, connections or identities.
    It exits non-zero, names this runbook, and changes nothing.
 
 2. **Create a new, empty Agent database** and point `AGENT_DATABASE_URL` at
-   it. The same check must now report an empty database that will be bound on
+   it. On the bundled `postgres` service, also set `AGENT_POSTGRES_DB` to its
+   name, or its healthcheck, pgAdmin and the documented backup stay on the
+   archive ([why](#the-bundled-database-is-the-one-agent_postgres_db-names)).
+   The same check must now report an empty database that will be bound on
    first start. `deploy/control-plane/deploy.sh` runs it read-only before it
    migrates, and stops if it refuses.
 
@@ -264,6 +464,11 @@ Newest first.
 
 | Migration | What it changes |
 |---|---|
+| `0120_operator_model_budgets` | Charges provided models by cost instead of counting requests. Adds `user_daily_budget_microusd` to `agent_operator_model_connections`; four prices and `named_only` to `agent_operator_model_limits`; `agent_operator_user_budgets` (one account's own daily budget) and `agent_operator_model_user_access` (one account's own answer on one model); and to `agent_operator_model_usage` the cost of the requests it counts, their tokens and how many were charged by estimate. Only additions: `user_daily_requests` and `agent_operator_model_user_limits` stay, unread, for a later revision to drop. A model with a request limit of `0` becomes one for named accounts only, and each account's own limit becomes its own answer (`0` withheld, anything else offered); no budget or price is derived from a request count. The previous release runs beside it and keeps enforcing the request limits it reads; a model first priced by this release is written with a limit of `0`, which that release reads as offered to nobody by default. A downgrade drops what was added ([A deployment can provide models](#a-deployment-can-provide-models)). |
+| `0119_drop_account_provisioning` | Drops `agent_account_provisioning` and `agent_account_provisioning_activation`, and removes the four `accounts.inference_provisioning_*` values from the stored settings, the dispatch token among them, moving the settings revision on by one when it removed any. Rows in the two tables are deleted with them. The previous release runs beside it with provisioning off: it reads the setting as off, and a pass that is off touches neither table. A downgrade recreates the two tables empty and does not restore the settings ([Inference provisioning is withdrawn](#inference-provisioning-is-withdrawn)). |
+| `0118_operator_model_connections` | Adds the models a deployment provides: `agent_operator_model_connections` (endpoint, encrypted key, models and their verification), `agent_operator_model_limits` (each model's default daily request allowance and concurrency cap), `agent_operator_model_user_limits` (one account's own allowance), `agent_operator_model_usage` (requests the model relay accepted per account, model and UTC day) and `agent_operator_connection_residencies` (which revision a member's process started on). Only new tables; a turn names a provided connection in the existing `model_connection_id` columns. The previous release runs beside it. A downgrade refuses while any provided connection exists or any turn or waiting message names one ([A deployment can provide models](#a-deployment-can-provide-models)). |
+| `0117_connection_model_limit` | Raises `agent_model_connections_models_check` from eight model ids to sixteen, under the same constraint name and the table lock it takes first. No row is rewritten. The previous release runs beside it: it still refuses a seventeenth id in the application, and the wider check accepts the eight it already stored. A downgrade restores the eight-model check and fails while any connection lists more than eight. |
+| `0116_account_provisioning` | Adds `agent_account_provisioning` (one invitation-lifecycle row per account for the connected inference service) and `agent_account_provisioning_activation` (when provisioning was first enabled, so only later approvals are invited automatically). Nothing reads them before this release, so the previous release runs unchanged beside it. A downgrade drops both tables. |
 | `0115_mcp_retire_dead_locations` | Moves every MCP connection stored at `managed-worker` or `user-connector` to `sandbox`, with its launch, credentials and connector link unchanged; moves its `config_revision` and `authorization_epoch` on by one, as a location edit does; and clears a failing diagnosis (an `error` status becomes `draft`). It then narrows `agent_mcp_connections_location_check` to `remote` and `sandbox`, under the table lock it took first, so no removed value lands in between. No row is deleted. The previous release runs beside it, except that its writes of a removed location are refused. A downgrade restores the four-location constraint; moved rows stay `sandbox` ([MCP servers run in two places](#mcp-servers-run-in-two-places)). |
 | `0114_admin_audit_attribution` | Gives `agent_admin_audit_log` its attribution: `actor_type`, generated from `actor_id`, and `actor_label`, `target_type`, `target_id`, `target_label`, `subject_label`, `outcome`, `reason` and `correlation_id`, backfilled from the rows' own actions and details and the current account names; and two tables, `agent_admin_audit_outcomes` (a requested sandbox deletion's final result) and `agent_admin_audit_write_failures`. It deletes the Servers page's polling reads and connection checks, and turns the sandbox deletion worker's per-step rows into one result per request, deleting those rows; a worker row that names no request is kept. Adding the generated column rewrites the table under a brief lock. The previous release keeps writing and reading the original columns unchanged, and its rows are classified by the generated column. A downgrade drops the columns and the two tables; deleted rows are not restored, and the deletion steps remain in `agent_sandbox_events`. |
 | `0113_sandbox_incidents` | Makes sandbox incidents idempotent and tracks what each chat's agent was told: a unique index on `agent_sandbox_events (sandbox_id, details->>'incident_id')` for `incident.*` rows, and two tables, `agent_thread_incident_cursors` and `agent_attempt_incident_marks`. A trigger on `agent_thread_sandbox_memberships` starts a chat's cursor when it joins or moves sandbox, and every existing membership gets one. The previous release never reads them and no existing row has an `incident.*` type, so it runs unchanged beside it; its membership inserts only start cursors. A downgrade drops the triggers, the tables and the index; incident rows stay. |

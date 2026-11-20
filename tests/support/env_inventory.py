@@ -157,14 +157,10 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         "admin",
-        "Sandbox archives and database tools (MIGRATED_SETTINGS). A saved pgAdmin URL is "
+        "Database tools (MIGRATED_SETTINGS). A saved pgAdmin URL is "
         "proxied only when the deployment also names that service "
         "(AGENT_PGADMIN_URL/AGENT_PGADMIN_BOOTSTRAP_URL, read raw as the allowlist).",
         names=(
-            "AGENT_SANDBOX_ARCHIVE_S3_BUCKET",
-            "AGENT_SANDBOX_ARCHIVE_S3_REGION",
-            "AGENT_SANDBOX_ARCHIVE_S3_ENDPOINT",
-            "AGENT_SANDBOX_ARCHIVE_S3_PREFIX",
             "AGENT_PGADMIN_URL",
             "AGENT_PGADMIN_PUBLIC_URL",
         ),
@@ -372,6 +368,8 @@ FAMILIES: tuple[Family, ...] = (
             "AGENT_GITHUB_RELAY_BIND",
             "AGENT_GITHUB_RELAY_PORT",
             "AGENT_GITHUB_RELAY_TLS_DIR",
+            "AGENT_MODEL_RELAY_BIND",
+            "AGENT_MODEL_RELAY_PORT",
             "AGENT_WEB_BIND",
             "AGENT_WEB_PORT",
             "AGENT_NETWORK_NAME",
@@ -422,6 +420,8 @@ FAMILIES: tuple[Family, ...] = (
             "AGENT_MCP_HOSTNAME",
             "AGENT_SANDBOX_MCP_URL",
             "AGENT_SANDBOX_GITHUB_RELAY_CA_FILE",
+            "AGENT_MODEL_RELAY_HOSTNAME",
+            "AGENT_SANDBOX_MODEL_RELAY_URL",
             "AGENT_SHARED_LIVE_READY_FILE",
             "AGENT_RUNTIME_DOWNLOAD_NETWORK",
             "AGENT_REPO_CLONE_BASE_URL",
@@ -443,6 +443,7 @@ FAMILIES: tuple[Family, ...] = (
             "AGENT_MCP_TUNNEL_",
             "AGENT_CONTROL_PLANE_TUNNEL_",
             "AGENT_GITHUB_TUNNEL_",
+            "AGENT_MODEL_TUNNEL_",
         ),
     ),
     Family(
@@ -481,23 +482,13 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         "deployment",
-        "Image build inputs: pinned and extra Agent CLI versions, mirrors and tool versions.",
+        "Image build inputs: pinned Agent CLI versions, mirrors and tool versions.",
         names=(
             "CLAUDE_CODE_VERSION",
-            "CLAUDE_CODE_VERSIONS",
-            "CLAUDE_CODE_EXTRA_VERSIONS",
             "CODEX_VERSION",
-            "CODEX_VERSIONS",
-            "CODEX_EXTRA_VERSIONS",
             "KILO_VERSION",
-            "KILO_VERSIONS",
-            "KILO_EXTRA_VERSIONS",
             "OPENCODE_VERSION",
-            "OPENCODE_VERSIONS",
-            "OPENCODE_EXTRA_VERSIONS",
             "PI_VERSION",
-            "PI_VERSIONS",
-            "PI_EXTRA_VERSIONS",
             "DEBIAN_MIRROR",
             "PIP_DEFAULT_TIMEOUT",
             "UV_HTTP_TIMEOUT",
@@ -561,6 +552,8 @@ FAMILIES: tuple[Family, ...] = (
             "AGENT_COMPAT_UPSTREAM_KEY",
             "AGENT_COMPAT_MODEL",
             "AGENT_COMPAT_TOKEN",
+            "AGENT_COMPAT_REASONING_EFFORT",
+            "AGENT_COMPAT_UPSTREAM_RELAY",
             "AGENT_LIVE_SESSION_ID",
             "AGENT_LIVE_WORKDIR",
             "AGENT_MCP_SERVERS",
@@ -616,10 +609,12 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "internal",
         "Compose maps the operator's AGENT_*TUNNEL_* values onto the tunnel container's "
-        "own names; a deploy script hands its child a held lock.",
+        "own names, and marks the model relay's tunnel as one that may wait idle "
+        "(TUNNEL_OPTIONAL); a deploy script hands its child a held lock.",
         names=(
             "_KATA_RUNTIME_EPOCH_LOCK_FD",
             "TUNNEL_LISTEN_PORT",
+            "TUNNEL_OPTIONAL",
             "TUNNEL_REMOTE_HOST",
             "TUNNEL_REMOTE_PORT",
             "TUNNEL_REVERSE_BIND",
@@ -643,8 +638,10 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "platform",
         "Process, locale and Docker client variables defined by the OS, Docker or sshd; "
-        "read to start children or by an embedded remote script.",
+        "read to start children or by an embedded remote script. COMPOSE_PROJECT_NAME is "
+        "the project name Compose itself interpolates, naming the control-plane image.",
         names=(
+            "COMPOSE_PROJECT_NAME",
             "PATH",
             "HOME",
             "LANG",
@@ -657,21 +654,15 @@ FAMILIES: tuple[Family, ...] = (
             "DOCKER_CONFIG",
             "SSH_ORIGINAL_COMMAND",
             "NODE_ENV",
-            "COMPOSE_PROFILES",
         ),
     ),
     Family(
         "platform",
-        "Third-party images and SDKs: the AWS SDK's credential chain for sandbox archives, "
-        "and the PostgreSQL and pgAdmin images' own settings.",
+        "Third-party images' own settings: PostgreSQL's and pgAdmin's.",
         names=(
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-            "AWS_DEFAULT_REGION",
             "POSTGRES_DB",
             "POSTGRES_USER",
-            "POSTGRES_PASSWORD",
+            "POSTGRES_PASSWORD_FILE",
         ),
         prefixes=("PGADMIN_",),
     ),

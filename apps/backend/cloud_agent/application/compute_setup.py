@@ -44,6 +44,11 @@ if TYPE_CHECKING:
     from cloud_agent.schemas.compute import AutomaticDeploymentSetup, SetupMachine
 
 
+#: Where a Host's sandboxes reach the model relay: its model-tunnel's alias
+#: and listen port on the group bridges, the host Compose file's defaults.
+_SANDBOX_MODEL_RELAY_URL = "http://agent-models:8000"
+
+
 @dataclass(frozen=True)
 class HostRelease:
     """One build-produced archive shared by every route slot of this release."""
@@ -383,7 +388,7 @@ class AutomaticComputeSetup:
         }
         files = {}
         public_keys = {}
-        for role, prefix, machine, port, hosts in (
+        tunnels = [
             ("mcp", "AGENT_MCP_TUNNEL", request.control, endpoint.mcp_port, control_hosts),
             (
                 "control",
@@ -392,7 +397,15 @@ class AutomaticComputeSetup:
                 endpoint.main_port,
                 control_hosts,
             ),
-        ):
+        ]
+        if endpoint.model_port is not None:
+            # The model relay's tunnel: with it the Host advertises the model
+            # relay and runs turns on the models this deployment provides.
+            tunnels.append(
+                ("model", "AGENT_MODEL_TUNNEL", request.control, endpoint.model_port, control_hosts)
+            )
+            environment.update({"AGENT_SANDBOX_MODEL_RELAY_URL": _SANDBOX_MODEL_RELAY_URL})
+        for role, prefix, machine, port, hosts in tunnels:
             key = generate_tunnel_key()
             files[f".compute-secrets/{role}.key"] = key.private_key.get_secret_value()
             files[f".compute-secrets/{role}.known_hosts"] = hosts
@@ -427,7 +440,13 @@ class AutomaticComputeSetup:
 
     @staticmethod
     def _validate_endpoint(metadata: dict[str, Any], endpoint: ControlPlaneEndpoint) -> None:
-        if metadata.get("endpoint") != endpoint.model_dump(mode="json"):
+        current = endpoint.model_dump(mode="json")
+        saved = metadata.get("endpoint")
+        if isinstance(saved, dict) and "model_port" not in saved:
+            # Saved before Hosts were given the model relay's tunnel: its
+            # route is the API, MCP and reverse ports, which must not move.
+            current.pop("model_port")
+        if saved != current:
             raise ComputeRefusal(
                 "automatic_infrastructure_changed",
                 "The stable control-plane route changed. Prepare a new setup rather than changing saved deployment inputs.",
@@ -464,6 +483,7 @@ class AutomaticComputeSetup:
             if reverse_port in reserved or reverse_port in {
                 endpoint.main_port,
                 endpoint.mcp_port,
+                endpoint.model_port,
             }:
                 continue
             assets = self._assets(
@@ -595,6 +615,8 @@ class AutomaticComputeSetup:
         control_hosts = await self.resolver.resolve(control.known_hosts_ref or "")
         reserved = await self._reserved_ports(endpoint.gateway_ip)
         reserved.update({endpoint.main_port, endpoint.mcp_port})
+        if endpoint.model_port is not None:
+            reserved.add(endpoint.model_port)
         # A release that was published has its sandbox image in the registry.
         # Name it by the commit placeholder the bootstrap fills in, not by
         # this commit's digest: stored profiles advance with each release and
@@ -647,6 +669,9 @@ class AutomaticComputeSetup:
                 endpoint,
                 row["configuration"]["automatic_setup"]["reverse_port"],
                 row["id"],
+                # Absent from a setup saved before Hosts had the model relay's
+                # tunnel; its Hosts run without provided models.
+                keys.get("model"),
             )
         await self.repository.activate_automatic_profiles(
             profile_ids=[row["id"] for row in rows],

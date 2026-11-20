@@ -1,14 +1,20 @@
 import type { AgentConfigApi } from '@/lib/api/agents';
 import type { Translator } from '@/lib/i18n/translate';
+import { findSource, isProvidedId, ownConnections, providedSources } from './providedModels';
 
 // Where a model runs is part of the choice, not a detail of it.
 //
-// Each of the owner's connections is a separate source, and the same model id
-// may be offered by several of them: `gpt-5` on two keys bills two accounts.
-// So a choice is always the pair, and two choices are equal only when both
-// halves are. Drafts, requests and API state keep the two fields as they are;
-// the encoded key below exists only so a picker, which deals in strings, can
-// tell two same-named options apart.
+// Each of the owner's connections is a separate source, and so is each
+// connection the deployment provides. A model id is listed once: a save that
+// would put one on two of the owner's connections, or on two provided ones,
+// is refused, and a provided model the owner also has on their own connection
+// is not offered to them. Connections saved before that rule may still list
+// one id twice (`gpt-5` on two keys bills two accounts), so a choice is still
+// the pair, and two choices are equal only when both halves are; the label
+// names the source only then. Drafts,
+// requests and API state keep the two fields as they are; the encoded key
+// below exists only so a picker, which deals in strings, can tell two
+// same-named options apart.
 
 /** A model and the connection it runs on; null names no connection, so it cannot run. */
 export interface ModelChoice {
@@ -53,19 +59,25 @@ export function storedChoice(model: unknown, connectionId: unknown): ModelChoice
 }
 
 /**
- * What a runtime can run: each enabled connection's models this runtime can
- * run now. A model is offered only once its own
- * verification found a way for this agent to use it — exactly what the server
- * accepts — so nothing is offered and then refused on Run.
+ * Every model a runtime's picker lists: the provided sources' models first,
+ * then each of the owner's enabled connections', where this runtime can run
+ * them. A model is listed only once its own verification found a way for this
+ * agent to use it.
+ */
+export function listedChoices(config: AgentConfigApi | null, runtime: string): ModelChoice[] {
+  return [...providedSources(config), ...ownConnections(config)].flatMap((source) =>
+    source.models
+      .filter((model) => source.model_runtimes?.[model]?.includes(runtime))
+      .map((model) => ({ model, connectionId: source.id })),
+  );
+}
+
+/**
+ * What a runtime can run now: the listed models. Exactly what the server
+ * accepts, so nothing is offered and then refused on Run.
  */
 export function offeredChoices(config: AgentConfigApi | null, runtime: string): ModelChoice[] {
-  const connections =
-    config?.model_connections_enabled === false ? [] : (config?.model_connections ?? []);
-  return connections.flatMap((connection) =>
-    connection.models
-      .filter((model) => connection.model_runtimes?.[model]?.includes(runtime))
-      .map((model) => ({ model, connectionId: connection.id })),
-  );
+  return listedChoices(config, runtime);
 }
 
 /**
@@ -100,16 +112,33 @@ export interface LabelOptions {
   runtime?: string;
 }
 
-/** The connections that list a model, among the owner's enabled ones. */
+/** The sources that list a model: the owner's enabled connections and the provided ones. */
 function sourcesOf(config: AgentConfigApi | null, model: string): number {
-  return (config?.model_connections ?? []).filter((entry) => entry.models.includes(model)).length;
+  return [...(config?.provided_sources ?? []), ...(config?.model_connections ?? [])].filter(
+    (entry) => entry.models.includes(model),
+  ).length;
+}
+
+/** A choice's model, with its source's name where another source lists the same model. */
+function sourceLabel(config: AgentConfigApi | null, choice: ModelChoice, t: Translator): string {
+  const source = findSource(config, choice.connectionId);
+  if (!source) {
+    const provided = isProvidedId(choice.connectionId);
+    return t(provided ? 'modelSource.providedUnknown' : 'modelSource.personalUnknown', {
+      model: choice.model,
+    });
+  }
+  return sourcesOf(config, choice.model) > 1
+    ? t('modelSource.personal', { model: choice.model, name: source.name })
+    : choice.model;
 }
 
 /**
- * A choice's model, and its connection's name where another connection lists
- * the same model, so two sources of one name never read alike; one that
- * cannot run here says so. Which API the agent reaches it on is the
- * platform's business and is not part of the label.
+ * A choice's model, and its source's name where another source lists the same
+ * model, so two sources of one name never read alike; one that cannot run
+ * here says so. Which
+ * API the agent reaches it on is the platform's business and is not part of
+ * the label.
  */
 export function choiceLabel(
   config: AgentConfigApi | null,
@@ -118,12 +147,7 @@ export function choiceLabel(
   { unavailable = false }: LabelOptions = {},
 ): string {
   if (!choice.connectionId) return choice.model;
-  const connection = config?.model_connections?.find((entry) => entry.id === choice.connectionId);
-  const label = !connection
-    ? t('modelSource.personalUnknown', { model: choice.model })
-    : sourcesOf(config, choice.model) > 1
-      ? t('modelSource.personal', { model: choice.model, name: connection.name })
-      : choice.model;
+  const label = sourceLabel(config, choice, t);
   return unavailable ? t('modelSource.unavailable', { label }) : label;
 }
 
@@ -135,20 +159,21 @@ export interface ModelPickerProps {
 }
 
 /**
- * The props a `Picker` needs for these choices. `kept` is shown first when it
- * is not on offer — the turn a follow-up inherits, or a personal pick that can
- * no longer run — so the control never shows one thing while another runs.
+ * The props a `Picker` needs for these choices (`listedChoices`). `kept` is
+ * shown first when it is not listed — the turn a follow-up inherits, or a
+ * personal pick that can no longer run — so the control never shows one thing
+ * while another runs.
  */
 export function modelPicker(
   config: AgentConfigApi | null,
-  offered: ModelChoice[],
+  listed: ModelChoice[],
   current: ModelChoice,
   onChange: (choice: ModelChoice) => void,
   t: Translator,
   { kept = current, runtime }: { kept?: ModelChoice; runtime?: string } = {},
 ): ModelPickerProps {
-  const missing = kept.model && !offered.some((choice) => sameChoice(choice, kept));
-  const choices = missing ? [kept, ...offered] : offered;
+  const missing = kept.model && !listed.some((choice) => sameChoice(choice, kept));
+  const choices = missing ? [kept, ...listed] : listed;
   // A model offered once keys by its own name; one offered by several sources
   // keys by the pair, so the picker can tell them apart.
   const named = new Map<string, number>();
@@ -191,9 +216,9 @@ export function turnModelPicker(
   t: Translator,
   inherited: ModelChoice,
 ): ModelPickerProps | null {
-  const offered = offeredChoices(config, runtime);
-  if (!offered.length) return null;
-  return modelPicker(config, offered, current, onChange, t, {
+  const listed = listedChoices(config, runtime);
+  if (!listed.length) return null;
+  return modelPicker(config, listed, current, onChange, t, {
     kept: current.model ? current : inherited,
     runtime,
   });

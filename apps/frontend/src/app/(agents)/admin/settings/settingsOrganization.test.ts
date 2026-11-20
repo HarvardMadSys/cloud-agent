@@ -35,7 +35,6 @@ describe('application settings organization', () => {
     ['Execution', 'Compute'],
     ['MCP', 'MCP'],
     ['Appearance', 'Appearance'],
-    ['Sandbox archives', 'Sandbox archives'],
   ])('places registry category %s on %s', (category, expected) => {
     expect(applicationCategory(definition('future.setting', category))).toBe(expected);
     expect(applicationCategoryName(category)).toBe(expected);

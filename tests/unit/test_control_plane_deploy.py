@@ -24,6 +24,7 @@ rule, so the list of forbidden names has exactly one definition.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -78,20 +79,55 @@ def test_missing_migrated_secrets_allow_setup_without_using_a_public_default(
         operation()
 
 
-def test_the_database_is_required_and_the_service_owns_it(control_plane_env: dict) -> None:
+#: The services that read the deployment keys, and so wait for the `keys` service.
+KEY_READERS = ("migrate", "control-plane", "mcp-relay", "github-relay")
+
+
+def _waits_for_keys(compose: dict, service: str) -> bool:
+    """Whether ``service`` starts only after ``keys``, directly or through Postgres."""
+    depends = compose["services"][service].get("depends_on", {})
+    if depends.get("keys", {}).get("condition") == "service_completed_successfully":
+        return True
+    return any(_waits_for_keys(compose, name) for name in depends)
+
+
+def test_the_database_comes_from_the_keys_volume_never_a_default(compose: dict) -> None:
     """Defaulting the DSN points a fresh deployment at whatever is on
-    localhost, which in a co-located cutover is the gateway's own database."""
-    assert ":?" in control_plane_env["AGENT_DATABASE_URL"]
+    localhost, which in a co-located cutover is the gateway's own database.
+    Only the deployment's environment or its own keys volume supplies it."""
+    for service in KEY_READERS:
+        definition = compose["services"][service]
+        assert definition["environment"]["AGENT_DATABASE_URL"] == "${AGENT_DATABASE_URL:-}"
+        assert "agent-keys:/run/cloud-agent/keys:ro" in definition["volumes"]
+        assert _waits_for_keys(compose, service), service
 
 
-def test_both_listeners_require_the_account_key_and_no_gateway_setting(compose: dict) -> None:
-    """Both listeners read sessions; neither is handed anything of the removed Gateway."""
+def test_both_listeners_read_the_account_key_and_no_gateway_setting(compose: dict) -> None:
+    """Both listeners read sessions; neither is handed anything of the removed Gateway.
+    The key has no default: the keys volume supplies it where the environment does not."""
     for service in ("control-plane", "mcp-relay"):
         environment = compose["services"][service]["environment"]
-        assert environment["AGENT_LOCAL_SESSION_SECRET"].startswith(
-            "${AGENT_LOCAL_SESSION_SECRET:?"
-        )
+        assert environment["AGENT_LOCAL_SESSION_SECRET"] == "${AGENT_LOCAL_SESSION_SECRET:-}"
         assert not set(environment) & set(RETIRED_GATEWAY_VARIABLES)
+
+
+def test_the_keys_service_is_isolated_and_the_postgres_password_is_its_file(
+    compose: dict,
+) -> None:
+    """Root to give each key file to its reader, and nothing else."""
+    keys = compose["services"]["keys"]
+    assert keys["network_mode"] == "none"
+    assert keys["read_only"] is True
+    assert keys["cap_drop"] == ["ALL"]
+    assert sorted(keys["cap_add"]) == ["CHOWN", "DAC_READ_SEARCH"]
+    assert "agent-postgres:/run/cloud-agent/database:ro" in keys["volumes"]
+    assert "ports" not in keys
+    postgres = compose["services"]["postgres"]
+    assert "POSTGRES_PASSWORD" not in postgres["environment"]
+    assert postgres["environment"]["POSTGRES_PASSWORD_FILE"] == (
+        "/run/cloud-agent/keys/AGENT_POSTGRES_PASSWORD"
+    )
+    assert _waits_for_keys(compose, "postgres")
 
 
 def test_postgres_publishes_no_port(compose: dict) -> None:
@@ -163,6 +199,170 @@ def test_the_image_ships_the_migrations_it_is_told_to_run() -> None:
 def test_the_container_does_not_run_as_root() -> None:
     """It holds a git credential and a database connection."""
     assert re.search(r"^USER (?!root)", DOCKERFILE_PATH.read_text(), re.MULTILINE)
+
+
+#: The services that run the control-plane image `keys` builds.
+CONTROL_IMAGE_FOLLOWERS = ("migrate", "control-plane", "mcp-relay", "github-relay")
+
+
+def test_one_service_builds_the_control_plane_image_and_the_rest_run_it(compose: dict) -> None:
+    """Five builds of one Dockerfile are five images: Compose labels each with its
+    service. Automatic Server setup refuses an API and MCP relay that run
+    different images, so a source deployment could not add a server. `keys`
+    builds it because every follower waits for `keys`, so any `up` of one of them
+    builds it first; `pull_policy: never` keeps Compose from looking for a name
+    only this machine makes in a registry."""
+    services = compose["services"]
+    builders = [
+        name
+        for name, service in services.items()
+        if (service.get("build") or {}).get("dockerfile") == "deploy/control-plane/Dockerfile"
+    ]
+    assert builders == ["keys"]
+    image = services["keys"]["image"]
+    assert image == "${COMPOSE_PROJECT_NAME}-control-plane:${AGENT_DEPLOYMENT_SHA:-unknown}"
+    assert services["keys"]["build"]["args"]["SOURCE_COMMIT"] == "${AGENT_DEPLOYMENT_SHA:-unknown}"
+    for name in CONTROL_IMAGE_FOLLOWERS:
+        service = services[name]
+        assert "build" not in service, name
+        assert service["image"] == image, name
+        assert service["pull_policy"] == "never", name
+        assert _waits_for_keys(compose, name), name
+
+
+def _resolved_images(project: str) -> dict[str, str]:
+    docker = shutil.which("docker")
+    if not docker or subprocess.run([docker, "compose", "version"], capture_output=True).returncode:
+        pytest.skip("Docker Compose CLI is needed for its actual interpolation")
+    rendered = subprocess.run(
+        [
+            *(docker, "compose", "-p", project, "-f", str(COMPOSE_PATH)),
+            *("--profile", "github-relay", "config", "--format", "json"),
+        ],
+        env={"PATH": os.environ["PATH"], "AGENT_DEPLOYMENT_SHA": "0" * 40},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    services = json.loads(rendered.stdout)["services"]
+    return {name: services[name]["image"] for name in ("keys", *CONTROL_IMAGE_FOLLOWERS)}
+
+
+def test_compose_resolves_every_control_plane_service_to_one_image_per_project() -> None:
+    """What setup compares is the running containers' image, so check what
+    Compose itself resolves: one name for all five, and another project's own."""
+    images = _resolved_images("one-image-a")
+    assert set(images.values()) == {"one-image-a-control-plane:" + "0" * 40}
+    assert set(_resolved_images("one-image-b").values()) == {
+        "one-image-b-control-plane:" + "0" * 40
+    }
+
+
+def _rendered_services(environment: dict[str, str]) -> dict:
+    docker = shutil.which("docker")
+    if not docker or subprocess.run([docker, "compose", "version"], capture_output=True).returncode:
+        pytest.skip("Docker Compose CLI is needed for its actual interpolation")
+    rendered = subprocess.run(
+        [
+            *(docker, "compose", "-p", "bundled-database", "-f", str(COMPOSE_PATH)),
+            *("--profile", "pgadmin", "config", "--format", "json"),
+        ],
+        env={"PATH": os.environ["PATH"], "AGENT_DEPLOYMENT_SHA": "0" * 40, **environment},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(rendered.stdout)["services"]
+
+
+@pytest.mark.parametrize("named", ["", "cloudagent_accounts"])
+def test_everything_that_opens_the_bundled_database_opens_the_one_named(named: str) -> None:
+    """One setting, `AGENT_POSTGRES_DB`, rather than a literal in each place.
+
+    A deployment that moved `AGENT_DATABASE_URL` to another database on the
+    bundled server (the independent-accounts cutover's new one) sets it to that
+    database; a new installation leaves it unset and gets `cloudagent` for both.
+    """
+    services = _rendered_services({"AGENT_POSTGRES_DB": named} if named else {})
+
+    database = named or "cloudagent"
+    assert services["postgres"]["environment"]["POSTGRES_DB"] == database
+    assert services["postgres"]["healthcheck"]["test"] == [
+        "CMD-SHELL",
+        f"pg_isready -U cloudagent -d {database}",
+    ]
+    # The new installation's generated connection, and pgAdmin's bundled server.
+    assert services["keys"]["environment"]["AGENT_POSTGRES_DB"] == database
+    assert services["pgadmin"]["environment"]["AGENT_POSTGRES_DB"] == database
+
+
+#: Pages an operator copies database commands from. Records under docs/agents
+#: keep the commands they were written with.
+OPERATOR_DOCS = (
+    REPO_ROOT / "ENVIRONMENT.md",
+    REPO_ROOT / "README.md",
+    *sorted((REPO_ROOT / "docs" / "developer").rglob("*.md")),
+    *sorted((REPO_ROOT / "deploy").rglob("*.md")),
+)
+_DATABASE_TOOL = re.compile(r"\b(?:psql|pg_dump|pg_restore|pg_isready)\b")
+#: The name on its own: not `cloudagent-postgres-1` or `cloudagent-undrain-*.sql`.
+_LITERAL_DATABASE = re.compile(r"(?<![\w-])cloudagent(?![\w-])")
+
+
+def _documented_commands(text: str) -> list[str]:
+    """Each command in the fenced code blocks, its continuation lines joined."""
+    commands, current, fenced = [], "", False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced, current = not fenced, ""
+            continue
+        if not fenced:
+            continue
+        current += line.strip()
+        if current.endswith("\\"):
+            current = current[:-1].rstrip() + " "
+            continue
+        commands.append(current)
+        current = ""
+    return commands
+
+
+def test_documented_database_commands_open_the_one_agent_postgres_db_names() -> None:
+    """`-d cloudagent` is the deployment's database only until it moves.
+
+    After the independent-accounts cutover the old `cloudagent` database stays
+    on the bundled server as the archive, so a command naming it counts, drains
+    and dumps the archive while reporting success. The Postgres container's own
+    `POSTGRES_DB` and `POSTGRES_USER` are what `AGENT_POSTGRES_DB` and
+    `AGENT_POSTGRES_USER` set.
+    """
+    offenders = [
+        f"{path.relative_to(REPO_ROOT)}: {command}"
+        for path in OPERATOR_DOCS
+        for command in _documented_commands(path.read_text())
+        if _DATABASE_TOOL.search(command) and _LITERAL_DATABASE.search(command)
+    ]
+    assert not offenders, offenders
+
+
+def test_a_command_naming_the_database_is_found_across_its_continuation_lines() -> None:
+    text = (
+        "```bash\n"
+        'docker exec cloudagent-postgres-1 psql -U "$POSTGRES_USER" \\\n'
+        "  -d cloudagent -Atc 'SELECT 1'\n"
+        "docker exec -i cloudagent-postgres-1 psql < cloudagent-undrain-x.sql\n"
+        "```\n"
+    )
+
+    found = [
+        command
+        for command in _documented_commands(text)
+        if _DATABASE_TOOL.search(command) and _LITERAL_DATABASE.search(command)
+    ]
+
+    assert found == [
+        "docker exec cloudagent-postgres-1 psql -U \"$POSTGRES_USER\" -d cloudagent -Atc 'SELECT 1'"
+    ]
 
 
 def test_the_compose_only_sets_variables_the_code_reads(control_plane_env: dict) -> None:

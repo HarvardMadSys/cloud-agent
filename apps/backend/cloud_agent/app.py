@@ -1,4 +1,4 @@
-"""Assemble the public API and the separate MCP-only listener.
+"""Assemble the public API and the separate sandbox-facing listeners.
 
 Bootstrap owns resources, background workers, and shutdown. This module mounts
 HTTP surfaces and installs shared exception and response policies. The MCP
@@ -21,6 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, PlainTextResponse
 
+from cloud_agent.api._database_unavailable import DatabaseUnavailableGuard
 from cloud_agent.api._parameters import refuse_unstorable_parameters
 from cloud_agent.api._sensitive_routes import no_store
 from cloud_agent.api.errors import install_domain_errors
@@ -253,6 +254,7 @@ def create_app() -> FastAPI:
         admin_database_browser,
         admin_hosts,
         admin_measurements,
+        admin_operator_models,
         admin_profiling_control,
         admin_runs,
         admin_runtime_upgrades,
@@ -302,6 +304,10 @@ def create_app() -> FastAPI:
     # admits it from any page on the same site. Machine callers send bearers
     # and pass untouched; see the module for the exact rule.
     app.add_middleware(_cross_site.CrossSiteWriteGuard)
+    # Outermost, so it sees what every route and the guard above let escape:
+    # the database out of reach (a restart, a pooled connection the server
+    # just ended) is a 503 with Retry-After rather than the catch-all's 500.
+    app.add_middleware(DatabaseUnavailableGuard)
     app.include_router(routes.router)
     app.include_router(usage.router)
     app.include_router(owner_usage.router)
@@ -342,6 +348,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_runs.router)
     app.include_router(admin_sandboxes.router)
     app.include_router(admin_settings.router)
+    app.include_router(admin_operator_models.router)
     app.include_router(admin_usage.router)
     app.include_router(admin_measurements.router)
     # Start/Stop for the same feature, in its own module so the write path's
@@ -437,6 +444,8 @@ def create_mcp_app() -> FastAPI:
         **_NO_DOCS,
     )
     app.include_router(mcp_relay.router)
+    # A tool call that meets a database restart is one for the agent to retry.
+    app.add_middleware(DatabaseUnavailableGuard)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -474,4 +483,56 @@ def create_github_relay_app() -> FastAPI:
         **_NO_DOCS,
     )
     app.include_router(github_relay.router)
+    # git and gh are answered in the relay's own refusal shape.
+    app.add_middleware(DatabaseUnavailableGuard, answer=github_relay.database_unavailable_response)
+    return app
+
+
+def create_model_relay_app() -> FastAPI:
+    """Build a listener that serves the model relay and nothing else.
+
+    The fourth listener, and the third a sandbox reaches, separate for the
+    reason the other two are: a sandbox's model tunnel ends here, and this
+    application contains the model relay's one catch-all route and a health
+    check. An ``amd.`` placeholder is accepted nowhere else, and this listener
+    accepts no other credential: not an owner's session, not a worker's
+    token, not the MCP or GitHub relay's.
+
+    It forwards to the connections an administrator configured, with the
+    deployment's key, so its upstream client is its own: pinned to addresses
+    checked as public, reading no proxy from the environment, following no
+    redirect and keeping no cookies.
+    """
+    from contextlib import asynccontextmanager
+
+    configure_process_logging()
+
+    from cloud_agent.api import model_relay
+
+    @asynccontextmanager
+    async def relay_lifespan(app: FastAPI) -> Any:
+        # No reaper and no maintenance loops, as for the other relays.
+        async with lifespan(app, background=False), model_relay.relay_client() as client:
+            app.state.model_relay_http = client
+            try:
+                yield
+            finally:
+                # While the database is still open: a charge not written yet
+                # gets one last try before the process goes.
+                await model_relay.close_pending()
+
+    app = FastAPI(
+        title="Cloud Agent — model relay",
+        description="A provided model, for the turn that runs on it",
+        version="0.1.0",
+        lifespan=relay_lifespan,
+        **_NO_DOCS,
+    )
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        """Liveness, so the tunnel's health check has something to ask."""
+        return {"status": "ok"}
+
+    app.include_router(model_relay.router)
     return app

@@ -59,6 +59,7 @@ def test_the_host_pool_repository_keeps_its_methods() -> None:
         "runner_pool",
         "runtime_download_targets",
         "runtime_upgrade_snapshot",
+        "sandbox_archive_policy",
         "sandbox_archive_settings",
         "set_active_runner_host",
         "set_host_settings",

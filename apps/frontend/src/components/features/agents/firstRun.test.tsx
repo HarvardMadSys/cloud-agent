@@ -12,7 +12,10 @@ import {
   type AgentJobApi,
 } from '@/lib/api/agents';
 
-import { FirstRunProvider, useFirstRun } from './firstRun';
+import { providedSource } from '@/test/connectionConfig';
+
+import { MODEL_CONNECTIONS_CHANGED } from './composer/modelConnectionEvents';
+import { FirstRunProvider, firstRunSteps, useFirstRun } from './firstRun';
 
 const nav = vi.hoisted(() => ({ pathname: '/' }));
 
@@ -208,6 +211,63 @@ describe('FirstRunProvider', () => {
     expect(screen.getByTestId('row')).toHaveTextContent('{"hidden":false,"next":null}');
   });
 
+  it('puts the model connection first: nothing runs without one', async () => {
+    vi.mocked(listAgentConversations).mockResolvedValue(page([]));
+    vi.mocked(getAgentConfig).mockResolvedValue(
+      config({ model_connections_enabled: true, model_connection_required: true }),
+    );
+
+    render(app());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('page')).toHaveTextContent(
+        '"step":{"next":"model","done":0,"total":4}',
+      ),
+    );
+  });
+
+  it('counts a model the deployment provides as the model connection', async () => {
+    vi.mocked(listAgentConversations).mockResolvedValue(page([]));
+    // No connection of the owner's own: the provided model is what runs.
+    vi.mocked(getAgentConfig).mockResolvedValue(
+      config({
+        model_connections_enabled: true,
+        model_connection_required: false,
+        model_connections: [],
+        provided_sources: [providedSource(['house-fast'])],
+      }),
+    );
+
+    render(app());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('page')).toHaveTextContent(
+        '"step":{"next":"connect","done":1,"total":4}',
+      ),
+    );
+  });
+
+  it('finishes the model step when a connection is saved, without a page change', async () => {
+    vi.mocked(listAgentConversations).mockResolvedValue(page([]));
+    vi.mocked(getAgentConfig).mockResolvedValue(
+      config({ model_connections_enabled: true, model_connection_required: true }),
+    );
+    render(app());
+    await waitFor(() => expect(screen.getByTestId('page')).toHaveTextContent('"next":"model"'));
+
+    vi.mocked(getAgentConfig).mockResolvedValue(
+      config({ model_connections_enabled: true, model_connection_required: false }),
+    );
+    window.dispatchEvent(new Event(MODEL_CONNECTIONS_CHANGED));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('page')).toHaveTextContent(
+        '"step":{"next":"connect","done":1,"total":4}',
+      ),
+    );
+    expect(getAgentConfig).toHaveBeenCalledTimes(2);
+  });
+
   it('tells nothing to anyone while the first answer is out', async () => {
     vi.mocked(listAgentConversations).mockReturnValue(new Promise(() => {}));
 
@@ -217,5 +277,65 @@ describe('FirstRunProvider', () => {
     expect(screen.getByTestId('page')).toHaveTextContent(
       '{"newcomer":false,"onlyThreadId":null,"step":null}',
     );
+  });
+});
+
+describe('firstRunSteps', () => {
+  const ids = (overrides: Partial<AgentConfigApi>) =>
+    firstRunSteps(config(overrides)).map(({ id, done }) => `${id}${done ? ' (done)' : ''}`);
+
+  it('lists GitHub and the first task where model connections are not offered', () => {
+    expect(ids({})).toEqual(['connect', 'repository', 'task']);
+    expect(ids({ model_connections_enabled: false, model_connection_required: true })).toEqual([
+      'connect',
+      'repository',
+      'task',
+    ]);
+  });
+
+  it('leaves out the GitHub steps nobody can take here', () => {
+    const model = { model_connections_enabled: true, model_connection_required: true };
+    expect(ids({ ...model, github_install_url: null })).toEqual(['model', 'task']);
+    expect(ids({ ...model, github_load_status: 'unavailable' })).toEqual(['model', 'task']);
+  });
+
+  it('has nothing to set up without a model step or GitHub', () => {
+    expect(ids({ github_install_url: null })).toEqual([]);
+  });
+
+  it('puts the model step behind an owner with only a provided model', () => {
+    const provided = [providedSource(['house-fast'])];
+    expect(
+      ids({ model_connections_enabled: true, model_connections: [], provided_sources: provided }),
+    ).toEqual(['model (done)', 'connect', 'repository', 'task']);
+    // A provided model that can run is enough, whatever else an answer says.
+    expect(
+      ids({
+        model_connections_enabled: true,
+        model_connection_required: true,
+        provided_sources: provided,
+      }),
+    ).toEqual(['model (done)', 'connect', 'repository', 'task']);
+  });
+
+  it('still asks for a connection where the provided source offers this owner nothing', () => {
+    expect(
+      ids({
+        model_connections_enabled: true,
+        model_connection_required: true,
+        provided_sources: [providedSource([])],
+      }),
+    ).toEqual(['model', 'connect', 'repository', 'task']);
+  });
+
+  it('marks each step behind the owner as done', () => {
+    expect(
+      ids({
+        model_connections_enabled: true,
+        model_connection_required: false,
+        github_connected: true,
+        repos: ['owner/repository'],
+      }),
+    ).toEqual(['model (done)', 'connect (done)', 'repository (done)', 'task']);
   });
 });

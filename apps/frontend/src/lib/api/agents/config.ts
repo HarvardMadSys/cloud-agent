@@ -17,6 +17,37 @@ export interface ModelConnectionOptionApi {
    * verified, or no agent can use it.
    */
   model_runtimes: Record<string, string[]>;
+  /**
+   * For each model in `model_runtimes`, per agent: the reasoning levels a task
+   * may pick besides Auto, and whether the provider declared them. Absent on a
+   * control plane that predates it, which offers Auto alone.
+   */
+  model_efforts?: Record<string, Record<string, ModelEffortOfferApi>>;
+}
+
+/**
+ * A connection the deployment provides to every admitted owner (`oconn_…`),
+ * as a composer offers it: the same shape as an owner's own connection. Only
+ * the models an agent can use are listed, in the order the provider lists
+ * them, and every owner is offered the same.
+ */
+export type ProvidedModelSourceApi = ModelConnectionOptionApi;
+
+/**
+ * What the model's provider declared for the API one agent's turn calls.
+ * `supported`: `levels` are the declared ones that agent can send, weakest
+ * first. `unsupported`: none (declared, or none the agent can send).
+ * `unknown`: the provider did not say. Auto is always available besides.
+ */
+export interface ModelEffortOfferApi {
+  status: 'supported' | 'unsupported' | 'unknown';
+  levels: string[];
+  /**
+   * `not_read`, `listing_unavailable`, `not_listed`, `not_declared`,
+   * `conflicting_declarations`, `agent_cannot_express`.
+   */
+  reason?: string;
+  source?: string;
 }
 
 export interface AgentConfigApi {
@@ -43,13 +74,23 @@ export interface AgentConfigApi {
    * until the owner chooses, rather than picking the first model in the list.
    */
   default_model?: string | null;
-  /** The owner's connection `default_model` ran on. */
+  /** The source `default_model` ran on: the owner's connection or a provided one. */
   default_model_connection_id?: string | null;
   /** This owner's enabled model connections. Absent before the feature. */
   model_connections?: ModelConnectionOptionApi[];
+  /**
+   * Connections this deployment provides, each with this owner's daily budget
+   * on its models and what they spent of it today. A model chosen from one is
+   * submitted with the source's id as `model_connection_id`. Absent on a
+   * control plane that predates them.
+   */
+  provided_sources?: ProvidedModelSourceApi[];
   /** Whether this deployment lets owners add and run on their own connections. */
   model_connections_enabled?: boolean;
-  /** No enabled connection can run anything yet; setup is gated separately. */
+  /**
+   * Neither an enabled connection of the owner's nor a provided one can run
+   * anything yet; setup is gated separately.
+   */
   model_connection_required?: boolean;
   /**
    * Whether this user has done what the deployment asks before choosing a

@@ -19,15 +19,6 @@ const snapshot: AgentAdminSettings = {
       secret: true,
     },
     {
-      key: 'sandbox_archive.endpoint',
-      label: 'Archive endpoint',
-      description: 'S3-compatible service URL.',
-      category: 'Sandbox archives',
-      kind: 'string',
-      default: '',
-      secret: false,
-    },
-    {
       key: 'runtime_registry_url',
       label: 'Agent package registry',
       description: 'The npm registry agent versions come from.',
@@ -115,19 +106,12 @@ describe('settings search', () => {
     ]);
   });
 
-  it('keeps new definitions searchable and routes archive storage into Sandbox', () => {
+  it('keeps new definitions searchable', () => {
     const catalog = items();
     expect(searchSettingsItems(catalog, 'newly introduced')).toEqual([
       expect.objectContaining({
         applicationKey: 'future.setting',
         tab: 'application-Future%20%2F%20category%20%E2%9C%93',
-      }),
-    ]);
-    expect(searchSettingsItems(catalog, 'sandbox_archive endpoint')).toEqual([
-      expect.objectContaining({
-        tab: 'sandbox',
-        section: 'Sandbox',
-        targetId: 'application-setting-sandbox_archive.endpoint',
       }),
     ]);
   });

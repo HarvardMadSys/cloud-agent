@@ -22,7 +22,9 @@ argv refuses the launch), and every ``AGENT_COMPAT_*`` variable, the upstream
 key among them, is removed from its environment.
 
 The service is bound at launch to one client protocol, one upstream URL, one
-key and one model; a request cannot choose any of them. It answers only the
+key, one model and the turn's reasoning level (none at Auto); a request cannot
+choose any of them. At a level, every upstream request carries it as
+``reasoning_effort``; the CLI's own effort field is never forwarded. It answers only the
 client's own endpoint, and only to a caller presenting the member's token
 (issued by the control plane for this member alone): other members of the
 group share the loopback interface, so the address alone protects nothing,
@@ -78,14 +80,18 @@ from cloud_agent_shared.protocol_compat import (
     CLIENTS,
     ENV_CLIENT,
     ENV_MODEL,
+    ENV_REASONING_EFFORT,
     ENV_TOKEN,
     ENV_UPSTREAM_KEY,
+    ENV_UPSTREAM_RELAY,
     ENV_UPSTREAM_URL,
     LAUNCH_ENV,
     ORIGIN_PLACEHOLDER,
     PASSTHROUGH,
     RESPONSES,
     TOKEN_PLACEHOLDER,
+    upstream_port,
+    upstream_scheme,
 )
 from cloud_agent_shared.protocol_compat.gate import CompatRejected, prepare
 from cloud_agent_shared.protocol_compat.stream import ClientStream, client_error, client_response
@@ -98,6 +104,8 @@ if TYPE_CHECKING:
 
 #: A token shorter than this is not one the control plane issued.
 MIN_TOKEN_CHARS = 32
+#: A reasoning level is a short word (``low``, ``xhigh``…).
+MAX_EFFORT_CHARS = 16
 
 #: The one path each client protocol is served at.
 CLIENT_PATHS = {RESPONSES: "/v1/responses", ANTHROPIC_MESSAGES: "/v1/messages"}
@@ -121,6 +129,9 @@ _PYTHON_IGNORED = (signal.SIGPIPE, signal.SIGXFSZ)
 #: ``HTTPSConnection`` with the system trust store; only in-process test code
 #: replaces this, never a launch variable or a request.
 UPSTREAM_CONNECTION: Callable[..., http.client.HTTPConnection] = http.client.HTTPSConnection
+#: How the service reaches the host's model relay, the one upstream it speaks
+#: to in the clear. Replaced only by in-process test code, like the above.
+RELAY_CONNECTION: Callable[..., http.client.HTTPConnection] = http.client.HTTPConnection
 
 
 class LaunchError(Exception):
@@ -138,6 +149,11 @@ class Binding:
     model: str
     api_key: str = field(repr=False)
     token: str = field(repr=False)
+    #: The turn's level, checked by the control plane; empty is Auto.
+    reasoning_effort: str = ""
+    #: False only when the upstream is the host's model relay, reached in the
+    #: clear on the group's own bridge; ``api_key`` is then a placeholder.
+    tls: bool = True
 
     @classmethod
     def from_launch(cls, env: MutableMapping[str, str], argv: list[str]) -> Binding:
@@ -149,17 +165,25 @@ class Binding:
             raise LaunchError("incomplete model protocol compatibility launch")
         if any(TOKEN_PLACEHOLDER in arg for arg in argv):
             raise LaunchError("a token never goes in a process argument")
+        effort = values[ENV_REASONING_EFFORT]
+        if effort and not (
+            len(effort) <= MAX_EFFORT_CHARS and effort.isascii() and effort.isalpha()
+        ):
+            raise LaunchError("a reasoning level is one plain word")
         parts = urlsplit(url)
-        if parts.scheme != "https" or not parts.hostname or parts.query or parts.fragment:
-            raise LaunchError("the upstream must be a plain https URL")
+        scheme = upstream_scheme(values[ENV_UPSTREAM_RELAY], parts.scheme)
+        if not scheme or not parts.hostname or parts.query or parts.fragment:
+            raise LaunchError("the upstream must be a plain https URL, or the host's model relay")
         return cls(
             client=client,
             host=parts.hostname,
-            port=parts.port or 443,
+            port=upstream_port(scheme, parts.port),
+            tls=scheme == "https",
             path=parts.path.rstrip("/") + "/chat/completions",
             model=model,
             api_key=key,
             token=token,
+            reasoning_effort=effort,
         )
 
 
@@ -383,7 +407,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             body = self._read_body()
-            prepared = prepare(binding.client, body, binding.model)
+            prepared = prepare(binding.client, body, binding.model, binding.reasoning_effort)
         except CompatRejected as rejected:
             _log(f"refused a request ({rejected.status})")
             self._error(rejected.status, rejected.message)
@@ -407,8 +431,12 @@ class _Handler(BaseHTTPRequestHandler):
     def _relay(self, chat: dict[str, Any], body: dict[str, Any], names: ToolNames | None) -> None:
         binding = self.server.binding
         streaming = bool(chat.get("stream"))
-        connection = UPSTREAM_CONNECTION(
-            binding.host, binding.port, timeout=CONNECT_TIMEOUT_S, context=self.server.tls
+        connection = (
+            UPSTREAM_CONNECTION(
+                binding.host, binding.port, timeout=CONNECT_TIMEOUT_S, context=self.server.tls
+            )
+            if binding.tls
+            else RELAY_CONNECTION(binding.host, binding.port, timeout=CONNECT_TIMEOUT_S)
         )
         done = threading.Event()
         upstream_socket: socket.socket | None = None
@@ -690,7 +718,7 @@ def _launch_passthrough(argv: list[str], env: dict[str, str]) -> NoReturn:
         origin = _start_service(lambda sock: model_passthrough.server(sock, binding))
     except OSError:
         _log("the request meter could not start; the CLI reaches its provider directly")
-        _exec_cli(argv, env, {marked: f"https://{binding.authority}"})
+        _exec_cli(argv, env, {marked: binding.origin})
     _exec_cli(argv, env, {ORIGIN_PLACEHOLDER: origin})
 
 

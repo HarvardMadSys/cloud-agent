@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: HybridInference Cloud Agent \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-05 21:50-0500\n"
+"POT-Creation-Date: 2026-11-14 09:07-0500\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: The HybridInference contributors\n"
 "Language: zh_CN\n"
@@ -555,8 +555,8 @@ msgid ""
 "qualification; those remain part of the wider hosted CI gate."
 msgstr ""
 "每次运行都会把日志存进一个新建的 `.local-ci/<tier>.XXXXXX` 目录，这个目录已被 git 忽略。想换输出位置，就设置 "
-"`CI_LOG_DIR`。本地检查不包括外部回归测试、滚动升级、混合版本的协议检查、Gitleaks、Docker 发布镜像构建和 Kata 资格验证，这些仍由托管 "
-"CI 负责。"
+"`CI_LOG_DIR`。本地检查不包括外部回归测试、滚动升级、混合版本的协议检查、Gitleaks、Docker 发布镜像构建和 Kata "
+"资格验证，这些仍由托管 CI 负责。"
 
 #: ../developer/development.md:192
 msgid ""
@@ -741,20 +741,32 @@ msgstr ""
 "`tests/conftest.py`），所以你 shell 里的设置不会改变 `make check` 的结果。"
 
 #: ../developer/development.md:293
+msgid ""
+"Outside the `external` and `dbtest` tiers, a host name that no resolver "
+"answers fails at once without a DNS lookup, as it does on CI. Such a name"
+" is one under `.test`, `.invalid` or `.example`, or a single label other "
+"than `localhost`. A slow local resolver therefore cannot stretch `make "
+"check`. Use such a name for a host a test only pretends to reach."
+msgstr ""
+"除了 `external` 和 `dbtest` 这两层，凡是任何解析器都不会应答的主机名，都会和 CI 上一样立即失败，"
+"不会真的去查 DNS。这类名字指 `.test`、`.invalid` 或 `.example` 下的名字，以及 `localhost` "
+"之外的单段名字。所以本机 DNS 再慢，也拖不长 `make check`。测试里只是假装要连的主机，就用这类名字。"
+
+#: ../developer/development.md:299
 msgid "For a frontend change, run these checks from the repository root:"
 msgstr "改了前端，就在仓库根目录运行下面这些检查："
 
-#: ../developer/development.md:304
+#: ../developer/development.md:310
 msgid ""
 "CI also runs the following build guards. Run the relevant one locally "
 "when you change server-only imports or runtime site configuration:"
 msgstr "CI 还会跑下面两个构建守卫。如果你改了 server-only 导入或运行时站点配置，在本地跑对应的那个："
 
-#: ../developer/development.md:312
+#: ../developer/development.md:318
 msgid "Browser recovery regressions run the production Next.js app in Chromium:"
 msgstr "浏览器恢复的回归测试会在 Chromium 里跑生产构建的 Next.js 应用："
 
-#: ../developer/development.md:319
+#: ../developer/development.md:325
 msgid ""
 "Run these in an isolated checkout on the test host with Node 22. "
 "Chromium's system libraries must be provisioned there; this command does "
@@ -768,7 +780,7 @@ msgstr ""
 " `PLAYWRIGHT_BROWSERS_PATH` 把浏览器下载到这份副本里用完即删的测试目录。测试运行器会构建根路径的 Web "
 "变体，自己分配回环端口，跑完后关掉它起的服务器。不要同时对同一个 `.next` 目录再跑一次构建。"
 
-#: ../developer/development.md:326
+#: ../developer/development.md:332
 msgid ""
 "The tests use real page navigation, browser offline mode, and failed "
 "JavaScript chunk downloads. A separate HTTP fixture supplies explicit API"
@@ -783,7 +795,7 @@ msgstr ""
 "请求，整个测试套件直接失败。这些测试覆盖的是浏览器端的恢复，以及客户端和 API 之间的交互；Python "
 "控制平面、数据库、身份认证服务和沙箱主机都不在范围内，它们仍然要靠各自的集成测试和 staging 检查。"
 
-#: ../developer/development.md:333
+#: ../developer/development.md:339
 msgid ""
 "Chromium aborts requests still waiting for a connection with "
 "`net::ERR_NETWORK_CHANGED` whenever the host's network addresses change, "
@@ -798,7 +810,7 @@ msgstr ""
 "flaky。其他原因导致的失败，重试会直接失败，所以这类失败照样会让整个测试套件失败（`apps/frontend/e2e/network-"
 "change.ts`）。"
 
-#: ../developer/development.md:340
+#: ../developer/development.md:346
 msgid ""
 "Failures retain screenshots and Playwright traces in `apps/frontend/test-"
 "results/` and an HTML report in `apps/frontend/playwright-report/`; CI "
@@ -811,7 +823,7 @@ msgstr ""
 "会把两者都上传。根路径构建成功之后，如果只是在改测试桩或测试用例，可以用 `CLOUD_AGENT_E2E_SKIP_BUILD=1 npm "
 "run test:browser` 反复跑；改了应用代码就要重新构建。"
 
-#: ../developer/development.md:345
+#: ../developer/development.md:351
 msgid ""
 "The `make ci-frontend` target runs the checks above, including browser "
 "recovery. Hosted CI also builds and smoke-tests the web image when image "
@@ -822,11 +834,11 @@ msgstr ""
 "镜像并做冒烟测试。完整的 CI 检查见 [CONTRIBUTING.md](../../CONTRIBUTING.md#continuous-"
 "integration)。"
 
-#: ../developer/development.md:350
+#: ../developer/development.md:356
 msgid "Changing an API"
 msgstr "修改 API"
 
-#: ../developer/development.md:352
+#: ../developer/development.md:358
 msgid ""
 "`apps/backend/openapi.json` records the API this service publishes, and "
 "the web client's contract tests check its requests against it. An "
@@ -836,11 +848,11 @@ msgstr ""
 "`apps/backend/openapi.json` 记录本服务发布的 API，Web 客户端的契约测试用它来检查请求。有意的 API "
 "改动必须在同一个 PR 中提交经过审查的快照更新。"
 
-#: ../developer/development.md:356
+#: ../developer/development.md:362
 msgid "Regenerate the control-plane snapshot from the repository root:"
 msgstr "在仓库根目录重新生成控制平面的快照："
 
-#: ../developer/development.md:374
+#: ../developer/development.md:380
 msgid ""
 "Review the generated diff and explain any compatibility implications. The"
 " surface tests also reject duplicate registrations and overlaps between "
@@ -851,11 +863,11 @@ msgstr ""
 "审查生成的差异，并说明任何兼容性影响。接口测试还会拒绝重复注册以及 agent "
 "各路由之间的重叠。快照更新只是记录变化；是否兼容由行为测试和审查来确定。[契约说明](api-contracts.md)给出了一行重新生成命令。"
 
-#: ../developer/development.md:381
+#: ../developer/development.md:387
 msgid "Packaging and documentation"
 msgstr "打包与文档"
 
-#: ../developer/development.md:383
+#: ../developer/development.md:389
 msgid ""
 "When adding or moving a package, review package discovery in "
 "`pyproject.toml`, mypy and linter roots, Docker `COPY` paths, and the "
@@ -869,7 +881,7 @@ msgstr ""
 "里的路径分类器。还要确认构建出来的镜像带齐了依赖：本地仓库里能导入，并不能说明镜像里也能。CI 会构建并启动部分镜像，分类器的测试会根据 "
 "Dockerfile 推出共用包的路径。"
 
-#: ../developer/development.md:390
+#: ../developer/development.md:396
 msgid ""
 "Schema changes use explicit additive Alembic revisions. The current chain"
 " starts at `apps/backend/migrations/versions/0001_schema_baseline.py`; "
@@ -883,7 +895,7 @@ msgstr ""
 "schema。没有用于自动生成的 SQLAlchemy 模型元数据。独立账号版本之前的数据库只归档、不升级；见[切换说明](upgrade-"
 "notes.md#independent-accounts-cutover)。"
 
-#: ../developer/development.md:396
+#: ../developer/development.md:402
 msgid ""
 "Update the guide that owns any changed configuration, command, or "
 "behavior:"
@@ -937,7 +949,7 @@ msgstr "发布产物与验证"
 msgid "[Release guide](../../deploy/release/README.md)"
 msgstr "[发布指南](../../deploy/release/README.md)"
 
-#: ../developer/development.md:406
+#: ../developer/development.md:412
 #, python-brace-format
 msgid ""
 "These guides form the developer documentation site, built with Sphinx and"
@@ -959,7 +971,7 @@ msgstr ""
 "`make docs-verify`，CI 的 Docs Build "
 "任务跑的是同一个目标。本站还发布简体中文版，所以改了英文也要更新对应的译文，见[翻译文档](translations.md)。"
 
-#: ../developer/development.md:417
+#: ../developer/development.md:423
 msgid ""
 "Designs, completed migration checklists, and acceptance records under "
 "[`docs/agents/`](../agents/) document their own baseline. Preserve that "

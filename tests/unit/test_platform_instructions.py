@@ -100,21 +100,25 @@ def test_the_wrapper_lists_the_instructions_file_in_the_config_it_writes(tmp_pat
     assert not Path(listed).exists()
 
 
-def test_the_instructions_say_facts_and_no_way_of_working():
+def test_the_instructions_say_facts_and_no_way_of_working(monkeypatch):
     """How to work, and how to open a pull request, is the user's and the repository's to say."""
     from types import SimpleNamespace
 
     from cloud_agent_host.platform_instructions import platform_instructions
 
+    monkeypatch.setenv("AGENT_SANDBOX_GITHUB_RELAY_CA_FILE", "/ca.pem")
     launch = SimpleNamespace(
         github_credential="agh.placeholder", github_repo="owner/repo", git_coauthor="Bot <b@x>"
     )
     text = platform_instructions(launch, coauthor_trailer=True)
 
+    assert text.startswith("# Working in this Cloud Agent sandbox\n")
     assert "a checkout of `owner/repo`" in text
     assert "`Co-Authored-By: Bot <b@x>`" in text
     assert "gh api repos/owner/repo/pulls -f title=" in text
     assert "Deleting branches and pushing tags are refused" in text
+    assert "`git branch` lists it" in text
+    assert "it is not always `main`" in text
     for policy in (
         "open it yourself",
         "do not ask",
@@ -127,3 +131,11 @@ def test_the_instructions_say_facts_and_no_way_of_working():
         assert policy not in text
     without_repo = SimpleNamespace(github_credential=None, github_repo="o/r", git_coauthor=None)
     assert platform_instructions(without_repo, coauthor_trailer=True) == ""
+
+    monkeypatch.delenv("AGENT_SANDBOX_GITHUB_RELAY_CA_FILE", raising=False)
+    local = platform_instructions(launch, coauthor_trailer=True)
+    assert "GitHub credentials are not available in this environment" in local
+    assert "the user who owns this conversation" in local
+    assert "`git branch` lists it" in local
+    assert "gh api repos/owner/repo/pulls" not in local
+    assert "`Co-Authored-By: Bot <b@x>`" in local

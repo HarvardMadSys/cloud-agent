@@ -180,12 +180,18 @@ describe('follow-up model sources', () => {
     render(<JobDetail job={makeJob({ reasoningEffort: 'high' })} />);
     await waitFor(() => expect(getAgentConfig).toHaveBeenCalled());
     chooseModel('shared · My provider');
+    // Shown, not silently changed: the new model offers no `high`.
+    expect(
+      await screen.findByText('high is not offered for this model; reasoning is back on Auto.'),
+    ).toBeVisible();
     await send('Use my key');
+    // The parent's level would be inherited; Auto is sent to clear it.
     await waitFor(() =>
       expect(submitThreadMessage).toHaveBeenCalledWith('ajob_1', {
         prompt: 'Use my key',
         model: 'shared',
         model_connection_id: CONNECTION,
+        reasoning_effort: 'auto',
       }),
     );
   });
@@ -236,6 +242,58 @@ describe('follow-up model sources', () => {
   });
 });
 
+describe('a conversation on a model the deployment provides', () => {
+  const PROVIDED = 'oconn_0123456789abcdef0123456789abcdef';
+
+  /** One provided source with two models. */
+  function providing() {
+    vi.mocked(getAgentConfig).mockResolvedValue({
+      ...CONFIG,
+      provided_sources: [
+        {
+          id: PROVIDED,
+          name: 'House models',
+          models: ['shared', 'house-fast'],
+          model_runtimes: { shared: ['codex'], 'house-fast': ['codex'] },
+        },
+      ],
+    });
+  }
+
+  it('names the provided source the turn ran on, and inherits it without naming it again', async () => {
+    providing();
+    render(<JobDetail job={makeJob({ modelConnectionId: PROVIDED })} />);
+    // `shared` is on three sources: the control says which one this chat runs on.
+    await waitFor(() =>
+      expect(screen.getByLabelText('Model for this turn')).toHaveAccessibleDescription(
+        'shared · House models',
+      ),
+    );
+    fireEvent.click(screen.getByLabelText('Model for this turn'));
+    expect(screen.getByRole('option', { name: 'shared · House models' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('option', { name: 'house-fast' })).toBeVisible();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await send('Go on');
+    await waitFor(() => expect(sentBody()).toMatchObject({ prompt: 'Go on' }));
+    expect(sentBody()).not.toHaveProperty('model');
+    expect(sentBody()).not.toHaveProperty('model_connection_id');
+  });
+
+  it('switches a personal conversation onto a provided model by its source id', async () => {
+    providing();
+    render(<JobDetail job={makeJob()} />);
+    await screen.findByLabelText('Model for this turn');
+    chooseModel('house-fast');
+    await send('Use the house model');
+    await waitFor(() =>
+      expect(sentBody()).toMatchObject({ model: 'house-fast', model_connection_id: PROVIDED }),
+    );
+  });
+});
+
 it('refreshes an explicitly switched personal source and blocks click, Enter and form submission after deletion', async () => {
   render(<JobDetail job={makeJob()} />);
   await screen.findByLabelText('Model for this turn');
@@ -277,4 +335,58 @@ it('gives setup guidance when no connection is left', async () => {
   render(<JobDetail job={makeJob({ modelConnectionId: CONNECTION })} />);
   await screen.findByRole('link', { name: 'Set up a model connection' });
   expect(screen.getByRole('button', { name: /^(Send|Queue)$/ })).toBeDisabled();
+});
+
+describe('follow-up reasoning levels', () => {
+  /** Other provider's `shared` declares high and max for Codex. */
+  const [mine, other] = CONFIG.model_connections!;
+  const declaredOther = {
+    ...other,
+    model_efforts: {
+      shared: { codex: { status: 'supported' as const, levels: ['high', 'max'], reason: '' } },
+    },
+  };
+  const DECLARED: AgentConfigApi = { ...CONFIG, model_connections: [mine, declaredOther] };
+
+  function chooseLevel(name: string) {
+    fireEvent.click(screen.getByLabelText('Reasoning for this turn'));
+    fireEvent.click(screen.getByRole('option', { name }));
+  }
+
+  beforeEach(() => {
+    vi.mocked(getAgentConfig).mockResolvedValue(DECLARED);
+  });
+
+  it('keeps the inherited level and sends nothing for it', async () => {
+    render(<JobDetail job={makeJob({ reasoningEffort: 'max' })} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText('Reasoning for this turn')).toHaveAccessibleDescription('max'),
+    );
+    await send('Again');
+    await waitFor(() => expect(sentBody()).toEqual({ prompt: 'Again' }));
+  });
+
+  it('sends a changed level, and "auto" to go back to the provider default', async () => {
+    render(<JobDetail job={makeJob({ reasoningEffort: 'max' })} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText('Reasoning for this turn')).toHaveAccessibleDescription('max'),
+    );
+    chooseLevel('Auto');
+    await send('Default please');
+    await waitFor(() =>
+      expect(sentBody()).toEqual({ prompt: 'Default please', reasoning_effort: 'auto' }),
+    );
+  });
+
+  it('sends a newly chosen level', async () => {
+    render(<JobDetail job={makeJob()} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText('Reasoning for this turn')).toHaveAccessibleDescription('Auto'),
+    );
+    chooseLevel('high');
+    await send('Think harder');
+    await waitFor(() =>
+      expect(sentBody()).toEqual({ prompt: 'Think harder', reasoning_effort: 'high' }),
+    );
+  });
 });

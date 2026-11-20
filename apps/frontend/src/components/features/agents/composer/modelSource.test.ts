@@ -4,10 +4,15 @@ import { translate } from '@/lib/i18n/translate';
 import {
   choiceKey,
   choiceLabel,
+  isModelUnavailable,
+  listedChoices,
   modelOverride,
   modelPicker,
+  NO_MODEL,
   offeredChoices,
+  resolvedChoice,
   storedChoice,
+  turnChoice,
   turnModelPicker,
 } from './modelSource';
 
@@ -140,5 +145,130 @@ describe('per-model availability', () => {
         unavailable: true,
       }),
     ).toBe('fresh (unavailable)');
+  });
+});
+
+describe('models the deployment provides', () => {
+  const P = 'oconn_dddddddddddddddddddddddddddddddd';
+  const S = 'oconn_ffffffffffffffffffffffffffffffff';
+  /** The oldest provided source, with three models. */
+  const house = {
+    id: P,
+    name: 'House models',
+    models: ['gpt-5', 'house-fast', 'house-open'],
+    model_runtimes: {
+      'gpt-5': ['codex', 'opencode'],
+      'house-fast': ['codex'],
+      'house-open': ['codex'],
+    },
+  };
+  /** A second provided source, with two models. */
+  const spentHouse = {
+    id: S,
+    name: 'Spent house',
+    models: ['house-spent', 'house-idle'],
+    model_runtimes: { 'house-spent': ['codex'], 'house-idle': ['codex'] },
+  };
+  const provided = {
+    ...config,
+    model_connections_enabled: true,
+    provided_sources: [house, spentHouse],
+  } as AgentConfigApi;
+  const pick = (model: string, connectionId = P) => ({ model, connectionId });
+  const codex = (loaded: AgentConfigApi = provided) =>
+    modelPicker(loaded, listedChoices(loaded, 'codex'), NO_MODEL, () => {}, t);
+
+  it('lists provided models first, each with its source id, filtered by the agent', () => {
+    expect(listedChoices(provided, 'codex')).toEqual([
+      pick('gpt-5'),
+      pick('house-fast'),
+      pick('house-open'),
+      pick('house-spent', S),
+      pick('house-idle', S),
+      pick('gpt-5', A),
+    ]);
+    // Only what each agent can run, exactly as for the owner's own connections.
+    expect(listedChoices(provided, 'opencode')).toEqual([
+      pick('gpt-5'),
+      pick('gpt-5', A),
+      pick('gpt-5', B),
+    ]);
+    expect(listedChoices(provided, 'claude-code')).toEqual([]);
+  });
+
+  it('lists provided models and the owner’s connections as one flat list', () => {
+    const picker = codex();
+    expect(picker).not.toHaveProperty('optionGroups');
+    expect(picker.options).toEqual([
+      choiceKey(pick('gpt-5')),
+      'house-fast',
+      'house-open',
+      'house-spent',
+      'house-idle',
+      choiceKey(pick('gpt-5', A)),
+    ]);
+  });
+
+  it('names the source on a model more than one source lists, and only there', () => {
+    const picker = codex();
+    expect(picker.optionLabels[choiceKey(pick('gpt-5'))]).toBe('gpt-5 · House models');
+    expect(picker.optionLabels[choiceKey(pick('gpt-5', A))]).toBe('gpt-5 · Alpha');
+    expect(picker.optionLabels['house-fast']).toBe('house-fast');
+  });
+
+  it('offers every model of every provided source, with nothing to count down', () => {
+    const chosen: unknown[] = [];
+    const picker = modelPicker(
+      provided,
+      listedChoices(provided, 'codex'),
+      NO_MODEL,
+      (choice) => chosen.push(choice),
+      t,
+    );
+    expect(picker).not.toHaveProperty('optionNotes');
+    expect(picker).not.toHaveProperty('disabledOptions');
+    expect(picker.optionLabels['house-spent']).toBe('house-spent');
+    picker.onChange('house-spent');
+    expect(chosen).toEqual([pick('house-spent', S)]);
+    expect(offeredChoices(provided, 'codex')).toContainEqual(pick('house-spent', S));
+    expect(isModelUnavailable(provided, 'codex', pick('house-spent', S))).toBe(false);
+  });
+
+  it('finds the source name of a turn that ran on a provided connection', () => {
+    // A turn's `modelConnectionId` is the source id: `oconn_…` resolves like `mconn_…`.
+    expect(choiceLabel(provided, turnChoice({ model: 'gpt-5', modelConnectionId: P }), t)).toBe(
+      'gpt-5 · House models',
+    );
+    expect(
+      choiceLabel(provided, turnChoice({ model: 'house-fast', modelConnectionId: P }), t),
+    ).toBe('house-fast');
+    // A provided source that is gone is never called a personal connection.
+    const gone = pick('gpt-5', 'oconn_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee');
+    expect(choiceLabel(provided, gone, t, { unavailable: true })).toBe(
+      'gpt-5 · provided by this deployment (unavailable)',
+    );
+  });
+
+  it('resolves a default that names a provided source', () => {
+    expect(
+      resolvedChoice({
+        ...provided,
+        default_model: 'house-fast',
+        default_model_connection_id: P,
+      }),
+    ).toEqual(pick('house-fast'));
+  });
+
+  it('offers nothing where model connections are switched off', () => {
+    const off = { ...provided, model_connections_enabled: false } as AgentConfigApi;
+    expect(listedChoices(off, 'codex')).toEqual([]);
+    expect(offeredChoices(off, 'codex')).toEqual([]);
+  });
+
+  it('submits a provided model like any other: the model and the source id', () => {
+    expect(modelOverride({ model: 'gpt-5', modelConnectionId: A }, pick('gpt-5'))).toEqual({
+      model: 'gpt-5',
+      model_connection_id: P,
+    });
   });
 });

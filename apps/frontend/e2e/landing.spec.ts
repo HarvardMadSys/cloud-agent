@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, test } from './network-change';
 
 // The signed-out home page's demo is drawn tilted in 3D, so only a real
 // browser can say whether a click on one of its tabs reaches that tab.
@@ -55,6 +56,8 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
 
       test('a normal click selects each workspace view', async ({ page }) => {
         const demo = await openFinishedDemo(page);
+        const window = demo.locator('[data-demo="window"]');
+        await expect(window).toBeInViewport({ ratio: 0.99 });
         const views = demo.getByRole('tablist', { name: 'Workspace views' });
         for (const name of ['Files', 'Terminal', 'Changes']) {
           const tab = views.getByRole('tab', { name });
@@ -76,8 +79,8 @@ test.describe('the demo from the keyboard', () => {
     const views = demo.getByRole('tablist', { name: 'Workspace views' });
     const tab = (name: string) => views.getByRole('tab', { name });
 
-    // The example chips come just before the demo; one Tab reaches the selected view.
-    await page.getByRole('button', { name: 'Refactor' }).focus();
+    // The replay button comes just before the demo; one Tab reaches the selected view.
+    await page.getByRole('button', { name: 'See it work' }).focus();
     await page.keyboard.press('Tab');
     await expect(tab('Changes')).toBeFocused();
     await expect(tab('Changes')).toHaveAttribute('aria-selected', 'true');
@@ -126,6 +129,9 @@ for (const width of [320, 375, 390]) {
         await expect(nav.getByRole('link', { name: signIn, exact: true })).toBeVisible();
         const box = await up.boundingBox();
         expect(box && box.x + box.width).toBeLessThanOrEqual(width);
+        const product = await page.locator('[data-demo="window"]').boundingBox();
+        // The hero shows a substantial part of the product before visitors have to scroll.
+        expect(product && product.y).toBeLessThan(500);
         // The header holds only the brand and the account links.
         await expect(page.locator('header').getByRole('button')).toHaveCount(0);
 

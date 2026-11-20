@@ -1,4 +1,4 @@
-import type { AgentConfigApi } from '@/lib/api/agents';
+import type { AgentConfigApi, ProvidedModelSourceApi } from '@/lib/api/agents';
 
 /** The connection a test's owner runs on. */
 export const TEST_CONNECTION = 'mconn_test';
@@ -18,5 +18,23 @@ export function offering(
         model_runtimes: Object.fromEntries(models.map((model) => [model, runtimes])),
       },
     ],
+  };
+}
+
+/** A connection the deployment provides, as a test's owner is offered it. */
+export const TEST_PROVIDED = 'oconn_0123456789abcdef0123456789abcdef';
+
+/** One provided source listing `models`, every agent able to run each. */
+export function providedSource(
+  models: string[],
+  overrides: Partial<ProvidedModelSourceApi> = {},
+  runtimes: string[] = ['claude-code', 'codex', 'pi', 'opencode', 'kilo'],
+): ProvidedModelSourceApi {
+  return {
+    id: TEST_PROVIDED,
+    name: 'House models',
+    models,
+    model_runtimes: Object.fromEntries(models.map((model) => [model, runtimes])),
+    ...overrides,
   };
 }

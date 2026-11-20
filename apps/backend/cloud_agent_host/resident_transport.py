@@ -12,7 +12,7 @@ import contextlib
 import hashlib
 import json
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
 
@@ -35,6 +35,7 @@ from cloud_agent_host.drivers import (
     TurnInput,
     TurnResult,
 )
+from cloud_agent_host.github_relay_env import relay_configured
 from cloud_agent_host.launch.environment import EnvironmentFacet
 from cloud_agent_host.launch.facet import PrepareContext
 from cloud_agent_host.launch.facets import PREPARE_ORDER, facet_differences, launch_facets
@@ -53,6 +54,7 @@ from cloud_agent_host.member_setup.member_preparation import (
 )
 from cloud_agent_host.request_prefixes import TurnPrefixes
 from cloud_agent_host.runtimes import RuntimeMCPConfig, connection_base_url, meter_launch
+from cloud_agent_host.runtimes.base import COMPAT_LAUNCHER
 from cloud_agent_host.runtimes.claude import member as claude_member
 from cloud_agent_host.runtimes.codex import member as codex_member
 from cloud_agent_host.runtimes.codex.fork_state import CODEX_REBASE_ROLLOUT_PATHS
@@ -142,6 +144,10 @@ class ResidentLaunch:
     # fixed at process start and part of reuse identity, so a process never
     # holds a token the turn's redactor does not mask.
     inference_local_token: str = field(default="", repr=False)
+    # ``"1"`` on a connection the deployment provides: ``inference_base_url``
+    # is then this host's model relay and ``credential`` the residency's
+    # placeholder for it, never a provider key. Fixed at process start.
+    inference_relayed: str = ""
 
     def __post_init__(self) -> None:
         if not self.thread_id or not self.runtime_id or not self.model:
@@ -580,11 +586,17 @@ class ResidentTransportFactory:
         )
         base_env.update(launch.facet(InferenceFacet).env())
         # Only the residency's GitHub relay placeholder may authenticate gh and
-        # git. Do not fall back to a credential inherited from a custom host
-        # backend.
+        # git, and only when this host sends github.com to the relay. Without
+        # that, GitHub itself rejects the placeholder, including a public
+        # repository that would have been reachable with no credential. Do not
+        # fall back to a token inherited from a custom host backend. The
+        # owner's author identity still applies.
         base_env.pop("GH_TOKEN", None)
         base_env.pop("GITHUB_TOKEN", None)
-        base_env.update(launch.facet(GitHubRelayFacet).env())
+        github = launch.facet(GitHubRelayFacet)
+        if github.credential and not relay_configured():
+            github = replace(github, credential="")
+        base_env.update(github.env())
         if launch.runtime_version:
             base_env["PATH"] = (
                 f"{runtime_bin_dir(runtime_id, launch.runtime_version)}:{base_env['PATH']}"
@@ -658,8 +670,10 @@ class ResidentTransportFactory:
             pidfile = f"{MEMBER_TMPFS_ROOT}/{launch.slot_id}/resident-{secrets.token_hex(16)}.pid"
             argv, env = steps.with_platform_instructions(argv, env, instructions)
             if model_base_url.metered:
+                # On a provided connection this is the host's model relay,
+                # which ``meter_launch`` tells the launcher by its scheme.
                 argv, env = meter_launch(argv, env, launch.inference_base_url)
-            return self._manager.spawn(
+            process = self._manager.spawn(
                 spec,
                 argv,
                 env=env,
@@ -669,6 +683,23 @@ class ResidentTransportFactory:
                 user_gid=self._manager.backend.gid,
                 process_pidfile=pidfile,
             )
+            if tuple(argv[: len(COMPAT_LAUNCHER)]) == COMPAT_LAUNCHER:
+                # The launcher forks the member's meter, then becomes the CLI.
+                # A turn's census taken before that misses the meter, and the
+                # turn's reap then kills it as a leftover of the turn.
+                try:
+                    self._manager.await_member_launch(
+                        spec,
+                        pidfile=pidfile,
+                        launcher=COMPAT_LAUNCHER[-1],
+                        user_uid=uid,
+                        user_gid=self._manager.backend.gid,
+                    )
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        process.kill()
+                    raise
+            return process
 
         mcp_enabled = bool(launch.mcp_server_ids)
         return LaunchContext(

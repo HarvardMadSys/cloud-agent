@@ -29,6 +29,19 @@ export interface AgentPath {
   upstream_protocol: ModelProtocol;
 }
 
+/**
+ * What the provider's model listing declared about one API's reasoning levels
+ * for a model: `supported` with `levels`, `unsupported`, or `unknown` with a
+ * `reason` (`not_read`: never read; `listing_unavailable`; `not_listed`;
+ * `not_declared`; `conflicting_declarations`: two shapes in one entry disagree).
+ */
+export interface EffortFact {
+  status: 'supported' | 'unsupported' | 'unknown';
+  levels: string[];
+  source?: string;
+  reason?: string;
+}
+
 export interface ModelStatus {
   model: string;
   status: ModelStatusKind;
@@ -39,6 +52,9 @@ export interface ModelStatus {
   paths: AgentPath[];
   protocols: Partial<Record<ModelProtocol, ProtocolResult>>;
   checked_at: string | null;
+  /** Per API; absent from a control plane that predates it. */
+  efforts?: Partial<Record<ModelProtocol, EffortFact>>;
+  efforts_checked_at?: string | null;
 }
 
 export interface ModelConnection {
@@ -73,7 +89,7 @@ export interface ModelConnectionList {
 }
 
 /** The server's per-connection limit, when an older answer does not say. */
-export const MAX_MODELS = 8;
+export const MAX_MODELS = 16;
 
 /** A save refused because a model could not be verified: nothing was stored. */
 export const VERIFICATION_FAILED = 'model_connection_verification_failed';
@@ -83,6 +99,15 @@ export function refusedModels(cause: unknown): ModelStatus[] | null {
   if (!(cause instanceof APIError) || cause.code !== VERIFICATION_FAILED) return null;
   const models = cause.details?.models;
   return Array.isArray(models) ? (models as ModelStatus[]) : null;
+}
+
+/** The model a refused save named as already listed elsewhere, and where; `null` otherwise. */
+export function takenModel(cause: unknown): { model: string; connection: string } | null {
+  if (!(cause instanceof APIError)) return null;
+  const taken = cause.details?.taken as { model?: unknown; connection?: unknown } | undefined;
+  return typeof taken?.model === 'string' && typeof taken.connection === 'string'
+    ? { model: taken.model, connection: taken.connection }
+    : null;
 }
 
 /** The fields a refused request named (`base_url`, `models.0`…); `null` for other failures. */
@@ -95,14 +120,19 @@ export function invalidFields(cause: unknown): string[] | null {
 interface ErrorBody {
   models?: unknown;
   fields?: { field?: unknown }[];
+  budget?: unknown;
+  taken?: { model?: unknown; connection?: unknown };
 }
 
 /**
  * `jsonOrThrow`, keeping what a refusal adds: each model's result from a
- * refused verification, and which fields an invalid request named (never
- * the values). The shared error parser keeps only the type and the message.
+ * refused verification, which fields an invalid request named (never the
+ * values), which model a save found already listed elsewhere (`taken`), and
+ * what a provided connection that could not be enabled still lacks (the
+ * `models` without prices, and whether its `budget`). The shared
+ * error parser keeps only the type and the message.
  */
-async function connectionJson<T>(resp: Response): Promise<T> {
+export async function connectionJson<T>(resp: Response): Promise<T> {
   if (resp.ok) return resp.json() as Promise<T>;
   let error: ErrorBody | undefined;
   try {
@@ -122,6 +152,10 @@ async function connectionJson<T>(resp: Response): Promise<T> {
       if (Array.isArray(error.models)) extra.models = error.models;
       if (Array.isArray(error.fields)) {
         extra.fields = error.fields.map((item) => String(item?.field ?? ''));
+      }
+      if (typeof error.budget === 'boolean') extra.budget = error.budget;
+      if (typeof error.taken?.model === 'string' && typeof error.taken.connection === 'string') {
+        extra.taken = { model: error.taken.model, connection: error.taken.connection };
       }
       cause.details = { ...(cause.details ?? {}), ...extra };
     }
@@ -155,6 +189,16 @@ export async function updateModelConnection(
   changes: Partial<ModelConnectionInput> & { enabled?: boolean },
 ): Promise<ModelConnection> {
   return connectionJson(await fetchWithAuth(config.apiBase, path(id), json('PATCH', changes)));
+}
+
+/**
+ * Read again which reasoning levels the provider declares for this
+ * connection's models: one hourly check, no inference, nothing else changes.
+ */
+export async function refreshModelConnectionEfforts(id: string): Promise<ModelConnection> {
+  return connectionJson(
+    await fetchWithAuth(config.apiBase, path(id, '/refresh-efforts'), { method: 'POST' }),
+  );
 }
 
 export async function deleteModelConnection(id: string): Promise<void> {

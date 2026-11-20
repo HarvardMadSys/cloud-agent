@@ -21,9 +21,16 @@ on. These tests hold the code to it:
   child says where.
 * **Imported.** A new registration with an environment name joins
   ``MIGRATED_SETTINGS``, the only list an existing database imports from.
-* **Out of the examples.** The ``.env.example`` an operator copies for a
-  production stack offers nothing Admin manages: such a line would only be an
-  initial import, and the file is meant to hold what Admin cannot.
+* **Out of the template.** The managed host template
+  (``deploy/control-plane/compute-host.env.example``) offers nothing Admin
+  manages: such a line would only be an initial import, and the file is meant
+  to hold what Admin cannot. Production stacks ship no other example: a new
+  control plane needs no env file, and a host's is written by server setup.
+* **No new hand-supplied value.** A variable the deployment owns that nothing
+  supplies (``tests/support/env_suppliers.py``), and a Compose profile of a
+  production stack, is listed in ``deployment_config_baseline.json``. A new
+  one fails; one that is supplied or gone must leave the list, so it only
+  shrinks.
 
 The scan (``tests/support/env_scan.py``) follows the spellings this repository
 uses; what it cannot see is listed in its docstring and in the P1 spec. The
@@ -33,6 +40,7 @@ regression and expect it to fail.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -40,7 +48,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from tests.support import env_inventory as inventory
+from tests.support import env_inventory as inventory, env_suppliers
 from tests.support.env_scan import (
     EnvRead,
     TemplateName,
@@ -63,20 +71,15 @@ REPO = Path(__file__).resolve().parents[2]
 BACKEND = "apps/backend/"
 #: Where a variable an operator sets for a production stack is named.
 PRODUCTION_TEMPLATES = ("deploy/control-plane/", "deploy/host/")
-#: The example env files an operator copies for a production stack.
-PRODUCTION_EXAMPLES = (
-    "deploy/control-plane/.env.example",
-    "deploy/host/.env.example",
-    "deploy/control-plane/compute-host.env.example",
-)
+#: The example env files for a production stack: only the managed host
+#: template a deployment profile writes a host's .env from.
+PRODUCTION_EXAMPLES = ("deploy/control-plane/compute-host.env.example",)
 #: Admin-managed names an example still offers, by (file, variable), and why.
 EXAMPLE_ADMIN_NAMES: dict[tuple[str, str], str] = {
-    ("deploy/host/.env.example", "AGENT_SANDBOX_MANAGER_TOKEN"): (
-        "the host's own copy: its sandbox manager checks the control plane's saved "
-        "value against it, so it must exist on the machine before the first heartbeat"
-    ),
     ("deploy/control-plane/compute-host.env.example", "AGENT_SANDBOX_MANAGER_TOKEN"): (
-        "the same host copy, written into a managed host's .env by its deployment profile"
+        "the host's own copy, written into a managed host's .env by its deployment "
+        "profile: its sandbox manager checks the control plane's saved value against "
+        "it, so it must exist on the machine before the first heartbeat"
     ),
 }
 _EXAMPLE_LINE = re.compile(r"\s*#?\s*([A-Z][A-Z0-9_]*)=")
@@ -91,6 +94,13 @@ RETIRED_OUTSIDE_LEGACY = frozenset(
 SETTING_ENVS = frozenset(setting.env for setting in SETTINGS if setting.env)
 HOST_SETTING_ENVS = frozenset(setting.env for setting in HOST_SETTINGS)
 REGISTRIES = {"HOST_SETTINGS": HOST_SETTING_ENVS}
+
+#: The values a deployment supplies itself and the profiles it turns on: the
+#: ratchet ``test_no_new_value_a_deployment_must_supply`` holds the tree to.
+DEPLOYMENT_CONFIG_BASELINE = REPO / "tests/unit/deployment_config_baseline.json"
+#: Dispositions whose value belongs to the deployment rather than to Admin.
+DEPLOYMENT_OWNED = frozenset({"deployment", "operation", "design", "candidate"})
+_PROFILES = re.compile(r"^[ \t]*profiles:[ \t]*\[([^\]]*)\]", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -439,6 +449,78 @@ def admin_names_offered(
     return problems
 
 
+def unsupplied_deployment_values(
+    scan: Scan,
+    supplied: Iterable[str],
+    families: Iterable[inventory.Family] = inventory.FAMILIES,
+) -> set[str]:
+    """The variables a deployment owns that nothing but a person supplies."""
+    families = tuple(families)
+    supplied = frozenset(supplied)
+    return {
+        name
+        for name in _named(scan)
+        if name not in supplied
+        and (covering := _covering(name, families))
+        and covering[0].disposition in DEPLOYMENT_OWNED
+    }
+
+
+def compose_profiles(texts: Iterable[str]) -> set[str]:
+    """Every profile a Compose file puts a service behind (``profiles: [a, b]``)."""
+    return {
+        profile.strip().strip("'\"")
+        for text in texts
+        for group in _PROFILES.findall(text)
+        for profile in group.split(",")
+        if profile.strip()
+    }
+
+
+def ratchet_problems(
+    variables: Iterable[str], profiles: Iterable[str], baseline: dict[str, list[str]]
+) -> list[str]:
+    """What grew past the baseline, and what the baseline still lists after it left."""
+    listed = baseline["variables"] + baseline["profiles"]
+    problems = [
+        f"{key} lists {name} twice or out of order"
+        for key in ("variables", "profiles")
+        for name, after in zip(baseline[key], baseline[key][1:], strict=False)
+        if name >= after
+    ]
+    problems += [
+        f"{name} is a new value a deployment must supply itself. Make it an Admin "
+        "setting, a host setting delivered on the heartbeat, or a value server setup, "
+        "the keys service or the deployer writes (tests/support/env_suppliers.py). If "
+        f"it must stay the deployment's own, add it to {DEPLOYMENT_CONFIG_BASELINE.name} "
+        "and say why in the pull request (AGENTS.md section 3)."
+        for name in sorted(set(variables) - set(baseline["variables"]))
+    ]
+    problems += [
+        f"profile {name} is a new switch a deployment must turn on itself. Start the "
+        "service always and let a setting decide what it does; if it must stay a "
+        f"profile, add it to {DEPLOYMENT_CONFIG_BASELINE.name} and say why in the pull "
+        "request (AGENTS.md section 3)."
+        for name in sorted(set(profiles) - set(baseline["profiles"]))
+    ]
+    problems += [
+        f"{name} is no longer one a deployment supplies: remove it from "
+        f"{DEPLOYMENT_CONFIG_BASELINE.name}"
+        for name in sorted(set(listed) - set(variables) - set(profiles))
+    ]
+    return problems
+
+
+def _production_profiles() -> set[str]:
+    files = [
+        path
+        for path in _files()
+        if path.startswith(PRODUCTION_TEMPLATES) and path.endswith((".yml", ".yaml"))
+    ]
+    assert "deploy/host/docker-compose.sandbox.yml" in files
+    return compose_profiles((REPO / path).read_text(encoding="utf-8") for path in files)
+
+
 # -- the repository --------------------------------------------------------
 
 
@@ -508,6 +590,14 @@ def test_every_shell_read_names_its_variable(scan: Scan) -> None:
 
 def test_internal_and_tooling_names_stay_in_their_place(scan: Scan) -> None:
     assert misplaced(scan) == []
+
+
+def test_no_new_value_a_deployment_must_supply(scan: Scan) -> None:
+    baseline = json.loads(DEPLOYMENT_CONFIG_BASELINE.read_text(encoding="utf-8"))
+    variables = unsupplied_deployment_values(scan, env_suppliers.supplied())
+    assert variables, "no deployment-owned variable found — scan drift?"
+    problems = ratchet_problems(variables, _production_profiles(), baseline)
+    assert problems == [], "\n".join(problems)
 
 
 # -- each check fails on a regression --------------------------------------
@@ -738,4 +828,44 @@ def test_a_shell_exception_nothing_needs_fails(scan: Scan) -> None:
     ]
     assert shell_problems(Scan([], [], scan.shell, scan.shell_dynamic, frozenset())) == [
         "SHELL_HELPERS names artifact_env_value, which no script defines now"
+    ]
+
+
+def test_a_new_value_a_deployment_must_supply_fails() -> None:
+    families = (
+        inventory.Family("deployment", "test", names=("AGENT_EXAMPLE_TUNNEL_KEY",)),
+        inventory.Family("admin", "test", names=("AGENT_EXAMPLE_SETTING",)),
+    )
+    scan = Scan(
+        [],
+        [
+            TemplateName("deploy/host/docker-compose.sandbox.yml", "compose", name)
+            for name in ("AGENT_EXAMPLE_TUNNEL_KEY", "AGENT_EXAMPLE_SETTING")
+        ],
+    )
+    # An Admin setting is not the deployment's to supply; a supplied value is not either.
+    assert unsupplied_deployment_values(scan, (), families) == {"AGENT_EXAMPLE_TUNNEL_KEY"}
+    assert unsupplied_deployment_values(scan, ("AGENT_EXAMPLE_TUNNEL_KEY",), families) == set()
+    profiles = compose_profiles(["services:\n  a:\n    profiles: [model-relay, 'edge']\n"])
+    assert profiles == {"model-relay", "edge"}
+    problems = ratchet_problems(
+        {"AGENT_EXAMPLE_TUNNEL_KEY"}, profiles, {"variables": [], "profiles": ["edge"]}
+    )
+    assert [problem.split(" is ")[0] for problem in problems] == [
+        "AGENT_EXAMPLE_TUNNEL_KEY",
+        "profile model-relay",
+    ]
+
+
+def test_a_baseline_entry_that_left_fails() -> None:
+    baseline = {"variables": ["AGENT_A", "AGENT_B"], "profiles": ["edge", "pgadmin"]}
+    assert ratchet_problems({"AGENT_A"}, {"edge"}, baseline) == [
+        f"AGENT_B is no longer one a deployment supplies: remove it from "
+        f"{DEPLOYMENT_CONFIG_BASELINE.name}",
+        f"pgadmin is no longer one a deployment supplies: remove it from "
+        f"{DEPLOYMENT_CONFIG_BASELINE.name}",
+    ]
+    unordered = {"variables": ["AGENT_B", "AGENT_A"], "profiles": []}
+    assert ratchet_problems({"AGENT_A", "AGENT_B"}, set(), unordered) == [
+        "variables lists AGENT_B twice or out of order"
     ]

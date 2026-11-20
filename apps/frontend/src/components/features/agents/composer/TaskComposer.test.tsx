@@ -258,8 +258,9 @@ async function skillsMenuItem() {
   return screen.findByRole('menuitem', { name: /Skills/ });
 }
 
-function repositoryButton() {
-  return screen.findByRole('button', { name: /^Repository:/ });
+// Given a name, waits for it: a repository the link asked for lands a render later.
+function repositoryButton(shown?: string) {
+  return screen.findByRole('button', { name: shown ? `Repository: ${shown}` : /^Repository:/ });
 }
 
 function repositoryOptions(dialog: HTMLElement) {
@@ -436,7 +437,7 @@ describe('TaskComposer source-control onboarding', () => {
     vi.mocked(getAgentConfig).mockResolvedValue(config());
     vi.mocked(createAgentJob).mockResolvedValue({ id: 'new-job' } as AgentJobApi);
     render(<TaskComposer initialRepo=":temporary" />);
-    expect(await repositoryButton()).toHaveAccessibleName('Repository: Start from scratch');
+    expect(await repositoryButton('Start from scratch')).toBeInTheDocument();
     await openAttachMenu();
     fireEvent.click(await screen.findByRole('menuitem', { name: /Environment/ }));
     expect(screen.queryByRole('radio')).not.toBeInTheDocument();
@@ -902,7 +903,7 @@ describe('TaskComposer source-control onboarding', () => {
 
     expect(
       await screen.findByText(
-        'Describe a task. The agent works in an isolated sandbox and opens a draft pull request in your repository.',
+        'Describe a task. The agent works on a copy of your repository in an isolated sandbox, and opens a pull request when you ask.',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText('Runs in an isolated sandbox.')).not.toBeInTheDocument();
@@ -919,7 +920,7 @@ describe('TaskComposer source-control onboarding', () => {
         'Describe a task. The agent works in an isolated sandbox that starts empty.',
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/opens a draft pull request/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/opens a pull request when you ask/)).not.toBeInTheDocument();
   });
 
   it('keeps the usual line for someone who has had a task, even an archived one', async () => {
@@ -933,7 +934,7 @@ describe('TaskComposer source-control onboarding', () => {
 
     await waitFor(() => expect(listAgentConversations).toHaveBeenCalled());
     expect(await screen.findByText('Runs in an isolated sandbox.')).toBeInTheDocument();
-    expect(screen.queryByText(/opens a draft pull request/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/opens a pull request when you ask/)).not.toBeInTheDocument();
   });
 
   it('asks nothing itself: the answer is the app’s', async () => {
@@ -2026,9 +2027,7 @@ describe('TaskComposer source-control onboarding', () => {
 
     render(<TaskComposer initialRepo="owner/requested" />);
 
-    expect(
-      await screen.findByRole('button', { name: 'Repository: owner/requested' }),
-    ).toBeInTheDocument();
+    expect(await repositoryButton('owner/requested')).toBeInTheDocument();
     await waitFor(() => expect(listRepoBranches).toHaveBeenCalledWith('owner/requested'));
   });
 
@@ -2192,7 +2191,7 @@ describe('TaskComposer source-control onboarding', () => {
 
     render(<TaskComposer initialRepo=":temporary" />);
 
-    expect(await repositoryButton()).toHaveAccessibleName('Repository: Start from scratch');
+    expect(await repositoryButton('Start from scratch')).toBeInTheDocument();
     expect(screen.queryByText(/is not available to you/)).not.toBeInTheDocument();
   });
 

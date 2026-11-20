@@ -14,6 +14,7 @@ from cloud_agent.api.deps import (
     verify_admin_access,
 )
 from cloud_agent.domain.cursors import decode_cursor
+from cloud_agent.domain.host_pool import SILENT_HOST_HANDOVER_SECONDS
 from cloud_agent.logging_utils import get_logger
 from cloud_agent.sandbox_archive.sandbox_archive import S3SandboxArchiveStore
 from cloud_agent.sandbox_manager.sandbox_manager_client import SandboxManagerError
@@ -29,6 +30,7 @@ from cloud_agent.schemas.admin_sandbox_inventory import (
 )
 from cloud_agent.schemas.admin_sandboxes import (
     AdminSandboxArchiveRequest,
+    AdminSandboxDeleteRequest,
     AdminSandboxDetail,
     AdminSandboxList,
     AdminSandboxStopRequest,
@@ -250,9 +252,12 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
-def admin_sandbox_deletion_available() -> bool:
-    """Check configured archive availability without contacting S3."""
-    return S3SandboxArchiveStore.from_settings().available
+async def admin_sandbox_deletion_available(
+    store: _AdminSandboxesStorage | None = Depends(get_storage),
+) -> bool:
+    """Whether the stored sandbox archive policy is enabled, without contacting S3."""
+    archives = await S3SandboxArchiveStore.for_deployment(require_store(store).host_pool)
+    return archives.available
 
 
 router = APIRouter(
@@ -481,7 +486,7 @@ async def stop_admin_sandbox(
 @router.post("/{sandbox_id}/delete", response_model=AdminSandboxDetail, status_code=202)
 async def delete_admin_sandbox(
     sandbox_id: str,
-    payload: AdminSandboxStopRequest,
+    payload: AdminSandboxDeleteRequest,
     request: Request,
     force: bool = Query(False),
     discard: bool = Query(False),
@@ -492,12 +497,17 @@ async def delete_admin_sandbox(
     """Queue deletion, with fail-closed recovery for a stale running or dead container.
 
     The discard query removes the exact stopped or dead container without an S3 upload.
-    The default path still requires a configured archive bucket.
+    The default path still requires enabled sandbox archives. A discard of a
+    ``cold`` sandbox, which only its checkpoint holds, completes immediately once
+    its host is gone: no host holds anything to remove.
     """
     if not archive_available and not discard:
         raise HTTPException(
             status_code=503,
-            detail="Configure a sandbox archive S3 bucket in Admin Settings before deleting sandboxes.",
+            detail=(
+                "Enable Sandbox archives in Admin Settings → Sandbox before deleting "
+                "sandboxes with an archive."
+            ),
         )
     storage = require_store(store)
     sandbox_manager_confirmed_stopped = False
@@ -546,6 +556,27 @@ async def delete_admin_sandbox(
             else "Stop the sandbox before archiving it to S3 and deleting it.",
         ),
         "busy": (409, "Sandbox has an active turn, operation, or snapshot. Wait until it is idle."),
+        "no_container": (
+            409,
+            "The retained container identity is unavailable. Refresh details before deleting it.",
+        ),
+        "checkpoint_only": (
+            409,
+            "Only its S3 checkpoint holds this sandbox, so there is no container to archive. "
+            "Use Delete without archive.",
+        ),
+        "host_present": (
+            409,
+            "Only its checkpoint holds this sandbox, and its host is still in the pool. "
+            "It can be deleted without its host once that host is removed or has been silent "
+            f"for {SILENT_HOST_HANDOVER_SECONDS // 60} minutes. Until then, the next message "
+            "to one of its chats restores it.",
+        ),
+        "claimed": (
+            409,
+            "A host is claiming a turn of this sandbox to restore it. "
+            "Refresh details: the sandbox may be restoring.",
+        ),
     }
     if result != "accepted":
         status, message = errors[result]

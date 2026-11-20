@@ -39,7 +39,7 @@ export const modelConnectionsEn = {
     "The provider's answer could not be read in the expected format.",
   'connections.title': 'Personal model connections',
   'connections.description':
-    'Run your tasks on your own provider’s API key. Connections are private to you, and your provider bills that key separately from platform inference.',
+    'Run your tasks on your own provider’s API key. Connections are private to you, and your provider bills that key and sets its usage limits.',
   'connections.add': 'Add connection',
   'connections.empty': 'No personal connections yet.',
   'connections.unavailable': 'Personal model connections are not available on this deployment yet.',
@@ -77,6 +77,8 @@ export const modelConnectionsEn = {
   'connections.changed':
     'The connection changed while this was being saved. Nothing was saved; try again.',
   'connections.nameTaken': 'You already have a connection with this name.',
+  'connections.modelTaken':
+    '{model} is already on your connection {name}. A model can be on only one of your connections; remove it there first.',
   'connections.enabled': 'Enabled',
   'connections.disabled': 'Disabled',
   'connections.enable': 'Enable',
@@ -89,6 +91,15 @@ export const modelConnectionsEn = {
   'connections.confirm': 'Confirm',
   'connections.agents': 'Works with {agents}',
   'connections.notUsable': 'No agent can use this model. Edit the connection to fix it.',
+  'connections.effortLevels': 'Reasoning levels the provider declares: {levels}',
+  'connections.effortNone': 'The provider declares no reasoning levels; tasks run at Auto.',
+  'connections.effortUnknown':
+    'The provider does not say which reasoning levels it accepts; tasks run at Auto.',
+  'connections.refreshEfforts': 'Refresh reasoning levels',
+  'connections.refreshEffortsHint':
+    "Reads the provider's model list again for the reasoning levels it declares. Uses one check; no model is run.",
+  'connections.refreshEffortsFailed':
+    'Could not refresh the reasoning levels. Nothing was changed; try again later.',
   'connections.suggest.load': 'Load models from provider',
   'connections.suggest.loadingShort': 'Loading…',
   'connections.suggest.hint':
@@ -152,7 +163,7 @@ export const modelConnectionsZhCN: Record<keyof typeof modelConnectionsEn, strin
   'connections.reason.invalid_response': '无法解析服务商返回的数据。',
   'connections.title': '个人模型连接',
   'connections.description':
-    '用自己服务商的 API key 运行任务。连接只有你自己能用，费用由服务商按这个 key 单独计费，与平台推理额度无关。',
+    '用自己服务商的 API key 运行任务。连接只有你自己能用，费用和使用额度由服务商按这个 key 管理。',
   'connections.add': '添加连接',
   'connections.empty': '还没有个人模型连接。',
   'connections.unavailable': '当前部署尚未开放个人模型连接。',
@@ -186,6 +197,8 @@ export const modelConnectionsZhCN: Record<keyof typeof modelConnectionsEn, strin
   'connections.limited': '过去一小时内验证次数过多，未保存任何内容，请稍后再试。',
   'connections.changed': '保存期间连接已被修改，未保存任何内容，请重试。',
   'connections.nameTaken': '已有同名的连接。',
+  'connections.modelTaken':
+    '{model} 已经在你的连接「{name}」里了。同一个模型只能放在一个连接里，请先从那边删掉。',
   'connections.enabled': '已启用',
   'connections.disabled': '已停用',
   'connections.enable': '启用',
@@ -198,6 +211,13 @@ export const modelConnectionsZhCN: Record<keyof typeof modelConnectionsEn, strin
   'connections.confirm': '确认',
   'connections.agents': '可用于 {agents}',
   'connections.notUsable': '没有 Agent 能使用此模型，请编辑连接修正。',
+  'connections.effortLevels': '服务商声明的推理强度：{levels}',
+  'connections.effortNone': '服务商声明不支持推理强度；任务按自动运行。',
+  'connections.effortUnknown': '服务商没有说明支持哪些推理强度；任务按自动运行。',
+  'connections.refreshEfforts': '刷新推理强度',
+  'connections.refreshEffortsHint':
+    '重新读取服务商的模型列表中声明的推理强度。消耗一次检查次数，不运行模型。',
+  'connections.refreshEffortsFailed': '无法刷新推理强度，未做任何更改，请稍后重试。',
   'connections.suggest.load': '从服务商获取模型',
   'connections.suggest.loadingShort': '获取中…',
   'connections.suggest.hint':

@@ -512,7 +512,7 @@ export const zhCN: Record<TranslationKey, string> = {
   'settings.expandNavigation': '展开设置导航',
   'settings.personalDescription': '管理你的个人资料和通知。',
   'settings.models.title': '模型',
-  'settings.models.description': '你的个人模型连接：任务运行所用的服务商 API key 和模型。',
+  'settings.models.description': '任务可以使用的模型。',
   'settings.plugins': '插件与 MCP',
   'settings.pluginsDescription': '连接 MCP 服务器，管理 Agent 可使用的技能。',
   'settings.integrations': '集成',
@@ -523,10 +523,11 @@ export const zhCN: Record<TranslationKey, string> = {
   'integrations.cancel': '取消',
   'settings.environments': '环境',
   'settings.environmentsDescription': '管理仓库环境、初始化脚本和个人变量。',
-  'settings.helpDescription': '连接仓库、准备环境，然后开始你的第一个对话。',
-  'settings.helpConnect': '1. 连接 GitHub 账号并选择仓库',
-  'settings.helpEnvironment': '2. 配置仓库环境（可选）',
-  'settings.helpChat': '3. 开始对话',
+  'settings.helpDescription': '连接模型和仓库、准备环境，然后开始你的第一个对话。',
+  'settings.helpModel': '1. 用服务商的 API key 连接模型',
+  'settings.helpConnect': '2. 连接 GitHub 账号并选择仓库',
+  'settings.helpEnvironment': '3. 配置仓库环境（可选）',
+  'settings.helpChat': '4. 开始对话',
   'settings.title': '我的设置',
   'settings.shortcuts.title': '键盘快捷键',
   'settings.shortcuts.description':
@@ -672,7 +673,7 @@ export const zhCN: Record<TranslationKey, string> = {
   'settings.language.title': '语言',
 
   'settings.gettingStarted.about': '新手指引是什么',
-  'settings.gettingStarted.help': '带你连上 GitHub，跑出第一个任务。',
+  'settings.gettingStarted.help': '带你连上模型，跑出第一个任务。',
   'settings.gettingStarted.show': '重新显示',
   'settings.gettingStarted.shown': '已显示',
 
@@ -779,7 +780,7 @@ export const zhCN: Record<TranslationKey, string> = {
   'composer.heading': '让 Agent 做什么?',
   'composer.subheading': '在隔离沙箱里运行。',
   'composer.subheadingFirstVisit':
-    '描述一个任务。Agent 在隔离沙箱里改代码，改完在你的仓库开一个 draft PR。',
+    '描述一个任务。Agent 在隔离沙箱里改你仓库的副本，你让它开 PR 时再开。',
   'composer.subheadingTemporary': '描述一个任务。Agent 在一个从空目录开始的隔离沙箱里工作。',
   'temporaryWorkspace.name': '从空白开始',
   'temporaryWorkspace.option': '从空白开始',
@@ -859,6 +860,7 @@ export const zhCN: Record<TranslationKey, string> = {
   'attach.mcpTools': '{count} 个工具',
   'attach.mcpAdd': '添加 MCP',
   'attach.mcpRetry': '重试',
+  'attach.mcpManage': '管理连接',
   'attach.mcpDisabled': '已停用',
   'attach.mcpDraft': '还没配置完',
   'attach.mcpNeedsSignIn': '需要登录',
@@ -996,6 +998,7 @@ export const zhCN: Record<TranslationKey, string> = {
   'gettingStarted.skip': '跳过',
   'gettingStarted.hidden': '已隐藏，可在「设置」里找回',
   'gettingStarted.undo': '撤销',
+  'gettingStarted.model': '连接模型',
   'gettingStarted.connect': '连接 GitHub',
   'gettingStarted.repository': '授权一个仓库',
   'gettingStarted.firstTask': '跑第一个任务',
@@ -1003,7 +1006,7 @@ export const zhCN: Record<TranslationKey, string> = {
   'firstRun.preparing': '为这个会话创建隔离沙箱。第一轮会慢一点，之后的回复会复用它。',
   'firstRun.checkedOut': '仓库已经克隆进沙箱，Agent 只改这份副本。',
   'firstRun.workspaceCreated': '沙箱从一个空目录开始，不克隆仓库，也不发布任何东西。',
-  'firstRun.doneTitle': '第一个 draft PR 开好了',
+  'firstRun.doneTitle': '第一个 PR 开好了',
   'firstRun.doneBody':
     '在 GitHub 上审阅，合不合并由你决定。想再改，在下面回复，让 Agent 把改动推到这个 PR。',
 

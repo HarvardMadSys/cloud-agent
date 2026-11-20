@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './network-change';
 
 // The shared menu surfaces, exercised through the real specialty controls:
 // the composer's model and agent pickers, the repository menu with its search
@@ -452,6 +452,58 @@ test('hovering one model and arrowing to another highlights only the active row'
   expect(byName['model-c'].background).toBe('rgba(0, 0, 0, 0)');
   expect(backgrounds.filter((row) => row.hover).map((row) => row.name)).toEqual(['model-b']);
 });
+for (const theme of ['light', 'dark']) {
+  test(`account menu highlights rows only on hover or keyboard navigation (${theme})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.addInitScript((value) => localStorage.setItem('agents.theme', value), theme);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/source');
+    await expect(page.getByLabel('Add a follow-up', { exact: true })).toBeVisible();
+    await settled(page);
+
+    const account = page.getByRole('button', { name: /^Account menu/ }).first();
+    const menu = page.getByRole('menu', { name: 'Account menu', exact: true });
+    const settings = menu.getByRole('menuitem', { name: 'My Settings', exact: true });
+    const background = () =>
+      settings.evaluate((element) => getComputedStyle(element).backgroundColor);
+
+    await account.click();
+    await page.mouse.move(0, 0);
+    await expect(menu).toBeFocused();
+    await expect.poll(background).toBe('rgba(0, 0, 0, 0)');
+    await page.screenshot({ path: testInfo.outputPath(`account-pointer-open-${theme}.png`) });
+
+    await settings.hover();
+    await expect.poll(background).not.toBe('rgba(0, 0, 0, 0)');
+    await menu.getByRole('menuitem', { name: 'Switch account', exact: true }).hover();
+    await expect.poll(background).toBe('rgba(0, 0, 0, 0)');
+    await page.keyboard.press('ArrowDown');
+    await expect(settings).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(account).toBeFocused();
+
+    for (const key of ['Enter', 'Space', 'ArrowDown', 'ArrowUp']) {
+      await account.press(key);
+      await expect(settings).toBeFocused();
+      await expect.poll(background).not.toBe('rgba(0, 0, 0, 0)');
+      await page.keyboard.press('Escape');
+      await expect(menu).toHaveCount(0);
+      await expect(account).toBeFocused();
+    }
+
+    // Returning to the pointer must not reuse the previous keyboard opening.
+    await account.click();
+    await page.mouse.move(0, 0);
+    await expect(menu).toBeFocused();
+    await expect.poll(background).toBe('rgba(0, 0, 0, 0)');
+    await page.keyboard.press('ArrowUp');
+    await expect(menu.getByRole('menuitem', { name: 'Log out', exact: true })).toBeFocused();
+    await page.keyboard.press('Escape');
+  });
+}
+
 test('account navigation links and repository footer anchors highlight on hover', async ({
   page,
   request,

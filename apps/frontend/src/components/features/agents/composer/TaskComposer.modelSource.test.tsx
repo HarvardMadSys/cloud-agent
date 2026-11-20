@@ -79,7 +79,7 @@ function config(overrides: Partial<AgentConfigApi> = {}): AgentConfigApi {
   };
 }
 
-function choose(label: string, option: string) {
+function choose(label: string, option: string | RegExp) {
   fireEvent.click(screen.getByLabelText(label));
   fireEvent.click(screen.getByRole('option', { name: option }));
 }
@@ -397,7 +397,7 @@ describe('local account model onboarding', () => {
     render(<TaskComposer />);
     expect(await screen.findByRole('link', { name: 'Set up a model connection' })).toHaveAttribute(
       'href',
-      '/settings/models',
+      '/settings/models#settings-connections',
     );
     expect(screen.getByText(/Your provider manages billing and usage limits/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Run/ })).toBeDisabled();
@@ -452,5 +452,94 @@ describe('local account model onboarding', () => {
     expect(screen.getByRole('button', { name: /^Run/ })).toBeDisabled();
     fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
     expect(createAgentJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('models the deployment provides', () => {
+  const PROVIDED = 'oconn_0123456789abcdef0123456789abcdef';
+  const SPENT = 'oconn_fedcba9876543210fedcba9876543210';
+
+  /**
+   * Two provided sources for Codex; `shared` is also on the owner's own
+   * connection.
+   */
+  function provided(overrides: Partial<AgentConfigApi> = {}): AgentConfigApi {
+    return config({
+      default_model: 'house-fast',
+      default_model_connection_id: PROVIDED,
+      provided_sources: [
+        {
+          id: PROVIDED,
+          name: 'House models',
+          models: ['house-fast', 'shared'],
+          model_runtimes: { 'house-fast': ['codex'], shared: ['codex'] },
+          model_efforts: {
+            'house-fast': { codex: { status: 'supported', levels: ['low', 'high'] } },
+          },
+        },
+        {
+          id: SPENT,
+          name: 'Spent house',
+          models: ['house-spent', 'house-idle'],
+          model_runtimes: { 'house-spent': ['codex'], 'house-idle': ['codex'] },
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  it('lists them with the owner’s connections as one list, with nothing counted beside them', async () => {
+    vi.mocked(getAgentConfig).mockResolvedValue(provided());
+    render(<TaskComposer />);
+    await chooseRepository();
+    choose('Agent', 'Codex');
+    fireEvent.click(screen.getByLabelText('Model'));
+    const listbox = screen.getByRole('listbox', { name: 'Model' });
+    // No heading says where a model comes from.
+    expect(within(listbox).queryByRole('group')).toBeNull();
+    expect(screen.queryByText('Provided by this deployment')).toBeNull();
+    expect(
+      within(listbox)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual([
+      'house-fast',
+      // Listed by two sources, so each says where it runs.
+      'shared · House models',
+      'house-spent',
+      'house-idle',
+      'shared · My provider',
+      'mine',
+    ]);
+    // Every provided model can be chosen: nothing here holds one back.
+    expect(within(listbox).getByRole('option', { name: /house-spent/ })).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
+  it('runs an owner with no connection of their own on a provided model, with no setup', async () => {
+    vi.mocked(getAgentConfig).mockResolvedValue(
+      provided({ model_connections: [], model_connection_required: false }),
+    );
+    render(<TaskComposer />);
+    await chooseRepository();
+    choose('Agent', 'Codex');
+    expect(screen.queryByRole('link', { name: 'Set up a model connection' })).toBeNull();
+    // The server's default for a newcomer is the provided source's default model.
+    await waitFor(() =>
+      expect(screen.getByLabelText('Model')).toHaveAccessibleDescription('house-fast'),
+    );
+    // Its reasoning levels are offered as on any connection.
+    choose('Reasoning', 'high');
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Run on the house' } });
+    await runWhenReady();
+    await waitFor(() => expect(createAgentJob).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createAgentJob).mock.calls[0][0]).toMatchObject({
+      runtime: 'codex',
+      model: 'house-fast',
+      model_connection_id: PROVIDED,
+      reasoning_effort: 'high',
+    });
   });
 });

@@ -32,6 +32,9 @@ class ControlPlaneEndpoint(ComputeValue):
 
     main_port: int = Field(ge=1, le=65535, strict=True)
     mcp_port: int = Field(ge=1, le=65535, strict=True)
+    #: The model relay's published port. ``None`` in a setup saved before
+    #: server setup gave Hosts the model relay's tunnel.
+    model_port: int | None = Field(default=None, ge=1, le=65535, strict=True)
     gateway_ip: str
     machine_identity: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -48,13 +51,18 @@ class ControlPlaneEndpoint(ComputeValue):
         return str(address)
 
 
+#: Each tunnel's account tag. ``mcp`` and ``control`` keep the names accounts
+#: already provisioned have; ``model`` cannot take ``m``, which is ``mcp``'s.
+_ROLE_TAGS = {"mcp": "m", "control": "c", "model": "md"}
+
+
 def tunnel_username(setup_id: str, role: str) -> str:
     """Derive separate stable service accounts, never reuse a management account."""
-    if role not in {"mcp", "control"}:
+    if role not in _ROLE_TAGS:
         raise ProviderError("setup_configuration", "Unknown tunnel role")
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", setup_id):
         raise ProviderError("setup_configuration", "Invalid server setup identifier")
-    return "ca-" + role[0] + "-" + hashlib.sha256(setup_id.encode()).hexdigest()[:16]
+    return "ca-" + _ROLE_TAGS[role] + "-" + hashlib.sha256(setup_id.encode()).hexdigest()[:16]
 
 
 def generate_tunnel_key() -> TunnelKey:
@@ -78,6 +86,7 @@ _BLOCKERS = {
     "control_plane_missing": "No running control plane matches this application's release",
     "control_plane_ambiguous": "Several control planes match this release; use a dedicated connection",
     "control_plane_ports": "The selected control-plane API and MCP ports are not uniquely published",
+    "model_relay_missing": "The control plane's model relay is not running with this release",
     "control_plane_network": "The control plane needs one shared private Docker bridge network",
     "service_unreachable": "A selected tunnel service is not listening on its loopback port",
     "forwarding_disabled": "The selected SSH account does not permit the required TCP forwarding",
@@ -144,36 +153,50 @@ class SshTunnelSetup:
         endpoint: ControlPlaneEndpoint,
         reverse_port: int,
         setup_id: str,
+        model_public_key: str | None = None,
     ) -> None:
-        """Authorize separate MCP/main keys and this Host's single sandbox manager reverse listener."""
-        _validate_identity(setup_id, mcp_public_key)
-        _validate_identity(setup_id, control_public_key)
+        """Authorize separate MCP/main/model keys and this Host's single reverse listener.
+
+        ``model_public_key`` is ``None`` for a setup saved before Hosts were
+        given the model relay's tunnel; that setup's Hosts keep running
+        without it.
+        """
+        keys = [mcp_public_key, control_public_key]
+        ports = [endpoint.main_port, endpoint.mcp_port]
+        if model_public_key is not None:
+            if endpoint.model_port is None:
+                raise ProviderError(
+                    "setup_configuration", "A model tunnel key needs the model relay's port"
+                )
+            keys.append(model_public_key)
+            ports.append(endpoint.model_port)
+        for key in keys:
+            _validate_identity(setup_id, key)
         _validate_port(reverse_port)
         if reverse_port < 1024:
             raise ProviderError(
                 "setup_configuration", "The sandbox manager requires an unprivileged reverse port"
             )
-        if mcp_public_key == control_public_key or endpoint.main_port == endpoint.mcp_port:
-            raise ProviderError(
-                "setup_configuration", "Main API and MCP require separate keys and ports"
-            )
-        if reverse_port in {endpoint.main_port, endpoint.mcp_port}:
+        if len(set(keys)) != len(keys) or len(set(ports)) != len(ports):
+            raise ProviderError("setup_configuration", "Each tunnel requires its own key and port")
+        if reverse_port in ports:
             raise ProviderError(
                 "setup_configuration", "The sandbox manager needs a separate reverse port"
             )
-        await self._run(
-            connection,
-            {
-                "action": "control",
-                "mcp_key": mcp_public_key,
-                "control_key": control_public_key,
-                "endpoint": endpoint.model_dump(),
-                "reverse_port": reverse_port,
-                "setup_id": setup_id,
-                "mcp_username": tunnel_username(setup_id, "mcp"),
-                "control_username": tunnel_username(setup_id, "control"),
-            },
-        )
+        params = {
+            "action": "control",
+            "mcp_key": mcp_public_key,
+            "control_key": control_public_key,
+            "endpoint": endpoint.model_dump(),
+            "reverse_port": reverse_port,
+            "setup_id": setup_id,
+            "mcp_username": tunnel_username(setup_id, "mcp"),
+            "control_username": tunnel_username(setup_id, "control"),
+        }
+        if model_public_key is not None:
+            params["model_key"] = model_public_key
+            params["model_username"] = tunnel_username(setup_id, "model")
+        await self._run(connection, params)
 
 
 def _validate_port(port: int) -> None:
@@ -284,7 +307,16 @@ def discover(params):
     if main['image'] != relay['image']:
         refuse('control_plane_missing')
     main_port, mcp_port = published_port(main, 8000), published_port(relay, 8001)
-    if main_port == mcp_port:
+    # The model relay is part of every release from this one on; a stack
+    # without it running cannot give a Host the model relay's tunnel.
+    model_ids = command(['docker', 'container', 'ls', '--filter', 'label=com.docker.compose.service=model-relay', '--filter', 'label=com.docker.compose.project=' + project, '--format', '{{.ID}}']).split()
+    if len(model_ids) != 1:
+        refuse('model_relay_missing')
+    model = inspect_container(model_ids[0])
+    if model['image'] != main['image']:
+        refuse('model_relay_missing')
+    model_port = published_port(model, 8002)
+    if len({main_port, mcp_port, model_port}) != 3:
         refuse('control_plane_ports')
     gateways = set()
     for network in set(main['networks'] or {}) & set(relay['networks'] or {}):
@@ -307,8 +339,9 @@ def discover(params):
         refuse('control_plane_network')
     listening(main_port)
     listening(mcp_port)
-    return {'main_port': main_port, 'mcp_port': mcp_port, 'gateway_ip': gateways.pop(),
-            'machine_identity': machine_identity()}
+    listening(model_port)
+    return {'main_port': main_port, 'mcp_port': mcp_port, 'model_port': model_port,
+            'gateway_ip': gateways.pop(), 'machine_identity': machine_identity()}
 
 def ssh_policy(username):
     text = command(['/usr/sbin/sshd', '-T', '-C', 'user=' + username + ',host=localhost,addr=127.0.0.1'])
@@ -561,10 +594,13 @@ def entries(params):
     prefix = 'command="",restrict,port-forwarding,'
     tag = ' cloud-agent-setup:' + params['setup_id'] + ':'
     endpoint = params['endpoint']
-    return [
+    keys = [
         prefix + 'permitopen="127.0.0.1:' + str(endpoint['mcp_port']) + '" ' + params['mcp_key'] + tag + 'mcp',
         prefix + 'permitopen="127.0.0.1:' + str(endpoint['main_port']) + '",permitlisten="' + endpoint['gateway_ip'] + ':' + str(params['reverse_port']) + '" ' + params['control_key'] + tag + 'control',
     ]
+    if params.get('model_key'):
+        keys.append(prefix + 'permitopen="127.0.0.1:' + str(endpoint['model_port']) + '" ' + params['model_key'] + tag + 'model')
+    return keys
 
 def provision_account(username, entry, port, reverse=None):
     path, user = key_path(username)
@@ -591,6 +627,8 @@ def provision(params):
     provision_account(params['mcp_username'], expected[0], endpoint['mcp_port'])
     reverse = endpoint['gateway_ip'] + ':' + str(params['reverse_port'])
     provision_account(params['control_username'], expected[1], endpoint['main_port'], reverse)
+    if params.get('model_key'):
+        provision_account(params['model_username'], expected[2], endpoint['model_port'])
 
 def main():
     try:
@@ -607,6 +645,8 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 listening(params['endpoint']['main_port'])
                 listening(params['endpoint']['mcp_port'])
+                if params.get('model_key'):
+                    listening(params['endpoint']['model_port'])
                 provision(params)
             result = {'ok': True}
         else:

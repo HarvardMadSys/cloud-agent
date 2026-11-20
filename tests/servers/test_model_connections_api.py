@@ -329,7 +329,7 @@ async def test_a_verified_create_stores_its_facts_and_only_the_keys_ciphertext(p
     assert listed.headers["Cache-Control"] == "no-store"
     assert listed.json()["configured"] is True
     assert listed.json()["checks_per_hour"] == check.CHECKS_PER_HOUR
-    assert listed.json()["max_models"] == 8
+    assert listed.json()["max_models"] == 16
     assert _KEY not in listed.text
 
 
@@ -433,9 +433,36 @@ async def test_a_taken_name_or_too_many_models_is_refused_before_any_check(provi
     provider.calls.clear()
     async with await _client(_settings_app(store)) as client:
         taken = await client.post(PATH, json={**_CREATE, "name": "MY PROVIDER"})
-        many = await client.post(PATH, json={**_CREATE, "models": [f"m{i}" for i in range(9)]})
+        many = await client.post(PATH, json={**_CREATE, "models": [f"m{i}" for i in range(17)]})
     assert taken.status_code == 409 and many.status_code == 422
     assert provider.calls == []
+
+
+async def test_a_model_another_of_the_owners_connections_lists_is_refused(provider):
+    store = _Store()
+    first = await _create(store)
+    provider.calls.clear()
+    async with await _client(_settings_app(store)) as client:
+        again = await client.post(
+            PATH, json={**_CREATE, "name": "Second", "models": ["gpt-5", "openai/gpt-4.1"]}
+        )
+        second = await client.post(PATH, json={**_CREATE, "name": "Second", "models": ["gpt-5"]})
+        moved = await client.patch(
+            f"{PATH}/{second.json()['id']}", json={"models": ["gpt-5", "gpt-4.1"]}
+        )
+    # Refused before any check, naming the model and where it already is.
+    assert again.status_code == 409, again.text
+    error = again.json()["detail"]["error"]
+    assert error["type"] == "model_connection_model_taken"
+    assert error["taken"] == {"model": "openai/gpt-4.1", "connection": first["name"]}
+    assert second.status_code == 201, second.text
+    assert moved.status_code == 409
+    assert moved.json()["detail"]["error"]["taken"]["model"] == "gpt-4.1"
+    assert [call for call in provider.calls if "gpt-4.1" in str(call)] == []
+    # A connection's own models are not "taken" from itself.
+    async with await _client(_settings_app(store)) as client:
+        renamed = await client.patch(f"{PATH}/{first['id']}", json={"name": "Renamed"})
+    assert renamed.status_code == 200, renamed.text
 
 
 async def test_a_manual_api_declaration_is_no_longer_accepted(provider):
@@ -711,7 +738,7 @@ async def test_a_verification_past_the_save_bound_writes_nothing(provider, monke
     provider.during = hang
     late = await _patch(store, view["id"], {"api_key": "sk-mine-0000"})
     async with await _client(_settings_app(store)) as client:
-        created = await client.post(PATH, json={**_CREATE, "name": "Second"})
+        created = await client.post(PATH, json={**_CREATE, "name": "Second", "models": ["gpt-5"]})
 
     assert late.status_code == 504, late.text
     assert late.json()["detail"]["error"]["type"] == "model_connection_verification_timeout"
@@ -1112,10 +1139,11 @@ async def test_a_task_on_an_owner_connection():
             "claude-code",
             {"reasoning_effort": "high"},
             {"protocols": ["anthropic_messages"]},
-            "effort_unsupported",
+            # Nothing declared for the model: a level cannot run, Auto can.
+            "effort_unknown",
         ),
         ("opencode", {"model": "gpt-4o"}, {}, "model_not_listed"),
-        ("opencode", {"reasoning_effort": "high"}, {}, "effort_unsupported"),
+        ("opencode", {"reasoning_effort": "high"}, {}, "effort_unknown"),
         ("opencode", {}, {"enabled": False}, "disabled"),
         ("opencode", {}, {"deleted_at": datetime.now(UTC), "enabled": False}, "deleted"),
         ("opencode", {}, {"user_id": "someone-else"}, "not_found"),
@@ -1248,15 +1276,28 @@ async def test_a_follow_up_switching_source_is_checked_against_the_new_one():
         model="glm-5.1", model_connection_id=None, reasoning_effort="high"
     )
 
+    # The parent's level is inherited like its model, and checked against the
+    # new source: nothing is declared for o4-mini, so it is refused rather
+    # than silently dropped, and "auto" is the way to switch.
+    with raises_http() as inherited:
+        await _follow_up(
+            connections, parent_without_connection, model="o4-mini", model_connection_id=row["id"]
+        )
+    assert inherited.value.detail["error"]["reason"] == "effort_unknown"
     switched = await _follow_up(
-        connections, parent_without_connection, model="o4-mini", model_connection_id=row["id"]
+        connections,
+        parent_without_connection,
+        model="o4-mini",
+        model_connection_id=row["id"],
+        reasoning_effort="auto",
     )
     assert (switched.model, switched.model_connection_id) == ("o4-mini", row["id"])
     assert switched.reasoning_effort is None
+    assert switched.reset_reasoning_effort is True
 
     with raises_http() as refused:
         await _follow_up(connections, _parent(), reasoning_effort="high")
-    assert refused.value.detail["error"]["reason"] == "effort_unsupported"
+    assert refused.value.detail["error"]["reason"] == "effort_unknown"
     with raises_http() as foreign:
         await _follow_up(
             connections, _parent(), model="gpt-4.1", model_connection_id="mconn_" + "f" * 32
@@ -1322,6 +1363,7 @@ class _ConnectionClaimStore(_ClaimStore):
         *,
         runtime: str = "opencode",
         model: str = "gpt-4.1",
+        effort: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -1330,6 +1372,7 @@ class _ConnectionClaimStore(_ClaimStore):
         self.row = row
         self.runtime = runtime
         self.model = model
+        self.effort = effort
 
     async def claim_job(self, **kwargs: Any) -> dict[str, Any] | None:
         claim = await super().claim_job(**kwargs)
@@ -1341,7 +1384,7 @@ class _ConnectionClaimStore(_ClaimStore):
             "runtime": self.runtime,
             "model": self.model,
             "model_connection_id": self.row["id"],
-            "reasoning_effort": None,
+            "reasoning_effort": self.effort,
         }
 
     async def get_model_connection(self, *, user_id, connection_id):
@@ -1596,6 +1639,14 @@ async def test_config_offers_the_owners_connections_and_their_last_use_without_t
             "models": ["gpt-4.1"],
             # Declared: every agent; the composer is not told which go through the helper.
             "model_runtimes": {"gpt-4.1": ["claude-code", "codex", "kilo", "opencode", "pi"]},
+            # Verified before levels were read: every agent is offered Auto only,
+            # and told why -- unknown, not unsupported.
+            "model_efforts": {
+                "gpt-4.1": {
+                    runtime: {"status": "unknown", "levels": [], "reason": "not_read", "source": ""}
+                    for runtime in ("claude-code", "codex", "kilo", "opencode", "pi")
+                }
+            },
         }
     ]
     assert _KEY not in str(config)

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createAgentJob, listRepoBranches } from '@/lib/api/agents';
 import type {
   AgentConfigApi,
@@ -21,7 +21,8 @@ import {
 } from '../githubReturn';
 import { useComposerConfig } from './useComposerConfig';
 import { ModelConnectionNotice } from './ModelConnectionNotice';
-import { highestEffort, offeredEfforts } from './effort';
+import { useOfferedEffort } from './effort';
+import { EffortPicker } from './EffortPicker';
 import { useT } from '@/components/providers';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { useComposerDraft } from './useComposerDraft';
@@ -45,6 +46,7 @@ import type { SelectedSkillApi } from '@/lib/api/skills';
 import { validPluginForRuntime } from '@/lib/pluginConfiguration';
 import { readNewTaskDraft } from './newTaskDraft';
 import { useComposerModel } from './useComposerModel';
+import { useEnvironmentStatus } from './useEnvironmentStatus';
 import { EnvironmentPicker, type EnvironmentSelection } from '../environment/EnvironmentPicker';
 import { UserAvatar } from './UserAvatar';
 import { UserHomeInsights } from './UserHomeInsights';
@@ -152,9 +154,8 @@ function TaskComposerContent({ initialRepo, userId }: { initialRepo?: string; us
   // The first temporary workspace's first message waits here for its owner to
   // say they know what one keeps.
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [environmentStatus, setEnvironmentStatus] = useState<'loading' | 'ready' | 'error'>(
-    'loading',
-  );
+  // Loading until the picker reports for this repository, not the last one.
+  const [environmentStatus, setEnvironmentStatus] = useEnvironmentStatus(repo);
   const [environmentSelection, setEnvironmentSelection] = useState<EnvironmentSelection | null>(
     null,
   );
@@ -313,22 +314,9 @@ function TaskComposerContent({ initialRepo, userId }: { initialRepo?: string; us
     githubUnavailable,
   );
 
-  // The offered efforts follow the (runtime, model) pair, so switching either
-  // can empty the set or drop the current choice out of it.
-  const efforts = useMemo(
-    () => offeredEfforts(config, runtime, model, connectionId),
-    [config, runtime, model, connectionId],
-  );
-  useEffect(() => {
-    // Only once the config has arrived: before that the offered set is empty
-    // because nothing is *known*, not because nothing is offered.
-    if (!config) return;
-    // Deepest by default, and reset to it whenever the pair changes under a
-    // selection it no longer offers. Falling back rather than submitting a
-    // level the new pair does not have: the backend would refuse it, and the
-    // picker would have shown a value it could not deliver.
-    if (!efforts.includes(effort)) setEffort(highestEffort(efforts));
-  }, [config, efforts, effort]);
+  // Auto, or a level the (runtime, model) pair's provider declares; a switch
+  // to a pair without the chosen level puts it back on Auto, visibly.
+  const effortChoice = useOfferedEffort(config, runtime, model, connectionId, effort, setEffort);
 
   // Branches follow the selected repository, so they reload when it changes —
   // and are dropped at once, so the previous repository's branch can never be
@@ -626,11 +614,11 @@ function TaskComposerContent({ initialRepo, userId }: { initialRepo?: string; us
         <UserAvatar view={userProfile.view} />
         <h1
           id={headingId}
-          className="text-balance text-center text-xl font-semibold leading-tight tracking-tight text-foreground sm:text-2xl"
+          className="text-balance text-center text-2xl font-semibold leading-tight tracking-[-0.02em] text-foreground sm:text-[1.75rem]"
         >
           {t('composer.heading')}
         </h1>
-        <p className="mx-auto mt-1.5 max-w-md text-balance text-center text-[13px] leading-5 text-muted">
+        <p className="mx-auto mt-2 max-w-md text-balance text-center text-sm leading-5 text-muted">
           {temporary && firstVisit
             ? t('composer.subheadingTemporary')
             : firstVisit
@@ -689,7 +677,7 @@ function TaskComposerContent({ initialRepo, userId }: { initialRepo?: string; us
             })
             .finally(() => setReadingDrops((count) => count - 1));
         }}
-        className={`ui-composer ${
+        className={`ui-composer ui-composer-hero ${
           dropping ? 'border-accent/40 ring-4 ring-accent/[0.08]' : ''
         } ${locked || noRepositories ? 'mt-3' : 'mt-5'} ${locked ? 'bg-surface-muted' : ''}`}
       >
@@ -757,7 +745,7 @@ function TaskComposerContent({ initialRepo, userId }: { initialRepo?: string; us
             composer's own width, so nothing scrolls sideways or hides behind
             Run. The rows stay unpositioned so the repository menu anchors to
             the composer itself. */}
-        <div className="space-y-1 rounded-b-xl border-t border-border bg-surface-muted/50 p-2">
+        <div className="space-y-1 rounded-b-xl border-t border-border/70 bg-surface-muted/60 p-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1">
             <RepositoryPicker
               repos={selectableRepos(config)}
@@ -831,12 +819,12 @@ function TaskComposerContent({ initialRepo, userId }: { initialRepo?: string; us
               placeholder={t('composer.chooseModelPlaceholder')}
               triggerRef={modelControl.attach}
             />
-            <Picker
-              compact
+            <EffortPicker
               label={t('composer.reasoning')}
               value={effort}
-              options={efforts}
-              onChange={setEffort}
+              offer={effortChoice.offer}
+              dropped={effortChoice.dropped}
+              onChange={effortChoice.choose}
             />
             <button
               type="button"
@@ -849,7 +837,7 @@ function TaskComposerContent({ initialRepo, userId }: { initialRepo?: string; us
                     ? t('composer.chooseModel')
                     : t('composer.runTitle')
               }
-              className="ui-button ui-button-primary ml-auto shrink-0 px-3 text-xs"
+              className="ui-button ui-button-primary ml-auto shrink-0 rounded-lg px-3.5 text-[13px]"
             >
               {submitting || goalCommand.busy ? t('composer.starting') : t('composer.run')}
               <svg
@@ -1016,7 +1004,7 @@ function TaskComposerContent({ initialRepo, userId }: { initialRepo?: string; us
         </p>
       ) : null}
       {firstVisit && (
-        <div className="mt-6 grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
+        <div className="mt-8 grid gap-3 sm:grid-cols-3">
           {(
             [
               ['composer.repository', 'composer.workflowRepository'],
@@ -1024,10 +1012,10 @@ function TaskComposerContent({ initialRepo, userId }: { initialRepo?: string; us
               ['composer.workflowReviewTitle', 'composer.workflowReview'],
             ] as const
           ).map(([title, description], index) => (
-            <div key={title} className="flex gap-3 px-1">
+            <div key={title} className="ui-card flex gap-3 p-3.5">
               <span
                 aria-hidden="true"
-                className="mt-0.5 text-xs font-medium tabular-nums text-muted"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle text-[11px] font-semibold tabular-nums text-accent"
               >
                 0{index + 1}
               </span>

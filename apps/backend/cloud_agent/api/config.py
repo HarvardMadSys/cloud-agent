@@ -18,12 +18,23 @@ from cloud_agent.api.deps import (
     get_github_app_state,
     get_storage,
 )
-from cloud_agent.application.model_connection_status import usable_runtimes
+from cloud_agent.application.model_connection_status import model_efforts, usable_runtimes
 from cloud_agent.application.model_connections import model_connections_enabled
+from cloud_agent.application.operator_models import (
+    provided_default,
+    provided_sources,
+    without_own_models,
+)
 from cloud_agent.logging_utils import get_logger
 from cloud_agent.mcp.registry import resolve_connection
 from cloud_agent.profile.model_preference import resolve_connection_default
-from cloud_agent.schemas import AgentConfigResponse, McpConnectionSummary, ModelConnectionOption
+from cloud_agent.schemas import (
+    AgentConfigResponse,
+    McpConnectionSummary,
+    ModelConnectionOption,
+    ModelEffortOffer,
+    ProvidedModelSource,
+)
 from cloud_agent.schemas.model_preferences import ModelPreferenceView
 from cloud_agent.source_control.entitlement import repos_for_user
 from cloud_agent.source_control.source_control import github_connect_configured
@@ -43,6 +54,7 @@ if TYPE_CHECKING:
         ConversationQueries,
         McpConnectionRepository,
         ModelConnectionRepository,
+        OperatorModelRepository,
         SourceControlRepository as SourceControlPort,
     )
 
@@ -71,6 +83,7 @@ class _ConfigStorage(Protocol):
     mcp: McpConnectionRepository
     model_connections: ModelConnectionRepository
     model_preferences: ModelPreferenceReader
+    operator_models: OperatorModelRepository
     source_control: SourceControlPort
 
 
@@ -106,17 +119,31 @@ async def get_agent_config(
         mcp_connections,
         preference,
         model_connections,
+        provided,
     ) = await asyncio.gather(
         _repositories_and_account(store, github, user["user_id"]),
         _mcp_connections_for_user(store, user["user_id"]),
         _model_preference_for_user(store, user["user_id"]),
         _model_connections_for_user(store, user["user_id"]),
+        _provided_sources(store),
     )
     if not model_connections_enabled():
         # Switched off: nothing is offered, so the control stays empty.
         model_connections = []
-    connection_default = resolve_connection_default(preference, model_connections)
+        provided = []
+    # One name, one source: a model the owner's own connection offers runs on
+    # their key, and the deployment's copy of it is not listed for them.
+    provided = without_own_models(provided, model_connections)
+    # Where the owner's newest turn ran, whichever kind of source that was;
+    # with no such source left, where this deployment starts a new owner.
+    # A last turn on a provided model the owner has since put on their own
+    # connection is not moved there: a source is never swapped for another of
+    # the same model name, since the two bill different accounts.
+    connection_default = resolve_connection_default(
+        preference, [*model_connections, *provided]
+    ) or provided_default(provided)
     options = [_connection_option(row) for row in model_connections if row.get("enabled")]
+    sources = [ProvidedModelSource(**source) for source in provided]
     if github.load_status == "unavailable":
         # The create endpoint answers 503 until the App is back, so a form that
         # looked ready would only fail on submit — whatever else is true.
@@ -145,7 +172,12 @@ async def get_agent_config(
         # An owner runs nothing until one of their own connections has a model
         # verified for some Agent; the composer then offers the way to set one
         # up instead of an empty picker that looks like an outage.
-        model_connection_required=not any(option.model_runtimes for option in options),
+        # A connection the deployment provides counts too: with one, an
+        # owner runs a task without setting anything up.
+        model_connection_required=not (
+            any(option.model_runtimes for option in options)
+            or any(source.model_runtimes for source in sources)
+        ),
         # What each runtime can express, in its own vocabulary.
         runtime_reasoning_efforts=runtime_reasoning_efforts(),
         # This user's connected servers, not the deployment's: same reason the
@@ -158,8 +190,10 @@ async def get_agent_config(
         default_model=connection_default[0] if connection_default else None,
         default_model_connection_id=connection_default[1] if connection_default else None,
         model_connections_enabled=model_connections_enabled(),
-        # The owner's own enabled connections: the only models there are.
+        # The owner's own enabled connections, and beside them what the
+        # deployment provides to this owner: the only models there are.
         model_connections=options,
+        provided_sources=sources,
         mcp_runtimes=runtimes_supporting_mcp(),
         github_connected=github_connected,
         # OAuth must start on the authenticated integrations page so the
@@ -212,6 +246,10 @@ def _connection_option(row: dict[str, Any]) -> ModelConnectionOption:
         name=row["name"],
         models=list(row["models"]),
         model_runtimes=usable_runtimes(row),
+        model_efforts={
+            model: {runtime: ModelEffortOffer(**offer) for runtime, offer in offers.items()}
+            for model, offers in model_efforts(row).items()
+        },
     )
 
 
@@ -222,6 +260,13 @@ async def _model_connections_for_user(
     if store is None:
         return []
     return await store.model_connections.list_model_connections(user_id=user_id)
+
+
+async def _provided_sources(store: _ConfigStorage | None) -> list[dict[str, Any]]:
+    """What the deployment provides to every owner; none without a store."""
+    if store is None:
+        return []
+    return await provided_sources(store.operator_models)
 
 
 async def _mcp_connections_for_user(

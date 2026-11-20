@@ -11,12 +11,15 @@ from cloud_agent_shared.model_connections import ANTHROPIC_MESSAGES, RESPONSES
 from cloud_agent_shared.protocol_compat import (
     ENV_CLIENT,
     ENV_MODEL,
+    ENV_REASONING_EFFORT,
     ENV_UPSTREAM_KEY,
+    ENV_UPSTREAM_RELAY,
     ENV_UPSTREAM_URL,
     ORIGIN_PLACEHOLDER,
     PASSTHROUGH,
     TOKEN_PLACEHOLDER,
     passthrough_authority,
+    upstream_port,
 )
 from cloud_agent_shared.sandbox_mcp import SANDBOX_MCP_SERVER_NAME, SANDBOX_MCP_URL
 
@@ -161,6 +164,25 @@ def connection_base_url(
     return MeteredBaseUrl(base_url) if metered else ExactBaseUrl(base_url)
 
 
+def _upstream_authority(url: str) -> tuple[str, str]:
+    """An upstream URL's scheme and the ``host[:port]`` both sides name it by."""
+    parts = urlsplit(url)
+    port = upstream_port(parts.scheme, parts.port)
+    return parts.scheme, passthrough_authority(parts.hostname or "", port)
+
+
+def relay_upstream_env(url: str) -> dict[str, str]:
+    """What tells the launcher its upstream is this host's model relay; empty otherwise.
+
+    A member on a connection the deployment provides is launched at the
+    host's model relay, the one upstream reached over plain ``http``
+    (``resident_launch`` builds that URL from the host's own configuration,
+    and nothing else produces one). The launcher refuses ``http`` without
+    this, and this on anything but ``http``.
+    """
+    return {ENV_UPSTREAM_RELAY: "1"} if urlsplit(url).scheme == "http" else {}
+
+
 def metered_cli_url(url: str) -> str:
     """Where a metered CLI is told ``url`` is: its member's meter, then the authority and path.
 
@@ -168,9 +190,8 @@ def metered_cli_url(url: str) -> str:
     launcher writes the meter's loopback origin over the placeholder, and the
     meter forwards what follows the authority to ``https://api.example.com``.
     """
-    parts = urlsplit(url)
-    authority = passthrough_authority(parts.hostname or "", parts.port)
-    return f"{ORIGIN_PLACEHOLDER}/{authority}{parts.path}"
+    _scheme, authority = _upstream_authority(url)
+    return f"{ORIGIN_PLACEHOLDER}/{authority}{urlsplit(url).path}"
 
 
 def meter_launch(
@@ -181,9 +202,13 @@ def meter_launch(
     The launcher is told the upstream's origin and nothing else: the CLI keeps
     its own key and sends it itself (``cloud_agent_host.model_passthrough``).
     """
-    parts = urlsplit(url)
-    origin = f"https://{passthrough_authority(parts.hostname or '', parts.port)}"
-    return [*COMPAT_LAUNCHER, *argv], {**env, ENV_CLIENT: PASSTHROUGH, ENV_UPSTREAM_URL: origin}
+    scheme, authority = _upstream_authority(url)
+    return [*COMPAT_LAUNCHER, *argv], {
+        **env,
+        ENV_CLIENT: PASSTHROUGH,
+        ENV_UPSTREAM_URL: f"{scheme}://{authority}",
+        **relay_upstream_env(url),
+    }
 
 
 def compat_launch(
@@ -193,21 +218,42 @@ def compat_launch(
     credential: str,
     *,
     model: str,
+    reasoning_effort: str | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """The CLI's launch behind the member's compatibility helper.
 
     The argv gains the launcher in front; the upstream's URL and key travel in
     the environment the launcher consumes and removes before it becomes the
     CLI (``cloud_agent_host.protocol_translator``). ``model`` locks the helper to one model;
-    empty takes the CLI's own ``--model`` argument.
+    empty takes the CLI's own ``--model`` argument. ``reasoning_effort`` is
+    the turn's level, which the helper sends upstream; ``None`` (Auto) adds
+    nothing, so an Auto launch is what it was before levels were offered.
     """
-    return [*COMPAT_LAUNCHER, *argv], {
-        **env,
-        ENV_CLIENT: url.client_protocol,
-        ENV_UPSTREAM_URL: str(url),
-        ENV_UPSTREAM_KEY: credential,
-        ENV_MODEL: model,
-    }
+    return [*COMPAT_LAUNCHER, *argv], compat_effort_env(
+        {
+            **env,
+            ENV_CLIENT: url.client_protocol,
+            ENV_UPSTREAM_URL: str(url),
+            ENV_UPSTREAM_KEY: credential,
+            ENV_MODEL: model,
+            **relay_upstream_env(str(url)),
+        },
+        reasoning_effort,
+    )
+
+
+def compat_effort_env(env: dict[str, str], reasoning_effort: str | None) -> dict[str, str]:
+    """``env`` with the helper told the turn's level, when it is a translated launch.
+
+    A direct launch, or Auto, is returned unchanged; a level already there is
+    replaced, so a launch template built at Auto can be bound to its turn's.
+    """
+    if ENV_CLIENT not in env:
+        return env
+    bound = {key: value for key, value in env.items() if key != ENV_REASONING_EFFORT}
+    if reasoning_effort:
+        bound[ENV_REASONING_EFFORT] = reasoning_effort
+    return bound
 
 
 def compat_cli_credential(credential: str) -> str:
@@ -306,11 +352,11 @@ class RuntimeMCPConfig:
     alias from.
 
     **A separate address and a separate credential from inference.** MCP is
-    served by the cloud agent's own relay, model calls by the FreeInference
-    gateway, and the two credentials are not interchangeable: a leaked MCP
-    token buys no inference, a leaked inference grant buys no tools. Carrying
-    them in one field, as this did while the gateway proxied MCP, would make
-    that separation impossible to express.
+    served by the cloud agent's own relay, model calls by the owner's model
+    provider, and the two credentials are not interchangeable: a leaked MCP
+    token buys no inference, a leaked provider key buys no tools. Carrying
+    them in one field, as this did while an inference gateway proxied MCP,
+    would make that separation impossible to express.
 
     Still no endpoint or header for the *upstream*: each alias is a name one
     conversation gave one connection, the relay resolves it against that job's

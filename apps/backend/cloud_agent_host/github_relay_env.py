@@ -12,8 +12,9 @@ git-credential``, through invocation-only ``GIT_CONFIG_*`` settings that never
 touch the shared ``.git``.
 
 The owner is the author and committer of the member's commits; the agent adds
-itself as co-author (``FREEINFERENCE_GIT_COAUTHOR``, named in the platform
-instructions).
+itself as co-author with the trailer the platform instructions spell out. The
+host also sets ``FREEINFERENCE_GIT_COAUTHOR`` to the same value, which nothing
+reads.
 
 The variables a member's CLI gets for it are
 :class:`cloud_agent_host.launch.github_relay.GitHubRelayFacet`'s.
@@ -30,6 +31,16 @@ from typing import Any, TypedDict
 RELAY_CA_FILE_ENV = "AGENT_SANDBOX_GITHUB_RELAY_CA_FILE"
 #: The largest CA file read; a CA certificate is a couple of kilobytes.
 _MAX_CA_BYTES = 64 * 1024
+
+
+def relay_configured() -> bool:
+    """Whether this host sends ``github.com`` to the GitHub relay.
+
+    The same signal the egress rules use: :data:`RELAY_CA_FILE_ENV` is set.
+    A member's placeholder credential authenticates only then. Without it,
+    ``github.com`` is the public host, which refuses that placeholder.
+    """
+    return bool((os.environ.get(RELAY_CA_FILE_ENV) or "").strip())
 
 
 def relay_ca_pem() -> str | None:
