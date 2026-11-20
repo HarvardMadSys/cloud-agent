@@ -454,29 +454,29 @@ export function useAgentJob(
           ? loadedStreamCursor.current.cursor
           : 0,
       onOpen: () => {
-        if (!recovering) return;
+        if (controller.signal.aborted || !recovering) return;
         recovering = false;
         reload();
       },
       onEvent: (event) => {
+        if (controller.signal.aborted) return;
         streamFailures.current = 0;
         const threadEvent = { ...event, job_id: jobId, turn_no: currentTurnNo };
         if (historyRead.current?.jobId === jobId) {
           historyRead.current.events.set(event.id, threadEvent);
         }
-        // The stream can replay across a reconnect, so dedupe on the global id
-        // the server assigns rather than assuming each frame is new.
+        // The stream replays across a reconnect, so dedupe on the server's id.
         if (seen.current.has(event.id)) return;
         seen.current.set(event.id, threadEvent);
         if (historyRead.current?.jobId === jobId) {
           historyRead.current.lifecycleEvents.set(event.id, threadEvent);
         }
         queueLive(event, threadEvent);
-        // The stream is also the fastest authority for a queued child
-        // becoming active; keep the status pill in step without polling.
+        // The stream is the fastest authority for a queued child becoming active.
         setApi((cur) => (cur?.id === jobId ? applyAgentLifecycleEvent(cur, event) : cur));
       },
       onFinished: () => {
+        if (controller.signal.aborted) return;
         finished = true;
         streamFailures.current = 0;
         // Commit the frames received in this window before the reload replaces
