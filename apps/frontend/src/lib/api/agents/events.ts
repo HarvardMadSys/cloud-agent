@@ -47,8 +47,8 @@ export async function listAllAgentThreadEvents(
     /** Start after this event id: the caller already holds the thread up to it. */
     after?: number;
     signal?: AbortSignal;
-    /** An immutable snapshot of every page read so far. */
-    onPage?: (events: AgentThreadEventApi[]) => void;
+    /** The page just read, in ascending id order. Pages arrive in that order. */
+    onPage?: (page: AgentThreadEventApi[]) => void;
   } = {},
 ): Promise<AgentThreadEventApi[]> {
   const events: AgentThreadEventApi[] = [];
@@ -58,7 +58,7 @@ export async function listAllAgentThreadEvents(
     const page = await listAgentThreadEvents(jobId, cursor, 1000, signal);
     signal?.throwIfAborted();
     events.push(...page.events);
-    if (page.events.length) onPage?.([...events]);
+    if (page.events.length) onPage?.(page.events);
     if (page.events.length < 1000 || page.next_cursor <= cursor) return events;
     cursor = page.next_cursor;
   }

@@ -251,7 +251,7 @@ describe('agents api', () => {
     );
   });
 
-  it('publishes immutable activity snapshots and forwards cancellation to every page', async () => {
+  it('publishes each page in turn and forwards cancellation to every page', async () => {
     const first = Array.from({ length: 1000 }, (_, index) => ({ id: index + 1 }));
     const last = { id: 1001 };
     fetchWithAuth
@@ -262,9 +262,8 @@ describe('agents api', () => {
     const result = await listAllAgentThreadEvents('job/one', { signal: controller.signal, onPage });
     expect(onPage).toHaveBeenCalledTimes(2);
     expect(onPage.mock.calls[0][0]).toEqual(first);
-    expect(onPage.mock.calls[1][0]).toEqual([...first, last]);
+    expect(onPage.mock.calls[1][0]).toEqual([last]);
     expect(result).toEqual([...first, last]);
-    expect(onPage.mock.calls[0][0]).not.toBe(onPage.mock.calls[1][0]);
     expect(fetchWithAuth).toHaveBeenNthCalledWith(
       1,
       expect.any(String),

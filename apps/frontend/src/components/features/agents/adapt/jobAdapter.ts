@@ -35,8 +35,10 @@ import {
   displayHistoryTurn,
   projectThread,
   sameRecords,
+  threadFacts,
   transcriptEvents,
   type HistoryProjector,
+  type ThreadFacts,
 } from './threadAdapter';
 
 /** Describe the trusted execution backend reported for the current attempt. */
@@ -73,6 +75,8 @@ export function sandboxDisplayLabel(backend: string, runtime?: string): string {
 export interface AdaptOptions extends WorkspaceGitOptions {
   events?: AgentJobEventApi[];
   threadEvents?: AgentThreadEventApi[];
+  /** The conversation already grouped by turn, kept current by the caller. */
+  eventsByJob?: Map<string, AgentThreadEventApi[]>;
   /** Keep complete durable replies visible while activity pages are still arriving. */
   historyLoading?: boolean;
   thread?: AgentThreadApi | null;
@@ -95,7 +99,29 @@ export function createDisplayJobAdapter(): typeof toDisplayJob {
   let scope: string | undefined;
   let cached = new Map<string, CachedTurn>();
   let history: AgentHistoryTurn[] = [];
+  let historyKey: {
+    jobs: AgentJobApi[];
+    messages: Map<string, AgentThreadMessageApi[]>;
+    events: Map<string, AgentThreadEventApi[]>;
+    historyLoading: boolean;
+    lengths: number[];
+  } | null = null;
   const projectHistory: HistoryProjector = (jobs, messages, events, historyLoading) => {
+    // A streamed frame belongs to the live turn, which is not in this list.
+    // Same turns, same groups, same lengths therefore means the settled
+    // history cannot have changed; do not walk every turn's rows to prove it.
+    if (
+      historyKey &&
+      historyKey.jobs === jobs &&
+      historyKey.messages === messages &&
+      historyKey.events === events &&
+      historyKey.historyLoading === historyLoading
+    ) {
+      const unchanged = jobs.every(
+        (job, index) => (events.get(job.id)?.length ?? 0) === historyKey!.lengths[index],
+      );
+      if (unchanged) return history;
+    }
     const nextCache = new Map<string, CachedTurn>();
     const nextHistory = jobs.map((job) => {
       const jobMessages = messages.get(job.id) ?? [];
@@ -121,6 +147,13 @@ export function createDisplayJobAdapter(): typeof toDisplayJob {
     });
     cached = nextCache;
     if (!sameRecords(history, nextHistory)) history = nextHistory;
+    historyKey = {
+      jobs,
+      messages,
+      events,
+      historyLoading,
+      lengths: jobs.map((job) => events.get(job.id)?.length ?? 0),
+    };
     return history;
   };
   // The live turn's rows from the last projection. A running turn projects
@@ -128,14 +161,32 @@ export function createDisplayJobAdapter(): typeof toDisplayJob {
   // reads the same keeps its object, so the rows that did not change are not
   // rendered again.
   let live: { jobId: string; rows: AgentEvent[] } = { jobId: '', rows: [] };
+  let factsCache:
+    | { jobId: string; thread: AgentThreadApi; turn: number | undefined; facts: ThreadFacts }
+    | undefined;
   return (job, options = {}) => {
     const nextScope = options.thread?.thread_id ?? job.thread_id ?? job.id;
     if (scope !== nextScope || options.threadEvents === undefined) {
       cached.clear();
       history = [];
       scope = nextScope;
+      factsCache = undefined;
     }
-    const adapted = adaptJob(job, options, projectHistory);
+    let facts: ThreadFacts | undefined;
+    if (options.thread) {
+      const turn = job.turn_no ?? options.thread.jobs.find((row) => row.id === job.id)?.turn_no;
+      if (
+        factsCache?.jobId === job.id &&
+        factsCache.thread === options.thread &&
+        factsCache.turn === turn
+      ) {
+        facts = factsCache.facts;
+      } else {
+        facts = threadFacts(job, options.thread);
+        factsCache = { jobId: job.id, thread: options.thread, turn, facts };
+      }
+    }
+    const adapted = adaptJob(job, options, projectHistory, facts);
     const rows =
       live.jobId === job.id ? keepUnchangedRows(live.rows, adapted.events) : adapted.events;
     live = { jobId: job.id, rows };
@@ -204,6 +255,7 @@ function adaptJob(
   job: AgentJobApi,
   options: AdaptOptions,
   projectHistory?: HistoryProjector,
+  facts?: ThreadFacts,
 ): AgentJob {
   const failureCause = failureCauseOf(job.detail);
   const events = options.events ?? [];
@@ -221,7 +273,13 @@ function adaptJob(
   const thread = projectThread(
     job,
     events,
-    { thread: options.thread, threadEvents: options.threadEvents, historyLoading },
+    {
+      thread: options.thread,
+      threadEvents: options.threadEvents,
+      eventsByJob: options.eventsByJob,
+      historyLoading,
+      facts,
+    },
     projectHistory,
   );
   const publishedPrUrl = thread.publishedPrUrl;
