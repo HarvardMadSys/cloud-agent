@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: HybridInference Cloud Agent \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-04 08:10-0500\n"
+"POT-Creation-Date: 2026-11-26 09:52+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: The HybridInference contributors\n"
 "Language: zh_CN\n"
@@ -13,17 +13,17 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.18.0\n"
+"Generated-By: Babel 2.19.0\n"
 
-#: ../developer/index.md:43
+#: ../developer/index.md:44
 msgid "Getting started"
 msgstr "快速上手"
 
-#: ../developer/index.md:54
+#: ../developer/index.md:55
 msgid "Concepts"
 msgstr "概念"
 
-#: ../developer/index.md:66
+#: ../developer/index.md:67
 msgid "Operations"
 msgstr "运维"
 
@@ -39,15 +39,16 @@ msgid ""
 " plane coordinates jobs and sessions, and relays the agents' own pushes "
 "and pull requests to GitHub. Accounts are its own: people sign up, apply "
 "through a waiting list and are approved by an administrator. Every task "
-"runs on a model connection its owner adds with their own provider key, "
-"such as a FreeInference key."
+"runs on a model connection: either one its owner adds with their own "
+"provider key (such as a FreeInference key), or one the deployment "
+"provides through its control-plane model relay."
 msgstr ""
 "Cloud Agent 在保留的沙箱容器中，针对用户的仓库运行编码 agent。用户通过 Web 界面工作，已注册的主机运行 Claude "
 "Code、Codex、pi、OpenCode 或 Kilo。控制平面协调任务和会话，并把 agent 自己的推送和 pull request "
-"中继到 GitHub。账号是它自己的：用户注册、通过等候名单申请，再由管理员批准。每个任务都运行在其所有者用自己的服务商密钥（例如 "
-"FreeInference 密钥）添加的模型连接上。"
+"中继到 GitHub。账号是它自己的：用户注册、通过等候名单申请，再由管理员批准。每个任务都运行在一个模型连接上：可以是所有者用自己的服务商密钥（例如 "
+"FreeInference 密钥）添加的连接，也可以是部署通过控制平面模型中继提供的连接。"
 
-#: ../developer/index.md:11
+#: ../developer/index.md:12
 msgid ""
 "This is the documentation for the software itself: running it locally, "
 "operating a deployment, understanding how it works, and contributing to "
@@ -63,7 +64,7 @@ msgstr ""
 "MIT 许可证。发现 bug 或有疑问，请到 [issue tracker](https://github.com/HarvardMadSys"
 "/hybridInference-cloud-agent/issues) 提出。"
 
-#: ../developer/index.md:18
+#: ../developer/index.md:19
 msgid "Where to start"
 msgstr "从哪里开始"
 
@@ -171,11 +172,11 @@ msgstr "查看本服务所提供的 API，即已提交的契约"
 msgid "[API contract](api-contracts.md)"
 msgstr "[API 契约](api-contracts.md)"
 
-#: ../developer/index.md:35
+#: ../developer/index.md:36
 msgid "Scope of this site"
 msgstr "本站涵盖的内容"
 
-#: ../developer/index.md:37
+#: ../developer/index.md:38
 msgid ""
 "These pages document the software, not any one installation of it. How "
 "end users work with a particular deployment, which agents and models it "

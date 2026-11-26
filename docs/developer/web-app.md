@@ -3,7 +3,8 @@
 This page is for developers changing the owner-facing web app. It records the
 rules each feature follows, the endpoints behind it and what only a real browser
 can check. How to use the app is user documentation, which belongs to a
-distribution; the app's Help link opens it (`AGENT_WEB_DOCS_URL`).
+distribution; the app's Help link opens it (**Admin → Settings**,
+`site.docs_url`, seeded from `AGENT_WEB_DOCS_URL`).
 
 ## Sidebar and conversation list
 
@@ -46,10 +47,11 @@ on GitHub, so the dialog keeps what was entered and does not retry by itself.
 An account with no conversations, archived ones included, sees a **Getting
 started** row: **Connect a model**, **Connect GitHub**, **Grant a repository**,
 then **Run your first task**. Model connection, GitHub connection and
-repository state come from `/config`. **Connect a model** is offered where the
-deployment lets owners add model connections, and is done once one of theirs
-has a model verified for some agent (`model_connection_required` is false);
-saving a connection in any tab of the same browser refreshes the row. The
+repository state come from `/config`. **Connect a model** is offered where `model_connections_enabled` is true, and
+is done once either a deployment-provided model or one of the owner's own
+connections has a model verified for some agent (`model_connection_required` is
+false, and any runnable provided model satisfies it too); saving a connection
+in any tab of the same browser refreshes the row. The
 GitHub steps are left out while the deployment has no GitHub App or its App is
 unavailable, and the row is hidden when neither a model step nor GitHub is left
 to offer. The sidebar, the new-task page and the conversation explanations
@@ -161,6 +163,24 @@ delegating step through runtime ownership records: Claude Code records the
 delegating call, and Codex the subagent's own thread. Sessions recorded before
 those records keep a flat step list.
 
+### Turn screenshots and sandbox incidents
+
+After a turn settles, the transcript lists up to the six latest raster images
+written under the workspace artifacts directory during the turn's run window
+(`startedAt` minus 2 seconds through `finishedAt` plus 5 seconds) and opens
+full-size previews in a dialog. One listing per conversation is cached for
+20 seconds so multiple turns do not repeat sandbox execs, and a cold or deleted
+sandbox shows nothing rather than an error.
+
+When the control plane appends a `lifecycle` event with phase
+`sandbox_incident` to a running turn (`out_of_memory`, `container_exited`, or
+`mcp_server_failed`), the transcript renders a plain one-line notice without
+exposing limits or exit codes; unknown incident kinds fall back to a generic
+line.
+
+Sources: [`TurnScreenshots.tsx`](../../apps/frontend/src/components/features/agents/conversation/TurnScreenshots.tsx)
+and [`sandboxIncidentNotice.ts`](../../apps/frontend/src/components/features/agents/adapt/sandboxIncidentNotice.ts).
+
 ### Workspace pane keyboard
 
 Workspace, Git, file-list and terminal tabs select a view with Left/Right, Home
@@ -201,6 +221,33 @@ Sources: [`JobDetail.tsx`](../../apps/frontend/src/components/features/agents/Jo
 [`TurnNavigator.tsx`](../../apps/frontend/src/components/features/agents/conversation/TurnNavigator.tsx),
 [`conversationTurnNavigation.ts`](../../apps/frontend/src/components/features/agents/conversation/conversationTurnNavigation.ts)
 and [`useConversationScroll.ts`](../../apps/frontend/src/components/features/agents/conversation/useConversationScroll.ts).
+
+## Models and the composer picker
+
+**Settings → Models** (`/settings/models`) manages the models an owner's tasks
+can run on; legacy links to `/settings/my-settings#settings-connections`
+redirect there. When the deployment provides enabled models, they are listed
+first by name (with source headings only when more than one provided source is
+active) and the owner's personal connections section folds beneath them.
+Following a link with `#settings-connections` unfolds personal connections even
+when the page is already mounted. While `/config` is loading, the page waits up
+to four seconds before falling back to showing personal connections so a slow
+response never blocks them.
+
+In the composer, deployment-provided models appear first and the owner's
+enabled personal connections after them in one flat list with no source
+headings. Within each kind a model ID may live on at most one connection, and
+an owner's enabled personal connection overrides a same-named provided model
+for that owner; a source suffix is shown only when two active sources still
+share a model name (from connections saved before the uniqueness rule). A
+follow-up keeps its parent's model and connection together, never silently
+swapping to another source with the same model name, and marks an unavailable
+selection instead.
+
+Sources: [`ModelsSettingsView.tsx`](../../apps/frontend/src/components/features/settings/ModelsSettingsView.tsx),
+[`ProvidedModelsCard.tsx`](../../apps/frontend/src/components/features/settings/ProvidedModelsCard.tsx),
+[`providedModels.ts`](../../apps/frontend/src/components/features/agents/composer/providedModels.ts)
+and [`modelSource.ts`](../../apps/frontend/src/components/features/agents/composer/modelSource.ts).
 
 ## Tool approvals
 
