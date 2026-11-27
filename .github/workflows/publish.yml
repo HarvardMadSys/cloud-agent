@@ -85,7 +85,9 @@ jobs:
       github.event.workflow_run.head_branch == 'dev' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       github.event.workflow_run.conclusion == 'success') }}
-    runs-on: [self-hosted, Linux, ci-general]
+    # Hosted, like CI's classifier: it reads git history and the API and holds
+    # no publishing credential, and the image builds below wait on it.
+    runs-on: [ubuntu-24.04]
     # `actions: read` is what lets a job ask the API whether CI passed. The
     # default token grants nothing but what is listed.
     permissions:

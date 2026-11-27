@@ -108,6 +108,8 @@ def _self_hosted_labels(name: str, cell: dict) -> list[str]:
     special = {
         "compose": ["self-hosted", "Linux", "ARM64", "image-verify-arm64"],
         "kata": ["self-hosted", "Linux", "X64", "image-verify-x64"],
+        # The classifier gates every image job, so it runs hosted on every event.
+        "changes": ["ubuntu-24.04"],
     }
     return (
         json.loads(cell["runner"])
@@ -144,7 +146,10 @@ def test_trusted_events_keep_the_existing_self_hosted_pools(event: str) -> None:
 
 
 def test_only_an_optional_cache_warmer_runs_a_trusted_event_on_a_hosted_vm() -> None:
-    """Trusted CI and publication must never wait for a hosted VM.
+    """Trusted CI and publication must never wait for a hosted VM's long jobs.
+
+    The only hosted jobs on a trusted event are this warmer and the two short
+    gates every image job waits on: CI's classifier and Publish's commit check.
 
     `pr-caches` runs dev's reviewed code on a hosted VM so that a pull request's
     caches match its own VM. Its separate workflow prevents a queued or slow
