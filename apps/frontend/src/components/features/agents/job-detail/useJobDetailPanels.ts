@@ -9,6 +9,7 @@ import {
   type RunTab,
   type StepTab,
 } from '../trajectory/trajectoryInspectorTabs';
+import { createTrajectoryStepCache } from '../trajectory/trajectoryStepCache';
 import {
   buildTrajectorySteps,
   turnContextFromJobs,
@@ -151,13 +152,14 @@ export function useJobDetailPanels({
   }, [threadJobs, job.id, job.prompt, job.turnNo, job.createdAt]);
   // The diagnostic projection can be large. Keep a getter for transcript
   // clicks, and construct it only while a reader uses the trajectory/details.
+  const trajectoryCache = useMemo(() => createTrajectoryStepCache(), []);
   const getTrajectorySteps = useMemo(() => {
     let steps: ReturnType<typeof buildTrajectorySteps> | undefined;
     return () => {
-      steps ??= buildTrajectorySteps(events, trajectoryContext);
+      steps ??= trajectoryCache(events, trajectoryContext);
       return steps;
     };
-  }, [events, trajectoryContext]);
+  }, [events, trajectoryCache, trajectoryContext]);
   const trajectorySteps =
     tab === 'trajectory' || inspector !== null ? getTrajectorySteps() : EMPTY_TRAJECTORY_STEPS;
   const [requestedFile, setRequestedFile] = useState<{

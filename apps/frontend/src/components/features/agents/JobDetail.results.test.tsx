@@ -214,7 +214,7 @@ describe('recorded results in the conversation', () => {
     expect(buildTrajectorySteps).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'trajectory' }));
     expect(buildTrajectorySteps).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(buildTrajectorySteps).mock.lastCall?.[0]).toBe(events);
+    expect(vi.mocked(buildTrajectorySteps).mock.lastCall?.[0]).toContain(events.at(-1));
   });
 
   it('moves keyboard focus into the recorded workspace and restores the file opener when closed', async () => {

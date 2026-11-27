@@ -27,6 +27,7 @@ import {
 import { buildTrajectorySteps, turnContextFromJobs } from './trajectory/trajectorySteps';
 import { STREAM_RETRY_MAX_MS, STREAM_RETRY_MIN_MS, useAgentJob } from './useAgentJobs';
 import { AgentReadProvider } from './AgentReadProvider';
+import { event, flushStream, stayOpen } from '@/test/agentStreamTestHelpers';
 
 vi.mock('@/lib/api/agents', () => ({
   getAgentJob: vi.fn(),
@@ -47,29 +48,6 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
 });
-
-/** A turn's stream that stays open; one that returns without the turn ending could not connect. */
-function stayOpen(): Promise<void> {
-  return new Promise(() => undefined);
-}
-
-function event(
-  id: number,
-  event_type: string,
-  payload: Record<string, unknown>,
-  attempt_id = 10,
-): AgentThreadEventApi {
-  return {
-    id,
-    seq: id,
-    event_type,
-    payload,
-    attempt_id,
-    job_id: 'live-job',
-    turn_no: 1,
-    created_at: `2026-09-11T10:00:0${id}.000Z`,
-  } as AgentThreadEventApi;
-}
 
 describe('useAgentJob history-to-stream handoff', () => {
   beforeEach(() => resetAgentPush());
@@ -290,6 +268,7 @@ describe('useAgentJob history-to-stream handoff', () => {
       stream.onEvent(live);
       pageOptions.onPage?.([first]);
     });
+    await flushStream();
     expect(result.current.events).toEqual([first, second, own, live]);
     await act(async () => finish([first, second, own]));
     expect(result.current.events).toEqual([first, second, own, live]);
@@ -385,6 +364,7 @@ describe('useAgentJob history-to-stream handoff', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     const stream = vi.mocked(streamAgentJob).mock.calls[0][1];
     act(() => stream.onEvent(live));
+    await flushStream();
     expect(
       result.current.job?.events.filter((row) => row.kind === 'message').map((row) => row.text),
     ).toContain('Streamed after the durable snapshot');
@@ -527,6 +507,7 @@ describe('useAgentJob history-to-stream handoff', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     const oldStream = vi.mocked(streamAgentJob).mock.calls[0][1];
     act(() => oldStream.onEvent(event(51, 'message', { text: 'Alice live reply' })));
+    await flushStream();
     expect(result.current.events.map((row) => row.id)).toEqual([50, 51]);
 
     serve(job, [event(3, 'message', { text: 'Bob history' })]);
@@ -622,6 +603,7 @@ describe('useAgentJob live turn rows', () => {
       stream.onEvent(during);
       stream.onEvent(started);
     });
+    await flushStream();
     expect(result.current.events.map((row) => row.id)).toEqual([1, 2, 3]);
     expect(result.current.job?.events.map((row) => row.sourceEventId)).toEqual([1, 2, 3]);
     expect(result.current.job?.state).toBe('running');
@@ -676,6 +658,7 @@ describe('useAgentJob live turn rows', () => {
     await waitFor(() => expect(rejectHistory).toBeDefined());
     const stream = vi.mocked(streamAgentJob).mock.calls[0][1];
     act(() => stream.onEvent(during));
+    await flushStream();
     await act(async () => rejectHistory(new Error('History unavailable')));
     expect(result.current.error).toBe('History unavailable');
     expect(result.current.job?.events.map((row) => row.sourceEventId)).toEqual([1, 2]);
@@ -746,6 +729,7 @@ describe('useAgentJob live turn rows', () => {
     expect(streamAgentJob).toHaveBeenCalledTimes(2);
     const newStream = vi.mocked(streamAgentJob).mock.calls[1][1];
     act(() => newStream.onEvent(event(2, 'lifecycle', { phase: 'started' }, 11)));
+    await flushStream();
     expect(result.current.job?.state).toBe('running');
     expect(result.current.events.at(-1)).toMatchObject({ job_id: next.id, turn_no: 2 });
     expect(result.current.threadJobs[0]).toEqual(first);
@@ -1153,6 +1137,7 @@ describe('useAgentJob live turn rows', () => {
       stream!.onEvent(event(3, 'lifecycle', { phase: 'started' }, 11));
       stream!.onEvent(event(4, 'tool_use', { id: 'new', name: 'Bash' }, 11));
     });
+    await flushStream();
 
     // The chat model already follows the replacement; the turn rows the
     // inspector scopes its statuses with have to follow it too, or the call on

@@ -88,7 +88,10 @@ export interface ThreadProjection {
 export interface ThreadSources {
   thread?: AgentThreadApi | null;
   threadEvents?: AgentThreadEventApi[];
+  eventsByJob?: Map<string, AgentThreadEventApi[]>;
   historyLoading: boolean;
+  /** The conversation's facts, computed once per thread rather than per event. */
+  facts?: ThreadFacts;
 }
 
 /** The job ids of the turns before this one, or null when the thread cannot say. */
@@ -108,21 +111,54 @@ function historyTurnsOf(
   historicalJobs: AgentJobApi[],
   messagesByJob: Map<string, AgentThreadMessageApi[]>,
   threadEvents: AgentThreadEventApi[],
+  eventsByJob: Map<string, AgentThreadEventApi[]> | undefined,
   historyLoading: boolean,
   projectHistory?: HistoryProjector,
 ): AgentHistoryTurn[] {
-  const eventsByJob = groupByJob(threadEvents);
+  const byJob = eventsByJob ?? groupByJob(threadEvents);
   if (projectHistory) {
-    return projectHistory(historicalJobs, messagesByJob, eventsByJob, historyLoading);
+    return projectHistory(historicalJobs, messagesByJob, byJob, historyLoading);
   }
   return historicalJobs.map((threadJob) =>
     displayHistoryTurn(
       threadJob,
       messagesByJob.get(threadJob.id) ?? [],
-      eventsByJob.get(threadJob.id) ?? [],
+      byJob.get(threadJob.id) ?? [],
       historyLoading,
     ),
   );
+}
+
+/** Everything about the conversation that streamed events cannot change. */
+export interface ThreadFacts {
+  messagesByJob: Map<string, AgentThreadMessageApi[]>;
+  priorMessages: DisplayThreadMessage[];
+  historicalJobs: AgentJobApi[];
+}
+
+/** The jobs before `currentTurn`, and their messages, ready for every projection. */
+export function threadFacts(
+  job: AgentJobApi,
+  thread: AgentThreadApi | null | undefined,
+): ThreadFacts {
+  const threadJobs = thread?.jobs ?? [];
+  const threadMessages = thread?.messages ?? [];
+  const currentTurn =
+    job.turn_no ?? threadJobs.find((threadJob) => threadJob.id === job.id)?.turn_no;
+  const priorJobIds = thread ? priorJobIdsOf(thread, currentTurn) : null;
+  return {
+    messagesByJob: groupByJob(threadMessages),
+    priorMessages: threadMessages
+      .filter((message) =>
+        priorJobIds ? priorJobIds.has(message.job_id) : message.job_id !== job.id,
+      )
+      .map(mapThreadMessage),
+    historicalJobs: threadJobs.filter(
+      (threadJob) =>
+        threadJob.id !== job.id &&
+        (currentTurn === undefined || (threadJob.turn_no ?? 1) < currentTurn),
+    ),
+  };
 }
 
 /** The newest pull request of the conversation this turn may link to. */
@@ -139,29 +175,21 @@ function publishedPrUrlOf(job: AgentJobApi, thread: AgentThreadApi | null | unde
 export function projectThread(
   job: AgentJobApi,
   events: AgentJobEventApi[],
-  { thread, threadEvents, historyLoading }: ThreadSources,
+  { thread, threadEvents, eventsByJob, historyLoading, facts }: ThreadSources,
   projectHistory?: HistoryProjector,
 ): ThreadProjection {
-  const threadJobs = thread?.jobs ?? [];
-  const threadMessages = thread?.messages ?? [];
-  const currentTurn =
-    job.turn_no ?? threadJobs.find((threadJob) => threadJob.id === job.id)?.turn_no;
-  const priorJobIds = thread ? priorJobIdsOf(thread, currentTurn) : null;
-  const messagesByJob = groupByJob(threadMessages);
-  const priorMessages = threadMessages
-    .filter((message) =>
-      priorJobIds ? priorJobIds.has(message.job_id) : message.job_id !== job.id,
-    )
-    .map(mapThreadMessage);
-  const historicalJobs = threadJobs.filter(
-    (threadJob) =>
-      threadJob.id !== job.id &&
-      (currentTurn === undefined || (threadJob.turn_no ?? 1) < currentTurn),
-  );
-  const historyTurns =
-    threadEvents === undefined
-      ? undefined
-      : historyTurnsOf(historicalJobs, messagesByJob, threadEvents, historyLoading, projectHistory);
+  const known = facts ?? threadFacts(job, thread);
+  let historyTurns: AgentHistoryTurn[] | undefined;
+  if (threadEvents !== undefined || eventsByJob !== undefined) {
+    historyTurns = historyTurnsOf(
+      known.historicalJobs,
+      known.messagesByJob,
+      threadEvents ?? [],
+      eventsByJob,
+      historyLoading,
+      projectHistory,
+    );
+  }
   // A turn copied by fork has no events; its durable messages are the only
   // record of what it said. For a settled job whose event log carries no
   // message rows, render the thread's copy of the turn — prompt included, so
@@ -169,10 +197,10 @@ export function projectThread(
   const settled = job.state === 'succeeded' || job.state === 'failed' || job.state === 'cancelled';
   let ownMessages: DisplayThreadMessage[] = [];
   if (historyLoading || (settled && !events.some((event) => event.event_type === 'message'))) {
-    ownMessages = (messagesByJob.get(job.id) ?? []).map(mapThreadMessage);
+    ownMessages = (known.messagesByJob.get(job.id) ?? []).map(mapThreadMessage);
   }
   return {
-    threadMessages: [...priorMessages, ...ownMessages],
+    threadMessages: [...known.priorMessages, ...ownMessages],
     ...(historyTurns ? { historyTurns } : {}),
     historyIncludesPrompt: ownMessages.some((message) => message.role === 'user'),
     publishedPrUrl: publishedPrUrlOf(job, thread),
