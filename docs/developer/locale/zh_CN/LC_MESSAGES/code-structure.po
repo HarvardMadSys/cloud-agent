@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: HybridInference Cloud Agent\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-05 22:38-0500\n"
+"POT-Creation-Date: 2026-11-26 09:52+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: The HybridInference contributors\n"
 "Language: zh_CN\n"
@@ -13,7 +13,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.18.0\n"
+"Generated-By: Babel 2.19.0\n"
 
 #: ../developer/code-structure.md:1
 msgid "Code structure"
@@ -39,16 +39,17 @@ msgid ""
 "Neither imports the other. Shared code provides the facts and contracts "
 "they agree on; it imports neither implementation. Accounts, admission and"
 " usage live in the agent database; model calls go from the sandbox to the"
-" owner's provider."
+" owner's provider, or through the control plane's model relay for models "
+"the deployment provides."
 msgstr ""
 "控制平面和主机是分别部署的两套实现，互不导入。共享代码提供双方共同认可的事实和契约，它不导入任何一方的实现。账号、准入和用量都在 agent "
-"数据库中；模型调用从沙箱直接发往所有者的服务商。"
+"数据库中；模型调用从沙箱直接发往所有者的服务商，或者对部署提供的模型经由控制平面的模型中继转发。"
 
-#: ../developer/code-structure.md:29
+#: ../developer/code-structure.md:30
 msgid "Vocabulary"
 msgstr "术语"
 
-#: ../developer/code-structure.md:31
+#: ../developer/code-structure.md:32
 msgid ""
 "The code and the wire keep their historical names; documentation and new "
 "code use the terms in the first column. A job is one turn of a "
@@ -149,8 +150,8 @@ msgid "Placeholder credential"
 msgstr "占位凭据"
 
 #: ../developer/code-structure.md
-msgid "`amr.` (MCP), `agh.` (GitHub)"
-msgstr "`amr.`（MCP）、`agh.`（GitHub）"
+msgid "`amr.` (MCP), `agh.` (GitHub), `amd.` (Model relay)"
+msgstr "`amr.`（MCP）、`agh.`（GitHub）、`amd.`（模型中继）"
 
 #: ../developer/code-structure.md
 msgid ""
@@ -158,7 +159,7 @@ msgid ""
 "relay resolves the fence again on every request"
 msgstr "指名某一个 residency 的 bearer 凭据。只有对应的中继认它，中继每次收到请求都会重新解析栅栏"
 
-#: ../developer/code-structure.md:45
+#: ../developer/code-structure.md:46
 msgid ""
 "Never name a new field a bare `generation`: say what it counts, as in "
 "`sandbox_generation` or `residency_generation`."
@@ -166,26 +167,26 @@ msgstr ""
 "新字段不要只叫 `generation`，要写明它计的是什么，例如 `sandbox_generation` 或 "
 "`residency_generation`。"
 
-#: ../developer/code-structure.md:48
+#: ../developer/code-structure.md:49
 msgid "Follow a control-plane request"
 msgstr "跟着一个控制平面请求走"
 
-#: ../developer/code-structure.md:64
+#: ../developer/code-structure.md:65
 msgid ""
-"`app.py` mounts the owner/admin API and the separate MCP-only listener. "
-"It installs shared HTTP response and exception policies, and on both "
-"listeners a dependency that runs ahead of every route's own "
-"(`api/_parameters.py`): a path or query parameter holding NUL, or a "
-"route's integer parameter too wide for a `bigint`, is refused with a 422 "
-"before any query reads it. So is a JSON body holding NUL or half a "
-"surrogate pair, on a route an owner, an administrator or the on-call "
-"relay calls; host and sandbox reports keep their own models, which "
-"replace those characters instead. `bootstrap/lifespan.py` constructs the "
-"resources and starts and stops background work; route modules do not own "
-"service startup or shutdown."
+"`app.py` mounts the four listeners: the owner/admin API, the MCP-only "
+"listener, the GitHub relay and the model relay. It installs shared HTTP "
+"response and exception policies, and on the API and MCP listeners a "
+"dependency that runs ahead of every route's own (`api/_parameters.py`): a"
+" path or query parameter holding NUL, or a route's integer parameter too "
+"wide for a `bigint`, is refused with a 422 before any query reads it. So "
+"is a JSON body holding NUL or half a surrogate pair, on a route an owner,"
+" an administrator or the on-call relay calls; host and sandbox reports "
+"keep their own models, which replace those characters instead. "
+"`bootstrap/lifespan.py` constructs the resources and starts and stops "
+"background work; route modules do not own service startup or shutdown."
 msgstr ""
-"`app.py` 挂载所有者/管理员 API 和单独的 MCP 专用监听器，并装上统一的 HTTP "
-"响应和异常处理策略。两个监听器上还都装了一个依赖，它排在每个路由自己的依赖之前（`api/_parameters.py`）：路径或查询参数里带 "
+"`app.py` 挂载四个监听器：所有者/管理员 API、MCP 专用监听器、GitHub 中继和模型中继，并装上统一的 HTTP "
+"响应和异常处理策略。API 和 MCP 监听器上还都装了一个依赖，它排在每个路由自己的依赖之前（`api/_parameters.py`）：路径或查询参数里带 "
 "NUL，或者路由的整数参数超出了 `bigint` 的范围，都会在任何查询读到它之前直接返回 "
 "422。由所有者、管理员或值班中继调用的路由，JSON 请求体里带 NUL "
 "或者只有半个代理对，也一样拒绝；主机和沙箱的上报有自己的模型，会把这些字符替换掉，而不是拒绝。`bootstrap/lifespan.py` "
@@ -349,7 +350,7 @@ msgstr "外部服务商的具体实现"
 msgid "A provider's integration behavior changes"
 msgstr "某个服务商的对接方式要变"
 
-#: ../developer/code-structure.md:90
+#: ../developer/code-structure.md:92
 msgid ""
 "The storage assembly exposes capabilities such as `store.host_pool` and "
 "`store.pending_messages`. Callers type against the capabilities they use."
@@ -374,10 +375,11 @@ msgstr ""
 "以及各种库，因为它写到的每个类型，调用方和实现都要跟着依赖：新 port 要用的类型，先挪进 `domain/` 或 "
 "`schemas/`。不要新增只是照抄 repository 方法的 port：这种情况下由组装直接写明 repository "
 "类，每个调用方各自声明自己用到的窄 Protocol，`api/config.py` 读取模型偏好就是这样做的。应用流程不抛 HTTP "
-"错误，而是抛领域错误 `Refused` 和 `Unavailable`（`domain/errors.py`），由 `api/errors.py` "
-"映射成同样的状态码、响应头和响应体。有一个测试禁止在 `application/` 里使用 `HTTPException`。"
+"错误，而是抛领域错误 `Refused` 和 `Unavailable`（`domain/errors.py`），由 "
+"`api/errors.py` 映射成同样的状态码、响应头和响应体。有一个测试禁止在 `application/` 里使用 "
+"`HTTPException`。"
 
-#: ../developer/code-structure.md:105
+#: ../developer/code-structure.md:107
 msgid ""
 "MCP session ownership lives in `mcp/runtime.py`: lazy host construction, "
 "fenced session reaping, maintenance, and closing. Both the relay's "
@@ -389,11 +391,11 @@ msgstr ""
 "都直接调用这个运行时。立即发送（send-now）交接任务的保留和取消在 "
 "`application/send_now.py`；崩溃恢复仍然靠持久化的投递记录和恢复 worker。"
 
-#: ../developer/code-structure.md:111
+#: ../developer/code-structure.md:113
 msgid "API schemas are organized by domain"
 msgstr "API schema 按领域划分"
 
-#: ../developer/code-structure.md:113
+#: ../developer/code-structure.md:115
 msgid ""
 "Import public models from `cloud_agent.schemas`. Its `__init__.py` "
 "explicitly exports them; implementations use direct imports between "
@@ -476,7 +478,7 @@ msgid ""
 "rule"
 msgstr "私有辅助模块：主机和 worker 上报内容的上下限，以及提示词文本规则"
 
-#: ../developer/code-structure.md:128
+#: ../developer/code-structure.md:130
 msgid ""
 "Keep model names and serialized behavior stable during structural "
 "refactors. Cross-domain annotations must resolve immediately after "
@@ -484,11 +486,11 @@ msgid ""
 " the developer guide."
 msgstr "做结构性重构时，模型名称和序列化结果都不能变。跨领域的类型注解在导入后必须能立即解析。有意修改传输格式时，要按开发者指南的说明同步更新契约。"
 
-#: ../developer/code-structure.md:132
+#: ../developer/code-structure.md:134
 msgid "Follow a host execution"
 msgstr "跟着一次主机执行走"
 
-#: ../developer/code-structure.md:134
+#: ../developer/code-structure.md:136
 msgid ""
 "The host package groups its modules by concern. Paths below are relative "
 "to `cloud_agent_host/`; a module named without a directory sits at its "
@@ -589,7 +591,7 @@ msgid ""
 "layer"
 msgstr "启动 facet、Agent CLI 适配器，以及 Sandbox Manager 的 HTTP 层"
 
-#: ../developer/code-structure.md:149
+#: ../developer/code-structure.md:151
 msgid ""
 "The top level keeps the process entry points (`runner.py`, "
 "`sandbox_manager.py`, `candidate_check.py`, and the `host_capacity` and "
@@ -603,7 +605,7 @@ msgstr ""
 "`claimed_job.py`、`control_plane_client.py`、`drivers.py`、`resident_transport.py`"
 " 和 `session_lifecycle.py`。"
 
-#: ../developer/code-structure.md:155
+#: ../developer/code-structure.md:157
 msgid ""
 "`runner.py` is the command line. The host service in "
 "`service/host_service.py` enrolls the host, heartbeats, claims turns up "
@@ -632,7 +634,7 @@ msgstr ""
 " 为范围的 worker HTTP 调用、请求超时和事件重放。客户端把一个轮次的事件放进 `event_sender.py` "
 "里的有序发送器排队，由它分批上传。"
 
-#: ../developer/code-structure.md:170
+#: ../developer/code-structure.md:172
 msgid ""
 "`container/chat_sandbox_models.py` holds retained-container specs, "
 "inspection/status values, ownership labels, and identity bounds. Group "
@@ -669,18 +671,20 @@ msgstr ""
 "路由同步，以及网络的证明和释放，都放在单独拆出来的 `network/chat_sandbox_network.py` "
 "组件里。这个组件只依赖一个很窄的容器协议；精确的容器身份、有限制的 exec，以及出错就停的操作仍然由 manager 负责。manager "
 "原有的网络入口都转交给这个组件处理。网络快照仍只在一次操作内有效，运维日志的名称保持不变。`container/chat_sandbox.py` "
-"管理保留的沙箱组和组内成员。它的 `ChatSandboxManager` 由多个 mixin 组成，每个关注点一个模块：创建容器（`chat_sandbox_create.py`）、"
-"成员的 exec 和进程（`chat_sandbox_members.py`）、工作区和 home 里的文件（`chat_sandbox_workspace.py`）、"
-"guest 观察器（`chat_sandbox_observation.py`）以及归档标记（`chat_sandbox_markers.py`）；终端和保留后端分别在 "
-"`chat_sandbox_terminal.py` 和 `retained_backend.py`。有一个测试固定了 manager 的方法集合。guest 内的网络检查在 "
-"`network/guest_network_check.py`，容量报告读取的保留容器清单在 `observe/sandbox_inventory.py`。"
-"容器和进程之间的边界归 `container/sandbox.py`。原生会话和工作区操作由 Sandbox "
-"Manager 和会话 supervisor 共同协调。supervisor 的元数据锁只保护内存里的归属关系。停止、孤儿恢复和归档删除在动 "
-"Docker "
+"管理保留的沙箱组和组内成员。它的 `ChatSandboxManager` 由多个 mixin "
+"组成，每个关注点一个模块：创建容器（`chat_sandbox_create.py`）、成员的 exec "
+"和进程（`chat_sandbox_members.py`）、工作区和 home "
+"里的文件（`chat_sandbox_workspace.py`）、guest "
+"观察器（`chat_sandbox_observation.py`）以及归档标记（`chat_sandbox_markers.py`）；终端和保留后端分别在"
+" `chat_sandbox_terminal.py` 和 `retained_backend.py`。有一个测试固定了 manager "
+"的方法集合。guest 内的网络检查在 `network/guest_network_check.py`，容量报告读取的保留容器清单在 "
+"`observe/sandbox_inventory.py`。容器和进程之间的边界归 "
+"`container/sandbox.py`。原生会话和工作区操作由 Sandbox Manager 和会话 supervisor "
+"共同协调。supervisor 的元数据锁只保护内存里的归属关系。停止、孤儿恢复和归档删除在动 Docker "
 "或读写标记文件之前，会先占住这一个沙箱组的生命周期；拿到结果后，先重新核对组、成员、容器和生命周期的身份，核对通过才采纳。其他沙箱组不受影响。核对失败会释放临时占用，但持久的归档屏障和原生刷新屏障依然有效。原来通过"
 " `chat_sandbox` 导入公开沙箱模型的写法照样可用。"
 
-#: ../developer/code-structure.md:198
+#: ../developer/code-structure.md:200
 msgid ""
 "A group's lifecycle is one value, `GroupLifecycleState` "
 "(`supervisor/group_lifecycle_state.py`): which start, stop, exclusive "
@@ -693,12 +697,13 @@ msgid ""
 "records which combinations are reachable and the invariants the tests "
 "check."
 msgstr ""
-"一个沙箱组的生命周期是一个值 `GroupLifecycleState`（`supervisor/group_lifecycle_state.py`）："
-"哪个启动、停止、独占工作区操作和生命周期检查占着它，各自的持有者是谁，还欠着哪些屏障（最终归档、孤儿收尾），以及这次运行的 fence "
-"标签。只有这个模块里的转移能改它，另有一个测试禁止在别处赋值。`supervisor/group_lifecycle.py` 是准入表，决定现在能做什么。"
-"[设计文档](../agents/specs/2026-11-05-group-lifecycle-state.zh-CN.md)记录了哪些组合可达，以及测试检查的不变量。"
+"一个沙箱组的生命周期是一个值 "
+"`GroupLifecycleState`（`supervisor/group_lifecycle_state.py`）：哪个启动、停止、独占工作区操作和生命周期检查占着它，各自的持有者是谁，还欠着哪些屏障（最终归档、孤儿收尾），以及这次运行的"
+" fence 标签。只有这个模块里的转移能改它，另有一个测试禁止在别处赋值。`supervisor/group_lifecycle.py` "
+"是准入表，决定现在能做什么。[设计文档](../agents/specs/2026-11-05-group-lifecycle-state.zh-"
+"CN.md)记录了哪些组合可达，以及测试检查的不变量。"
 
-#: ../developer/code-structure.md:207
+#: ../developer/code-structure.md:209
 msgid ""
 "The runtime adapters are a package under `cloud_agent_host/runtimes/`, "
 "with one package per CLI:"
@@ -815,7 +820,7 @@ msgid ""
 "steps"
 msgstr "每种 CLI 的常驻会话类、打开它的驱动，以及它的启动步骤"
 
-#: ../developer/code-structure.md:223
+#: ../developer/code-structure.md:225
 msgid ""
 "`drivers.py` keeps the generic Driver, Session and Turn contract and the "
 "base classes the sessions share. `resident_transport.py` opens member "
@@ -834,7 +839,7 @@ msgstr ""
 "在这里仍按 CLI 分支。`member_setup/member_homes.py` 管 Codex、OpenCode 和 Kilo "
 "成员各自私有的服务商主目录。"
 
-#: ../developer/code-structure.md:232
+#: ../developer/code-structure.md:234
 msgid ""
 "Existing callers use `cloud_agent_host.runtimes`; the package explicitly "
 "exports its public API, which is the dialect layer. Sessions, `live` and "
@@ -852,11 +857,11 @@ msgstr ""
 "ID、是否支持 MCP 和可选的推理强度。运行时的版本固定仍在 `cloud_agent_shared/shared_protocol.py` "
 "和镜像文件里。"
 
-#: ../developer/code-structure.md:240
+#: ../developer/code-structure.md:242
 msgid "Shared operation profiling"
 msgstr "共用的操作性能剖析"
 
-#: ../developer/code-structure.md:242
+#: ../developer/code-structure.md:244
 msgid ""
 "Producers continue to import `cloud_agent_shared.operation_profiling`. "
 "The implementation is organized under `cloud_agent_shared/profiling/` by "
@@ -869,7 +874,7 @@ msgstr ""
 "`cloud_agent_shared/profiling/` 下，按 "
 "schema、模型、运行解析、策略、测量采集、阶段观察器、进程上下文、导出和时钟访问分成几个模块。详见这个包的[职责与契约说明](../../apps/backend/cloud_agent_shared/profiling/README.md)。"
 
-#: ../developer/code-structure.md:248
+#: ../developer/code-structure.md:250
 msgid ""
 "The facade keeps the existing producer API and operational diagnostics. "
 "Clock access respects its replaceable `time` object, keeping "
@@ -879,11 +884,11 @@ msgstr ""
 "门面保留了原有的 API 和运维诊断功能。时钟访问会用它那个可替换的 `time` "
 "对象，所以测试结果仍然确定，默认关闭的路径也不受影响。新的剖析逻辑放进对应的模块里，不要往门面里堆。"
 
-#: ../developer/code-structure.md:253
+#: ../developer/code-structure.md:255
 msgid "Follow a browser action"
 msgstr "跟着一次浏览器操作走"
 
-#: ../developer/code-structure.md:255
+#: ../developer/code-structure.md:257
 msgid ""
 "Next.js route files live under `apps/frontend/src/app/`. Shared feature "
 "UI lives under `components/features/` (`agents` for tasks and "
@@ -898,7 +903,7 @@ msgstr ""
 "`teams`、`profile` 和 `auth`。可复用的展示组件在 `components/` 下，浏览器端的工具函数和 API 客户端在 "
 "`lib/` 下。只能在服务端运行的集成放在现有的服务端模块里；浏览器组件的导入链里绝不能带进服务端凭据。"
 
-#: ../developer/code-structure.md:263
+#: ../developer/code-structure.md:265
 msgid ""
 "`lib/api/agents.ts` is the explicit public API facade. It delegates to "
 "focused modules under `lib/api/agents/`: jobs, threads, sessions, goals, "
@@ -912,7 +917,7 @@ msgstr ""
 "下各管一摊的模块：任务、对话、会话、目标、配置、集成、资源和用量查询、工作区文件、终端和事件流。创建和 Fork "
 "共用的幂等响应处理只在这个包内部使用。端点路径、重试、凭据、游标处理和通知，都跟着它所属的那个操作放。"
 
-#: ../developer/code-structure.md:270
+#: ../developer/code-structure.md:272
 msgid "Inside `components/features/agents/`, each concern has its own folder:"
 msgstr "在 `components/features/agents/` 下，每个关注点各有一个目录："
 
@@ -972,7 +977,7 @@ msgstr ""
 msgid "Trajectory view, step inspector, and the protocol and step projections"
 msgstr "轨迹视图、步骤检查器，以及协议和步骤的投影"
 
-#: ../developer/code-structure.md:281
+#: ../developer/code-structure.md:283
 msgid ""
 "Feature areas such as `context/`, `environment/`, `goal/`, `mcp/` and "
 "`skills/` follow the same rule. The top level keeps what several folders "
@@ -983,7 +988,7 @@ msgstr ""
 "这些功能区也照此组织。顶层只放几个目录共用的东西：`types.ts`、任务和对话记录、读取和推送 "
 "provider，以及任务页面。测试和被测模块放在一起。"
 
-#: ../developer/code-structure.md:286
+#: ../developer/code-structure.md:288
 msgid ""
 "`components/features/agents/JobDetail.tsx` composes the job page. Its "
 "extracted implementation lives under `job-detail/`:"
@@ -1055,7 +1060,7 @@ msgstr ""
 msgid "Stop, Fork, and restore actions with request guards"
 msgstr "停止、Fork 和恢复操作，带防重复请求的保护"
 
-#: ../developer/code-structure.md:300
+#: ../developer/code-structure.md:302
 msgid ""
 "Keep state with the concern that owns it. Retained panels preserve "
 "terminals, file previews, and drafts while hidden; scope changes must "
@@ -1065,47 +1070,47 @@ msgstr ""
 "状态放在负责它的那一块里。保留的面板在隐藏时也会留住终端、文件预览和草稿；切换作用范围时，必须把相关状态重置掉。拆组件时，hook "
 "的依赖要写明，延迟加载也要保留。"
 
-#: ../developer/code-structure.md:305
+#: ../developer/code-structure.md:307
 msgid "Add a feature without losing the structure"
 msgstr "加功能时别把结构弄乱"
 
-#: ../developer/code-structure.md:307
+#: ../developer/code-structure.md:309
 msgid ""
 "Identify the service and concern that owns the behavior using the maps "
 "above."
 msgstr "对照上面的几张表，确定这项行为归哪个服务、哪一块负责。"
 
-#: ../developer/code-structure.md:308
+#: ../developer/code-structure.md:310
 msgid ""
 "Add or update its domain rule, wire model, and port only where the "
 "behavior requires them. Implement durable operations inside storage."
 msgstr "领域规则、传输模型和 port，确实需要时才新增或修改。持久化操作在 storage 里实现。"
 
-#: ../developer/code-structure.md:310
+#: ../developer/code-structure.md:312
 msgid ""
 "Put orchestration in an application flow or owning service, then call it "
 "from the HTTP adapter or worker. Wire new resources through bootstrap."
 msgstr "编排逻辑放在应用流程或负责它的服务里，再由 HTTP 适配器或 worker 去调用。新的资源通过 bootstrap 接入。"
 
-#: ../developer/code-structure.md:312
+#: ../developer/code-structure.md:314
 msgid ""
 "Add public facade exports deliberately. Import implementation modules "
 "directly within a package to keep its dependency graph clear."
 msgstr "门面的公开导出要想清楚再加。包内部直接导入实现模块，这样依赖关系一目了然。"
 
-#: ../developer/code-structure.md:314
+#: ../developer/code-structure.md:316
 msgid ""
 "Exercise observable behavior and affected boundaries. For structural "
 "refactors, compare contracts and reuse existing behavioral tests."
 msgstr "测试要覆盖外部可观察的行为和受影响的边界。做结构性重构时，比对前后的契约，并复用已有的行为测试。"
 
-#: ../developer/code-structure.md:316
+#: ../developer/code-structure.md:318
 msgid ""
 "Run the relevant complete gates and update the maintained guide for "
 "changed ownership, commands, or behavior."
 msgstr "跑完相关的完整检查；如果职责归属、命令或行为变了，就更新对应的维护中指南。"
 
-#: ../developer/code-structure.md:319
+#: ../developer/code-structure.md:321
 msgid ""
 "Backend architecture checks enforce service-image independence, API "
 "import direction, domain/port independence, and repository isolation. "

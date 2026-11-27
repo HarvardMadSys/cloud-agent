@@ -13,8 +13,9 @@ inference were removed; see the cutover in upgrade-notes.md.
 This is a task-based runbook; you do not need to read it from beginning to end.
 Use it to provision hosts, deploy Cloud Agent, protect retained workspaces, and
 diagnose job or network failures. The control plane owns the job API, database,
-accounts and admission, the MCP and GitHub relays, and admin settings. Every turn
-runs on a model connection its owner added with their own provider key.
+accounts and admission, the MCP, GitHub and model relays, and admin settings.
+Every turn runs on a model connection: either one its owner added with their
+own provider key, or one the deployment provides through the model relay.
 
 Start with the task you need:
 
@@ -39,6 +40,7 @@ Start with the task you need:
 | Choose the tests for a runtime or MCP change | [Runtime verification](#runtime-verification) |
 | Let owners reach their own servers | [SSH servers](#ssh-servers) |
 | Let owners run tasks on their own inference endpoint | [Owner model connections](#owner-model-connections) |
+| Provide shared models through the control-plane model relay | [Provided models](#provided-models) |
 | Operate environments and team environments | [Reusable cloud environments](#reusable-cloud-environments) |
 
 [ENVIRONMENT.md](../../ENVIRONMENT.md) documents configuration, and the
@@ -4234,19 +4236,21 @@ and the owner SSH servers entry in [AGENTS.md](../../AGENTS.md) §7.
 
 ## Owner model connections
 
-An owner adds their own inference endpoint under **Settings → My settings →
-Personal model connections** (`/settings/my-settings`): a name, a Base URL,
-an API key and up to sixteen model ids. **Verify and save** verifies every model
-before anything is stored, and Cloud Agent works out which APIs each model
-serves. The models then appear in the composer, for the agents that can use
-them; they are the only models anything runs on. A turn runs on the owner's
-key and bill. Design, protocol matrix and accepted risks:
+An owner adds their own inference endpoint under **Settings → Models**
+(`/settings/models`; old `/settings/my-settings#settings-connections` links
+redirect there): a name, a Base URL, an API key and up to sixteen model ids.
+**Verify and save** verifies every model before anything is stored, and Cloud
+Agent works out which APIs each model serves. The models then appear in the
+composer beside any models the deployment provides
+([Provided models](#provided-models)), for the agents that can use them, and
+take precedence over a same-named provided model for that owner. A turn runs on
+the owner's key and bill. Design, protocol matrix and accepted risks:
 [model connection design](../agents/specs/2026-10-27-user-model-connections.zh-CN.md),
 and the owner model connections entry in [AGENTS.md](../../AGENTS.md) §7.
 
 - **Turning it off.** `AGENT_MODEL_CONNECTIONS_ENABLED` is on unless it is
-  set to `0`, `false` or `no`, and connections are the only inference, so
-  with it off no new turn starts. To hold new turns until every host and
+  set to `0`, `false` or `no`, and switches off both owners' connections and
+  provided models, so with it off no new turn starts. To hold new turns until every host and
   control-plane replica runs this release, set it to `false` before the
   rollout and unset it afterwards. The setting gates admission only. Turning it off stops new connections, re-enabling one and
   new turns or messages on one; turns already admitted still run on their

@@ -35,7 +35,7 @@ open the same pages there.
 | Identity and admission | This database, read on every check, with no cache |
 | Profile and team emails | The account's email |
 | Administration | `ADMIN_TOKEN`, or an account with `agent.admin` |
-| Inference | The owner's own model connection only (see [Models](#models)) |
+| Inference | The owner's own model connection, or a connection the deployment provides through the model relay (see [Models](#models)) |
 
 The account directory (`cloud_agent/accounts/directory.py`,
 `app.state.owners`) answers every owner check from this database: request
@@ -87,11 +87,13 @@ its sign-in pages offer.
 
 ### Hosts
 
-Hosts need the control-plane and MCP tunnels and their separate credentials,
-and nothing else from a Gateway: there is no inference tunnel or relay.
-Personal model calls use the existing public HTTPS egress. No sandbox gains
-access to the management API, private networks or another group. A host
-environment that still sets a Gateway variable is refused.
+Hosts need the control-plane, MCP and model-relay tunnels and their separate
+credentials, and nothing else from a Gateway. Personal model calls use the
+existing public HTTPS egress, while deployment-provided models go through the
+host's model tunnel to the control plane's model relay
+([Provided models](operations.md#provided-models)). No sandbox gains access to
+the management API, private networks or another group. A host environment that
+still sets a Gateway variable is refused.
 
 In **Servers → deployment setup**, administrators enter only the
 control-plane machine.
@@ -469,26 +471,35 @@ open, blocking re-approval, until every step is acknowledged.
 
 ## Models
 
-After approval, an owner opens **My settings → Model connections**, enters a
-provider's Base URL, API key and model IDs, and chooses **Verify and save**.
-FreeInference can be used as that provider with the owner's own key. The
-service checks compatibility before saving; a failed check saves no new
+After approval, an owner opens **Settings → Models** (`/settings/models`),
+enters a provider's Base URL, API key and model IDs, and chooses **Verify and
+save**. FreeInference can be used as that provider with the owner's own key.
+The service checks compatibility before saving; a failed check saves no new
 connection or replacement key. Only the connection's owner can use it. If the
 account loses access while verification is in flight, saving rechecks admission
 under the account lock and refuses the late result without storing a key.
 
-Local accounts have no shared model, default provider credential or inference
-allowance. Inference costs and limits belong to the supplied provider key.
-Separate Cloud Agent accounts do not create separate provider quotas: keys
-from the same FreeInference account may still spend that account's shared
-upstream allowance. Cloud Agent's sandbox and concurrency limits are separate.
+A deployment may also provide models of its own under **Admin → Settings →
+Models**: the administrator saves a Base URL and the deployment's key once, the
+key stays in the control plane, and every admitted owner can run on the models
+that key lists without adding a personal connection
+([Provided models](operations.md#provided-models)). Local accounts still have
+no per-account platform quota or inference allowance: inference costs and
+limits belong to the provider key, whether an owner's own key or the
+deployment's key. Separate Cloud Agent accounts do not create separate provider
+quotas: keys from the same FreeInference account may still spend that account's
+shared upstream allowance. Cloud Agent's sandbox and concurrency limits are
+separate.
 
-`GET /v1/agent/config` lists the owner's usable connections and no platform
-catalog. Without a usable connection it sets `model_connection_required: true`;
-the composer links to setup when the feature is enabled and explains when the
-deployment has disabled it. Nothing is sent anywhere but the owner's provider:
-no platform credential is minted, and there is no prompt rewriting, model pin
-or title generation.
+`GET /v1/agent/config` lists the deployment's provided sources and the owner's
+usable personal connections, with no Gateway catalog. When neither offers a
+usable model it sets `model_connection_required: true`; the composer links to
+setup when the feature is enabled and explains when the deployment has disabled
+it. On a personal connection, nothing is sent anywhere but the owner's
+provider; on a provided model, requests go through the control plane's model
+relay with a residency placeholder (`amd.`). In both cases no Gateway
+credential is minted, and there is no prompt rewriting, model pin or title
+generation.
 
 A task records both the model ID and connection ID. Follow-ups, queued turns,
 goals, Fork and residency keep that source; an unavailable connection never
@@ -502,7 +513,8 @@ with reason `effort_unknown`, `effort_unsupported` or
 `effort_level_unsupported`). See
 [reasoning levels](operations.md#owner-model-connections) for where they come
 from. See
-[owner model connections](operations.md#owner-model-connections) for
+[owner model connections](operations.md#owner-model-connections) and
+[provided models](operations.md#provided-models) for
 verification, key handling and rollout requirements, and
 [usage](operations.md#usage) for what the Usage pages count.
 

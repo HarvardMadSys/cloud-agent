@@ -24,7 +24,8 @@ docs/                    Maintained guides and dated design evidence
 The control plane and host are independently deployed implementations. Neither
 imports the other. Shared code provides the facts and contracts they agree on;
 it imports neither implementation. Accounts, admission and usage live in the
-agent database; model calls go from the sandbox to the owner's provider.
+agent database; model calls go from the sandbox to the owner's provider, or
+through the control plane's model relay for models the deployment provides.
 
 ## Vocabulary
 
@@ -40,7 +41,7 @@ user's whole task.
 | Sandbox group | `agent_sandboxes`, `sandbox_id`, `sandbox_generation` | One retained container and its workspace |
 | Member | membership, member | One conversation in a group, with its own native session and CLI process |
 | Activation, residency, process | `activation_generation`, `residency_generation`, `process_generation` | A member's three layers: its activation in the container, the residency that lets one live CLI process serve later turns, and that process. A stale generation is refused at its layer |
-| Placeholder credential | `amr.` (MCP), `agh.` (GitHub) | A bearer that names one residency. Only its relay accepts it, and the relay resolves the fence again on every request |
+| Placeholder credential | `amr.` (MCP), `agh.` (GitHub), `amd.` (Model relay) | A bearer that names one residency. Only its relay accepts it, and the relay resolves the fence again on every request |
 
 Never name a new field a bare `generation`: say what it counts, as in
 `sandbox_generation` or `residency_generation`.
@@ -61,8 +62,9 @@ flowchart TD
     Storage --> Domain
 ```
 
-`app.py` mounts the owner/admin API and the separate MCP-only listener. It
-installs shared HTTP response and exception policies, and on both listeners a
+`app.py` mounts the four listeners: the owner/admin API, the MCP-only listener,
+the GitHub relay and the model relay. It installs shared HTTP response and
+exception policies, and on the API and MCP listeners a
 dependency that runs ahead of every route's own (`api/_parameters.py`): a path
 or query parameter holding NUL, or a route's integer parameter too wide for a
 `bigint`, is refused with a 422 before any query reads it. So is a JSON body

@@ -24,7 +24,7 @@ work tracks in this repository's issues and pull requests.
 apps/
 ├── backend/
 │   ├── cloud_agent/           control plane (FastAPI): API, auth adapter,
-│   │                          scheduler, MCP and GitHub relays, storage
+│   │                          scheduler, MCP, GitHub and model relays, storage
 │   ├── cloud_agent_host/      host agent: runner, sandbox, runtimes, sandbox manager
 │   ├── cloud_agent_shared/    vocabulary both images ship: capability strings,
 │   │   │                      protocol versions, pins, sandbox network, shared errors,
@@ -350,8 +350,7 @@ requirement, and rules 4 and 5 remain permanent service boundaries.
   [SSH server design](docs/agents/specs/2026-10-15-user-ssh-servers-design.zh-CN.md).
 - **Owner model connections (2026-10-27).** An owner may add their own
   inference endpoint (Base URL, API key, up to sixteen model ids) and run
-  their own tasks on it; it is the only way anything runs, and they pay the
-  provider. It is
+  their own tasks on it, paying the provider. It is
   private to them: never shared with a team, never reachable through another
   owner's Fork, and every claim, residency, follow-up, waiting message, goal
   round and Fork re-reads it as theirs. The key is encrypted under its own
@@ -420,8 +419,9 @@ requirement, and rules 4 and 5 remain permanent service boundaries.
   redirects and no upstream body echoed. See the
   [model connection design](docs/agents/specs/2026-10-27-user-model-connections.zh-CN.md).
 - **Provided models (2026-11-12).** An administrator may save a provider's
-  Base URL, the deployment's own key and up to eight model ids, and every
-  admitted owner may run turns on it without any setup. The key is encrypted
+  Base URL and the deployment's own key, and the connection offers the models
+  the provider lists for that key (up to sixteen), so every admitted owner may
+  run turns on it without any setup. The key is encrypted
   under the settings root key in its own domain, is write-only, and never
   leaves the control plane: it is in no claim, residency, host, sandbox,
   response, log or audit row. A turn's claim marks the connection *relayed*

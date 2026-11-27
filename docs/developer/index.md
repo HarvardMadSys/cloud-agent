@@ -5,8 +5,9 @@ sandbox containers. Users work from a web interface, while enrolled hosts run
 Claude Code, Codex, pi, OpenCode, or Kilo. The control plane coordinates jobs
 and sessions, and relays the agents' own pushes and pull requests to GitHub.
 Accounts are its own: people sign up, apply through a waiting list and are
-approved by an administrator. Every task runs on a model connection its owner
-adds with their own provider key, such as a FreeInference key.
+approved by an administrator. Every task runs on a model connection: either one
+its owner adds with their own provider key (such as a FreeInference key), or
+one the deployment provides through its control-plane model relay.
 
 This is the documentation for the software itself: running it locally,
 operating a deployment, understanding how it works, and contributing to it. The
