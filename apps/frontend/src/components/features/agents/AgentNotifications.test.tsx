@@ -12,6 +12,7 @@ import {
 import { listThreadQuestions, type AgentQuestionsApi } from '@/lib/api/questions';
 import { APIError } from '@/lib/utils/errors';
 import {
+  receiveHint,
   receiveJobChange,
   receiveThreadChange,
   receiveSync,
@@ -108,10 +109,12 @@ function snapshot(jobId = 'job-1', attemptId = 10, requestId = 'request-1'): Age
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((yes) => {
+  let reject!: (cause: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
     resolve = yes;
+    reject = no;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 async function mount(options = preferences) {
   let result!: ReturnType<typeof renderHook>;
@@ -1090,4 +1093,41 @@ it('opens the notified job on click without requesting permission automatically'
   constructed[0].onclick?.();
   expect(push).toHaveBeenCalledTimes(1);
   focus.mockRestore();
+});
+
+describe('a hinted refresh racing an in-flight question read', () => {
+  it('re-reads promptly after the aborted read settles instead of waiting for the next poll', async () => {
+    // AgentNotifications.readQuestions holds readingQuestions for the whole
+    // await. invalidate(threadId, true) aborts the read and then calls
+    // clocks.refresh, whose tick calls readQuestions synchronously: that call
+    // used to return early (the flag is still set) and the aborted read only
+    // settled later, so the hint's notification waited for the next 12 s poll.
+    const pending = deferred<AgentQuestionsApi>();
+    questions.mockReturnValueOnce(pending.promise).mockResolvedValue(snapshot());
+
+    // The hook mounts inside the real provider, so the hint's invalidate has
+    // its listener and the hook's watch is the reader the race runs on.
+    await act(async () => {
+      renderHook(() => useAgentNotifications(userId, preferences, notify), {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <AgentReadProvider userId={userId}>{children}</AgentReadProvider>
+        ),
+      });
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(NOTIFICATION_STATE_POLL_MS));
+    expect(questions).toHaveBeenCalledTimes(1);
+
+    // The hint fires while the first read is still in flight: it aborts that
+    // read and asks the clock for a refresh in the same synchronous turn.
+    // The aborted read's finally block runs the retained re-read immediately,
+    // so the notification does not wait for the next 12 s poll.
+    await act(async () => {
+      receiveHint('question', 'thread-1');
+      await vi.advanceTimersByTimeAsync(PUSH_BATCH_MS);
+    });
+    expect(questions).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ kind: 'question', jobId: 'job-1', attemptId: 10 }),
+    );
+  });
 });
