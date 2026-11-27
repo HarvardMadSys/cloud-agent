@@ -50,7 +50,10 @@ env:
 jobs:
   changes:
     name: Classify Changes
-    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["self-hosted","Linux","ci-general"]') }}
+    # Hosted on every event. It needs only git, python3 and the API, and every
+    # image job waits on it, so an image pool must not sit idle because the
+    # ci-general pool is down or does not exist.
+    runs-on: [ubuntu-24.04]
     outputs:
       backend: ${{ steps.classify.outputs.backend }}
       web: ${{ steps.classify.outputs.web }}
