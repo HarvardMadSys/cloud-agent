@@ -4,7 +4,7 @@
 
 设计核对基线：分支 `murphy/refactor/structural`（PR #1111），提交 `6c930f118`。supervisor 在这个分支上已经拆开，A1 的外观层 `group_lifecycle.py` 已经存在。文中代码路径都相对 `apps/backend/cloud_agent_host/`，行号都是基线上的。
 
-相关：[结构重构](2026-11-05-structural-refactor.zh-CN.md) §5.1、§13.2、§15、§16；[host 协议 v2](2026-11-05-host-protocol-v2.zh-CN.md)；[原生会话、Fork 与共享工作区](2026-08-31-native-session-fork-shared-workspace-design.md)；[推迟初始 archive 上传](2026-11-03-deferred-initial-archive-upload.md)。
+相关：结构重构 §5.1、§13.2、§15、§16；[host 协议 v2](2026-11-05-host-protocol-v2.zh-CN.md)；[原生会话、Fork 与共享工作区](2026-08-31-native-session-fork-shared-workspace-design.md)；推迟初始 archive 上传。
 
 ## 1. 结论
 
@@ -352,7 +352,7 @@ Q1–Q4 的决定可以插在第 3 步之后任何时候做，每个单独一个
   **决定：** 靠准入表。第 4 步加了 `SHUTDOWN_TAKE_STOP`，U1 成为断言的不变量（§9.3）。
 - **Q2：`accept_inspection_locked` 该不该替别人清 N？** 369 行在容器停止时清 preservation 和 N，不看 N 是不是初始 archive 自己的。建议：只有 `exclusive.kind is INITIAL_ARCHIVE` 时才清。这是行为改动，要先确认 I5 的反例路径在实际中能不能走到，确认的办法是看第 0 步的日志里有没有 `preservation ∧ ¬N` 这个组合。
   **决定：** 只在 `exclusive.kind is INITIAL_ARCHIVE` 时清 N。反例路径由 `test_preserved_initial_archive_keeps_its_snapshot_barrier_across_a_restart` 在真实 supervisor 上复现出来，不需要等 staging 的日志。没有任何现有测试依赖替别人清 N。preservation 仍然随停止清掉（停止已经保住了冻结的字节）；N 属于别人时什么都不动，只记一次违反。
-- **Q3：I5 的反例算不算 bug？** 如果能走到，332 行重新置真的 preservation 没有 N 来配合，新的写入者就可能在 preservation 期间被准入（`MUTATION` 不看 preservation）。建议在 332 行要求 N 仍然属于自己；如果不属于，就把这个 group 记为 `initial_archive_preservation_lost` 并停掉它。需要写[推迟初始 archive 上传](2026-11-03-deferred-initial-archive-upload.md)的人确认。
+- **Q3：I5 的反例算不算 bug？** 如果能走到，332 行重新置真的 preservation 没有 N 来配合，新的写入者就可能在 preservation 期间被准入（`MUTATION` 不看 preservation）。建议在 332 行要求 N 仍然属于自己；如果不属于，就把这个 group 记为 `initial_archive_preservation_lost` 并停掉它。需要写推迟初始 archive 上传的人确认。
   **决定：** 是 bug，但修法比这里建议的轻：捕获在记账时如果发现自己的 hold 已经不是 `life.exclusive`，就说明一次被接受的 STOPPED inspection 已经替它释放了 preservation 和 N。这时停止已经保住了冻结的字节，所以不再重新置真 preservation，不碰别人的槽，`notify_all`，并记一条 `sandbox_initial_archive_preservation_released_by_stop`。不需要 `initial_archive_preservation_lost`，也不需要再停一次。于是 I5 成为已证明的不变量，`preserve_initial_locked` 恢复"必须持有初始 archive 自己的 hold"这条前置条件。
 - **Q4：`join_run_locked` 要不要检查 `sealed_seq`？** 重启后发现的运行中 group，`sealed_seq` 来自 checkpoint，而加入它的请求的 fence 没有和这个值比较（U3）。要确认控制面的 start fence 能不能出现"比 checkpoint 旧、却在 checkpoint 之后才到达"的请求。如果不能，就加断言；如果能，就加拒绝（`StaleStartFence`）。
   **决定：** 能出现（`test_a_group_found_running_is_never_labelled_at_or_below_its_sealed_checkpoint`），但不拒绝：拒绝会把一个无害的请求变成 409。`join_run_locked` 对 ≤ `sealed_seq` 的 fence 不计入运行标签，标签保持原样，并记一条 `sandbox_run_join_below_sealed_checkpoint`；请求照常准入。原来这种情况就是 fail-closed 的（这样的 checkpoint 不会写出控制面的计数器值），现在标签也不再低于 seal。

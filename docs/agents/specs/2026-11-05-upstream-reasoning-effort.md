@@ -8,7 +8,7 @@
   (§二 "没做的", §五之一) and the "`output_config`（个人连接推理强度固定 Auto）"
   line in [the protocol compatibility design](2026-10-28-model-protocol-compatibility.zh-CN.md).
   The per-runtime CLI mechanisms and the wire shapes in
-  [the reasoning effort design](2026-08-19-reasoning-effort-design.md) and
+  the reasoning effort design and
   `tests/fixtures/agent_runtime_streams/effort_wire_shapes.md` still hold.
 - **Companion:** HarvardMadSys/hybridInference branch
   `codex/fix/model-effort-capabilities` publishes the levels its routes

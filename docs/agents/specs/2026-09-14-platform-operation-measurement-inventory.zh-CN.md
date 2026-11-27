@@ -9,7 +9,7 @@
 具体身份、预算、持久化、版本与交付契约见
 [存储/Admin 整合设计](2026-09-16-operation-measurement-storage-admin-integration-design.zh-CN.md)。
 `e77e3e6` 的历史
-[五项 review 问题](../reviews/2026-09-16-operation-measurement-e77e3e6-review.zh-CN.md)已经关闭；
+五项 review 问题已经关闭；
 身份已拆为 interaction_id 与每请求唯一 measurement_id。
 
 目标：在按需开启的 profiling 实验中，每个主要用户操作都能回答：

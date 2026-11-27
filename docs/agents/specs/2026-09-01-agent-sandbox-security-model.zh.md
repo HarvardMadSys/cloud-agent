@@ -16,7 +16,7 @@
 
 **相关文档：**
 
-- [Agent 会话连续性与共享沙盒架构](2026-09-01-agent-session-continuity-architecture.zh.md)
+- Agent 会话连续性与共享沙盒架构
 - [仓库开发与安全边界](../../../AGENTS.md)
 - [部署环境与隔离档位](../../../ENVIRONMENT.md)
 - [Native session fork 与 shared workspace 设计](2026-08-31-native-session-fork-shared-workspace-design.md)
@@ -317,7 +317,7 @@ Kata 为沙盒创建轻量虚拟机。工具进程运行在 guest 中，syscall 
 
 - `container` 且 `runtime=None` 表示普通 runc 共享内核。Preflight 记录 `agent_sandbox_shared_kernel`，该档位只适合可信仓库或已有外层 VM 隔离的场景。
 - `kata` 使用 `io.containerd.kata.v2`。Preflight 会启动 exact-image probe 执行 `uname -r`；若 guest kernel 与 host kernel 相同，则拒绝把该 host 宣告为 VM-isolated。同一 probe 还要跑 `freeinference-guest-observer --self-test`：必须经过 guest ring buffer 看到一个短命非 root child 的 fork、exec、exit 与带非零 CPU 的 `done`。BTF 对不上的 guest kernel 不能 advertise 可接活。
-- 进程级观测因此走 **guest-root CO-RE observer**（`deploy/sandbox/guest-observer.*`），不是 host eBPF。Agent 进程不持有 `CAP_BPF`；helper 只由 Kata-only privileged exec 以固定 argv 拉起。详见 [Operation 可观测性](2026-09-01-agent-operation-observability-design.zh.md)。
+- 进程级观测因此走 **guest-root CO-RE observer**（`deploy/sandbox/guest-observer.*`），不是 host eBPF。Agent 进程不持有 `CAP_BPF`；helper 只由 Kata-only privileged exec 以固定 argv 拉起。详见 Operation 可观测性。
 - gVisor 当前没有独立 backend、执行档位或安全 probe。管理员能够填写 runtime 字符串不等于平台已经验证 gVisor 隔离；面向不可信仓库的强制档位当前只接受经过 probe 的 Kata。
 
 `is_vm_isolated` 当前以“配置了非空 runtime”表达非默认 runtime，而不是独立的安全证明。安全决策不得单独依赖该字段；准入必须依赖明确的 profile、runtime allowlist 与 exact-image probe。

@@ -4,7 +4,7 @@
 
 设计核对基线：远端 `dev`，提交 `1e064e169`。
 
-相关：[按需发布](2026-10-15-manual-publication-design.zh-CN.md)（本文取代它）、[公网出口](2026-09-23-agent-public-egress-design.zh-CN.md)、[sandbox 安全模型](2026-09-01-agent-sandbox-security-model.zh.md)、[去掉 PR 合并后自动归档](2026-10-19-remove-pr-merge-archive.zh-CN.md)。
+相关：按需发布（本文取代它）、[公网出口](2026-09-23-agent-public-egress-design.zh-CN.md)、[sandbox 安全模型](2026-09-01-agent-sandbox-security-model.zh.md)、去掉 PR 合并后自动归档。
 
 ## 1. 结论
 

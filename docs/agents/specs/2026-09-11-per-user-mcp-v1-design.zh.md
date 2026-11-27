@@ -1,7 +1,7 @@
 # Cloud Agent 通用 MCP 接入设计
 
 - 日期：2026-09-11。
-- 状态：原始设计提案；当前实现与验证范围见[实现对照记录](../reviews/2026-09-11-per-user-mcp-v1-conformance.md)，真实部署验收仍待完成。
+- 状态：原始设计提案；当前实现与验证范围见实现对照记录，真实部署验收仍待完成。
 - 实现仓库：`HarvardMadSys/hybridInference-cloud-agent`。
 - 调研代码基线：`b7a24c610a1185b0b288dce32eabd8fe487d710f`。
 - 已明确的产品目标：**平台全部 coding agent 共用通用 MCP 能力；用户可以添加自己的 MCP 服务，接入不以品牌白名单为前提。**
@@ -26,7 +26,7 @@ GitHub、项目管理、文档、数据库、浏览器工具和用户自己开�
 
 **现在可以开发。** Agent / Gateway 的归属已明确，MCP 放在 Cloud Agent；发行版整理可以并行。通用化需要新增动态连接、协议适配、工具授权、stdio 与私网连接能力，工作量明显大于给当前 GitHub relay 补 OAuth 和 UI。
 
-边界遵循[系统与发行版说明](2026-09-01-freeinference-system-boundaries.zh.md)和 [MCP ownership amendment](https://github.com/HarvardMadSys/hybridInference/blob/dev/docs/agents/plans/2026-08-04-cloud-agent-mcp-ownership-amendment.md)：Agent 拥有连接、任务与工具授权，Gateway 提供身份和模型推理契约，FreeInference 发行版拥有部署配置。
+边界遵循系统与发行版说明和 [MCP ownership amendment](https://github.com/HarvardMadSys/hybridInference/blob/dev/docs/agents/plans/2026-08-04-cloud-agent-mcp-ownership-amendment.md)：Agent 拥有连接、任务与工具授权，Gateway 提供身份和模型推理契约，FreeInference 发行版拥有部署配置。
 
 ## 2. 通用兼容性的定义
 

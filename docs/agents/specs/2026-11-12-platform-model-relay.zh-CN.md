@@ -4,7 +4,7 @@
 
 设计核对基线：远端 `dev`，提交 `ccf7e07f1`。
 
-相关：[Operator-provided model connections](2026-11-09-operator-provided-model-connections.md)（本文保留它的第一阶段，取代第二、三阶段）、[用户自带模型连接](2026-10-27-user-model-connections.zh-CN.md)、[只保留独立账号](2026-10-30-independent-accounts-only.md)、[GitHub 中继](2026-11-04-agent-native-pull-requests.zh-CN.md)、[公网出口](2026-09-23-agent-public-egress-design.zh-CN.md)、[请求前缀计量](2026-11-05-request-prefix-meter.zh-CN.md)。
+相关：Operator-provided model connections（本文保留它的第一阶段，取代第二、三阶段）、[用户自带模型连接](2026-10-27-user-model-connections.zh-CN.md)、[只保留独立账号](2026-10-30-independent-accounts-only.md)、[GitHub 中继](2026-11-04-agent-native-pull-requests.zh-CN.md)、[公网出口](2026-09-23-agent-public-egress-design.zh-CN.md)、[请求前缀计量](2026-11-05-request-prefix-meter.zh-CN.md)。
 
 ## 1. 结论
 
@@ -13,7 +13,7 @@
 - **平台的 key 只在控制面。** sandbox 里的 CLI 拿到的是 residency 级的占位凭据。模型请求经过控制面上新增的模型中继，中继校验占位凭据，换成平台的 key，再转发给供应商。这和 GitHub 中继、MCP relay 是同一种结构。
 - **~~每个用户有一个每日额度。~~** 2026-11-15 起取消，见第 15 节。中继只记录每次请求用掉的 token，以及按模型列表里的价格算出的费用；花多少由供应商那边对这把 key 的预算来限。
 - **对供应商没有额外要求。** 只需要一个 Base URL 和一把普通的 key。本服务不调用供应商的管理接口，也不在供应商那边建用户、成员或 key。
-- **取代每人一把 key 的方案。** [Operator-provided model connections](2026-11-09-operator-provided-model-connections.md) 的第一阶段（预设）不变；第二、三阶段（控制面替每个用户向供应商申请一把 key）由本文取代。
+- **取代每人一把 key 的方案。** Operator-provided model connections 的第一阶段（预设）不变；第二、三阶段（控制面替每个用户向供应商申请一把 key）由本文取代。
 
 接受本设计要改三处已经写下来的决定，列在第 11 节。
 
@@ -562,7 +562,7 @@ terms:                               # 价格是美元每百万 token，照供�
 - 第 11 节第 4 项里“由部署声明的文件”这个配置入口。只有管理页。
 - 托管计算节点的自动配置。本 PR 没有改它，所以自动扩容出来的宿主机不带 `model-tunnel`，也就领不到平台连接的 turn。
 
-2026-11-15 的修订（不再要手工配置，见[部署方要自己提供的配置只减不增](2026-11-15-deployment-config-ratchet.zh-CN.md)）：
+2026-11-15 的修订（不再要手工配置，见部署方要自己提供的配置只减不增）：
 
 - 去掉 `model-relay` profile。控制面一直运行 `model-relay`，没有启用的平台连接时拒绝所有请求；每台宿主机一直有 `model-tunnel`，没有目的地址时空转（`TUNNEL_OPTIONAL`）。上面第 10 节和第 14 节说的「在 profile 后面」不再成立。
 - Admin → Servers → Add server 给每台新服务器配好模型中继的隧道：单独的 SSH 密钥，控制面机器上单独的账号（`ca-md-…`，只允许转发到模型中继的端口），宿主机配置里写入 `AGENT_SANDBOX_MODEL_RELAY_URL` 和 `AGENT_MODEL_TUNNEL_*`。上面「托管计算节点的自动配置没有改」这一条因此不再成立。

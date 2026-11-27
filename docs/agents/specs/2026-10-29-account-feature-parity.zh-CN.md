@@ -5,7 +5,7 @@
 - **比较源**：HybridInference `origin/dev` `8b49872d1dcbed5c4bc8132b026b6740c3437aa7`，只读。原始 copy 来源是 `321e9a6c`。
 - **Cloud Agent 起点**：PR #1030 head `506f33fe` 合入 dev `4b7b826d`。
 
-本文取代 [本地登录身份设计](2026-10-29-local-login-identities-design.zh-CN.md) 和[身份范围评审](../reviews/2026-10-29-identity-scope-review.zh-CN.md)里的**分期与排除决定**。那两份文件中经核实成立的证据和设计继续沿用：身份表加 `LEFT JOIN` 访问视图、限流分桶。
+本文取代 本地登录身份设计 和身份范围评审里的**分期与排除决定**。那两份文件中经核实成立的证据和设计继续沿用：身份表加 `LEFT JOIN` 访问视图、限流分桶。
 
 独立评审的发现及其处理（B1–B20、N1–N10、R1–R3、F1–F11）不在本文逐条展开，见任务证据目录中的 resolution map。
 

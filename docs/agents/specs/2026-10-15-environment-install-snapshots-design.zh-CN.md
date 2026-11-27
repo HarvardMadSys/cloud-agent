@@ -13,7 +13,7 @@
 相关：
 
 - [可复用云端环境配置设计](2026-10-12-repository-environment-design.zh-CN.md)：本文取消它 §12 中「安装结果快照、预构建」不做的限制。
-- [沙箱跨机器恢复设计](2026-10-13-sandbox-cross-host-restore-design.zh-CN.md)：本文复用它的检查点格式、S3 存储、归档检查和 `docker load` 流程。
+- 沙箱跨机器恢复设计：本文复用它的检查点格式、S3 存储、归档检查和 `docker load` 流程。
 
 ## 目标
 

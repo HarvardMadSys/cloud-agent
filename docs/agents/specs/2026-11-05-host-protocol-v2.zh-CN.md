@@ -4,7 +4,7 @@
 
 设计核对基线：分支 `murphy/refactor/structural`（PR #1111），提交 `6c930f118`。代码路径相对 `apps/backend/`，行号都是基线上的。
 
-相关：[结构重构](2026-11-05-structural-refactor.zh-CN.md) §10、§13.2、§15、§16；[A2：group 生命周期状态](2026-11-05-group-lifecycle-state.zh-CN.md)；[Agent 自己开 PR](2026-11-04-agent-native-pull-requests.zh-CN.md)；[一个 MCP 概念](2026-11-04-mcp-one-concept.md)；[模型连接](2026-10-27-user-model-connections.zh-CN.md)；[部署可靠性](../../developer/deployment-reliability.md)；[发布](../../../deploy/release/README.md)。
+相关：结构重构 §10、§13.2、§15、§16；[A2：group 生命周期状态](2026-11-05-group-lifecycle-state.zh-CN.md)；[Agent 自己开 PR](2026-11-04-agent-native-pull-requests.zh-CN.md)；一个 MCP 概念；[模型连接](2026-10-27-user-model-connections.zh-CN.md)；[部署可靠性](../../developer/deployment-reliability.md)；[发布](../../../deploy/release/README.md)。
 
 ## 1. 结论
 

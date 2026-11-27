@@ -14,7 +14,7 @@
 [存储/Admin 整合设计](2026-09-16-operation-measurement-storage-admin-integration-design.zh-CN.md)
 规定新的记录身份、覆盖范围、异步写入、鉴权、幂等和交付顺序；与本文的早期
 存储草案或实施顺序有差异时以整合设计为准。`e77e3e6` 的历史
-[五项 review 问题](../reviews/2026-09-16-operation-measurement-e77e3e6-review.zh-CN.md)已关闭。
+五项 review 问题已关闭。
 
 目标：对每次启动回答三个问题：**总共等了多久、时间花在哪里、某个优化是否真的有效**。
 完整目标包含启动摘要、单次启动时间线和可重复的 benchmark；#258 以结构化日志、
@@ -369,7 +369,7 @@ benchmark 报告至少包含：环境 manifest、实验顺序、全部 attempt I
    HTTP + 真实 Postgres 跑文件与终端的六个服务端操作，`--startup` 段用真实 Docker 容器
    产生四条启动路径；固定 fixture、报告 n/p50/p95、增量、丢弃数与后台成本，并按
    `max(10 ms, baseline p95 × 1%)` 逐操作给出结论。结果见
-   [服务端验收报告](../reviews/2026-09-18-operation-measurement-server-side.md) §3.3。
+   服务端验收报告 §3.3。
    仍未纳入该实验的：真实 agent CLI 初始化、生产 Kata 隔离、跨 replica。
 4. **持久化和 Admin 读面（已实现）**：#218 的能力已改为消费统一 schema v3 记录，
    含实验目录、样本列表/详情、分布与本地 writer 丢弃计数。
@@ -531,7 +531,7 @@ CPython 3.12.13 / macOS arm64：
   `terminal.list` 的 `on-local` 曾出现 p95 +3.46 ms，第二次未能复现（−3.13 ms），
   记为运行间波动。四条启动路径在同一脚本的 `--startup` 段用真实 Docker 容器产生
   （`create`/`start`/`reuse`/`reuse` 计数非零），n=5/6 时 p95 就是最大值而不是尾部估计，
-  真实容器动作是数百毫秒级。详见[服务端验收报告](../reviews/2026-09-18-operation-measurement-server-side.md) §3.3。
+  真实容器动作是数百毫秒级。详见服务端验收报告 §3.3。
 
 与目标形态的差距，后续切片补齐：
 
@@ -604,5 +604,5 @@ CPython 3.12.13 / macOS arm64：
 - [worker API](../../cloud_agent/api/worker.py) / [workspace API](../../cloud_agent/api/workspace.py)：启动入库与文件/终端根操作。
 - [measurement writer](../../cloud_agent/measurement_writer.py)：CP 有界异步持久化。
 - [host capacity](../../../apps/backend/cloud_agent_host/host_capacity.py)：已有 host 快照。
-- [Admin observability](2026-09-10-admin-observability-v1.md)：接收时间、权限、metadata 语义。
+- Admin observability：接收时间、权限、metadata 语义。
 - [native session design](2026-08-31-native-session-fork-shared-workspace-design.md)：保留容器、native resume 与共享 workspace 边界。

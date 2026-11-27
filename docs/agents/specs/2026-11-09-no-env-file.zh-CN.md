@@ -1,7 +1,7 @@
 # 新部署不需要 `.env`
 
 - 日期：2026-11-09
-- 依据：[精简 `.env`](2026-11-03-slim-env.zh-CN.md)、[首次安装自动生成密钥](2026-11-04-first-install-keys.zh-CN.md)
+- 依据：精简 `.env`、[首次安装自动生成密钥](2026-11-04-first-install-keys.zh-CN.md)
 - 实现：`apps/backend/cloud_agent/deployment/deployment_keys.py`、`apps/backend/cloud_agent/deployment/key_files.py`、
   `deploy/control-plane/docker-compose.yml` 的 `keys` 服务、`deploy/control-plane/deploy.sh`、
   `apps/frontend/src/components/features/auth/SiteAddressStep.tsx`

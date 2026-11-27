@@ -3,7 +3,7 @@
 日期：2026-10-27；更新：2026-10-28。状态：独立账号、waiting list 与个人模型连接已整合并完成代码验收；
 未合并、部署或迁移生产数据。
 
-[整合验收记录](../reviews/2026-10-28-local-accounts-model-connections-acceptance.md)记录当前代码版本、测试环境、结果及未覆盖范围。
+整合验收记录记录当前代码版本、测试环境、结果及未覆盖范围。
 
 代码核对基线：Cloud Agent `3f60b6afbb86c67422b3c237c3e9ab68ed2effac`；
 HybridInference `321e9a6c457dcc80d35977aaac472d54041204a8`。
@@ -21,7 +21,7 @@ HybridInference `321e9a6c457dcc80d35977aaac472d54041204a8`。
 
 首版沿用现有邮箱/密码注册登录、邮箱验证、找回密码。手机号登录、多账号切换、
 以及「无邮箱的 login_name 账号」原计划不在此版；该范围决定已由
-[本地账号的登录身份](2026-10-29-local-login-identities-design.zh-CN.md)取代，
+本地账号的登录身份取代，
 后者把这些能力分期，并说明为什么 login_name 账号与无 SMTP 引导排在最前。
 迁移历史账号的凭据或数据不是本文的执行授权。
 

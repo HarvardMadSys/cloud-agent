@@ -1,7 +1,7 @@
 # 首次安装自动生成密钥
 
 - 日期：2026-11-04
-- 依据：[精简 `.env`](2026-11-03-slim-env.zh-CN.md) 第 7 节最后一条；本设计叠在 #1092 之上，在它之后合并
+- 依据：精简 `.env` 第 7 节最后一条；本设计叠在 #1092 之上，在它之后合并
 - 实现：`deploy/control-plane/deploy.sh`（`ensure_first_install_keys`）、
   `apps/backend/cloud_agent/settings.py`（`first_settings`、`GENERATED_ON_FIRST_START`）、
   `deploy/local/dev.sh`（一处兜底修正）
