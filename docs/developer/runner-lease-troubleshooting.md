@@ -62,6 +62,7 @@ Use these ordinary process-log records:
 | `agent_control_failure` | Failed operation/stage, job ID, exception class and HTTP status when available. |
 | `agent_heartbeat_retry` | Consecutive failures, time since the last acknowledgement (or heartbeat start), and next retry delay. |
 | `agent_heartbeat_recovered` | Renewal succeeded after failures. |
+| `supervisor_acquire_conflict` | The sandbox manager refused the turn's sandbox request with a conflict: job ID, the kind it named (`busy`, `changed`, `lease_lost`, or `unknown` from an older sandbox manager), whether the runner asks again, and seconds since its first request. The sandbox manager's own `shared_acquire_conflict` record names the refusal. |
 
 The failure diagnostics exclude request URLs, tokens, response bodies and
 exception messages. The heartbeat's exception class/status are logged once per

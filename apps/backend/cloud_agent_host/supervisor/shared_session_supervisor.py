@@ -423,6 +423,7 @@ class SharedChatSessionSupervisor:
         start_seq: int | None = None,
         restore: CheckpointRestore | None = None,
         environment_snapshot: EnvironmentSnapshotRef | None = None,
+        conflict_wait_s: float | None = None,
     ) -> SharedSessionLease:
         """Start one group if needed and lease only the addressed member."""
         return self._sessions.acquire(
@@ -437,6 +438,7 @@ class SharedChatSessionSupervisor:
             start_seq=start_seq,
             restore=restore,
             environment_snapshot=environment_snapshot,
+            conflict_wait_s=conflict_wait_s,
         )
 
     def ensure_resident(
