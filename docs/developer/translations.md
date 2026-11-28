@@ -1,14 +1,12 @@
 # Translating the docs
 
-This page is for translators, and for anyone whose English edit changes a
-paragraph that has a translation. The site is published in English and
-Simplified Chinese; the Chinese pages are at `/zh_CN/` and the sidebar
-switches between them.
+The site is published in English and Simplified Chinese (under `/zh_CN/`; the
+sidebar switches between them). This page is for translators, and for anyone
+whose English edit changes a translated paragraph.
 
-The pages are written in English and translated with Sphinx's gettext
-workflow, so a translation is attached to each paragraph of source text rather
-than to a whole file. Any string without a translation falls back to English,
-so the site always builds complete.
+Pages are translated paragraph by paragraph with Sphinx's gettext workflow. A
+string without a translation falls back to English, so the site always builds
+complete.
 
 ```bash
 make docs-gettext                      # extract one catalog template per page
@@ -25,11 +23,9 @@ msgid "Cloud Agent runs coding agents against a user's repository inside retaine
 msgstr "Cloud Agent 在保留的沙箱容器中，针对用户的仓库运行编码 agent。"
 ```
 
-The English text is the lookup key, so editing a paragraph invalidates its
-translation automatically: the page falls back to English for that paragraph
-instead of serving a translation that no longer matches what the code does.
-That is the reason to use catalogs rather than parallel `.zh-CN.md` files,
-which drift silently.
+The English text is the lookup key, so editing a paragraph sets its old
+translation aside: the page shows the new English until someone updates the
+entry, and never serves a translation that no longer matches.
 
 Commit the `.po` files. `docs/gettext/` and compiled `.mo` files are generated
 and ignored.

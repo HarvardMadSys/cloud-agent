@@ -1,8 +1,8 @@
 # Code structure
 
-This guide explains where behavior belongs and how to follow it through the
-repository. Use [development.md](development.md) for setup and checks, and
-[AGENTS.md](../../AGENTS.md) for service and security boundaries.
+Where behavior belongs, and how to follow it through the repository. The
+[developer guide](development.md) covers setup, checks and the import rules;
+[AGENTS.md](../../AGENTS.md) covers the service and security boundaries.
 
 ## Start with the deployment boundary
 
@@ -18,14 +18,12 @@ apps/
 deploy/                  Image builds and deployment entry points
 scripts/                 Development, qualification, and release tooling
 tests/                   Backend behavior, integration, and boundary checks
-docs/                    Maintained guides and dated design evidence
+docs/                    Maintained guides and design records
 ```
 
-The control plane and host are independently deployed implementations. Neither
-imports the other. Shared code provides the facts and contracts they agree on;
-it imports neither implementation. Accounts, admission and usage live in the
-agent database; model calls go from the sandbox to the owner's provider, or
-through the control plane's model relay for models the deployment provides.
+The control plane and the host are deployed separately and never import each
+other. Shared code holds the facts and contracts they agree on, and imports
+neither.
 
 ## Vocabulary
 
@@ -62,17 +60,15 @@ flowchart TD
     Storage --> Domain
 ```
 
-`app.py` mounts the four listeners: the owner/admin API, the MCP-only listener,
-the GitHub relay and the model relay. It installs shared HTTP response and
-exception policies, and on the API and MCP listeners a
-dependency that runs ahead of every route's own (`api/_parameters.py`): a path
-or query parameter holding NUL, or a route's integer parameter too wide for a
-`bigint`, is refused with a 422 before any query reads it. So is a JSON body
-holding NUL or half a surrogate pair, on a route an owner, an administrator or
-the on-call relay calls; host and sandbox reports keep their own models, which
-replace those characters instead. `bootstrap/lifespan.py`
-constructs the resources and starts and stops background work; route modules
-do not own service startup or shutdown.
+`app.py` mounts the four listeners (the owner and admin API, the MCP-only
+listener, the GitHub relay and the model relay) and installs the shared
+response and exception policies. On the API and MCP listeners,
+`api/_parameters.py` refuses with a 422, before any route runs, what Postgres
+cannot store: NUL or an integer beyond `bigint` in a path or query parameter,
+and NUL or a lone surrogate in a JSON body an owner or administrator sends.
+Host and sandbox reports replace those characters instead.
+`bootstrap/lifespan.py` builds the resources and starts and stops background
+work; route modules own no startup or shutdown.
 
 | Directory or module | Owns | Put a change here when |
 |---|---|---|
@@ -89,32 +85,33 @@ do not own service startup or shutdown.
 | `goals/` | Goal orchestration and retry policy | Goal scheduling or progress policy changes |
 | `providers/` | External provider implementations | A provider's integration behavior changes |
 
-The storage assembly exposes capabilities such as `store.host_pool` and
-`store.pending_messages`. Callers type against the capabilities they use. They
-do not import Postgres repositories or reach through the assembly to its pool.
-Outside `storage/`, the assembly is the only storage module a caller imports.
-A port imports only `domain/`, `schemas/`, `cloud_agent_shared`, other ports and
-libraries, because its caller and its implementation both depend on whatever it
-names: a type a new port needs moves to `domain/` or `schemas/` first.
-Do not add a port that only repeats its repository's methods: the assembly then
-names the repository class, and each caller declares the narrow Protocol it
-uses, as `api/config.py` does for model preferences.
-Application flows do not raise HTTP errors: they raise the domain errors
-`Refused` and `Unavailable` (`domain/errors.py`), and `api/errors.py` maps them
-to the same status, headers and body. A test refuses `HTTPException` in
-`application/`.
+Storage and errors follow four rules:
 
-MCP session ownership lives in `mcp/runtime.py`: lazy host construction,
-fenced session reaping, maintenance, and closing. Both the relay's handlers
-and bootstrap call that runtime directly. Eager send-now handoff task retention
-and cancellation live in `application/send_now.py`; the durable delivery rows
-and recovery worker still own crash recovery.
+- Outside `storage/`, callers import only the storage assembly and type against
+  the capabilities they use, such as `store.host_pool` or
+  `store.pending_messages`. They never import a Postgres repository or reach
+  through the assembly to its pool.
+- A port imports only `domain/`, `schemas/`, `cloud_agent_shared`, other ports
+  and libraries, because its caller and its implementation both depend on what
+  it names. Move a type a new port needs to `domain/` or `schemas/` first.
+- Do not add a port that only repeats its repository's methods. Let the
+  assembly name the repository class, and have each caller declare the narrow
+  Protocol it uses, as `api/config.py` does for model preferences.
+- Application flows raise the domain errors `Refused` and `Unavailable`
+  (`domain/errors.py`), never HTTP errors; `api/errors.py` maps them to a
+  status, headers and body. A test refuses FastAPI and Starlette imports in
+  `application/` and `domain/`.
+
+`mcp/runtime.py` owns MCP sessions: lazy host construction, fenced reaping,
+maintenance and closing. The relay's handlers and bootstrap both call it
+directly. `application/send_now.py` owns the eager send-now handoff tasks;
+crash recovery stays with the durable delivery rows and their recovery worker.
 
 ## API schemas are organized by domain
 
-Import public models from `cloud_agent.schemas`. Its `__init__.py` explicitly
-exports them; implementations use direct imports between domain modules rather
-than importing the facade back into themselves.
+Import public models from `cloud_agent.schemas`, whose `__init__.py` exports
+them explicitly. Modules inside the package import each other directly, not
+through that facade.
 
 | Modules | Models for |
 |---|---|
@@ -127,14 +124,14 @@ than importing the facade back into themselves.
 | `teams` | Teams, members, invitations, and join requests |
 | `_host_reports`, `_prompts` | Private helpers: bounds for host and worker reports, and the prompt text rule |
 
-Keep model names and serialized behavior stable during structural refactors.
-Cross-domain annotations must resolve immediately after import. Intentional
-wire changes require the contract update described in the developer guide.
+Keep model names and serialized behavior stable in a structural refactor, and
+make cross-domain annotations resolve right after import. An intentional wire
+change needs [a contract update](development.md#changing-an-api).
 
 ## Follow a host execution
 
 The host package groups its modules by concern. Paths below are relative to
-`cloud_agent_host/`; a module named without a directory sits at its top level.
+`cloud_agent_host/`.
 
 | Package | Owns |
 |---|---|
@@ -148,66 +145,69 @@ The host package groups its modules by concern. Paths below are relative to
 | `member_setup/` | What the trusted host installs into a member before its CLI starts: plugins, MCP helpers, runtimes, trusted files |
 | `launch/`, `runtimes/`, `manager_api/` | Launch facets, the Agent CLI adapters, and the Sandbox Manager's HTTP layer |
 
-The top level keeps the process entry points (`runner.py`, `sandbox_manager.py`,
-`candidate_check.py`, and the `host_capacity` and `storage_attestation`
-commands deployment runs inside a runner) and the modules several packages
-share, such as `claimed_job.py`, `control_plane_client.py`, `drivers.py`,
-`resident_transport.py` and `session_lifecycle.py`.
+The top level keeps the process entry points (`runner.py`,
+`sandbox_manager.py`, `candidate_check.py`, and the `host_capacity` and
+`storage_attestation` commands that deployment runs inside a runner) and the
+modules several packages share, such as `claimed_job.py`,
+`control_plane_client.py`, `drivers.py`, `resident_transport.py` and
+`session_lifecycle.py`.
 
-`runner.py` is the command line. The host service in `service/host_service.py`
-enrolls the host, heartbeats, claims turns up to its limit, and drains on
+`runner.py` is the command line. The host service (`service/host_service.py`)
+enrolls the host, heartbeats, claims turns up to its limit and drains on
 SIGTERM; `service/host_capabilities.py` holds what it advertises and the proof
-each claim carries. Each claimed turn runs in a child process
-(`turn/turn_child.py`) that preflights, answers the handover, and then runs the
-attempt under the lease `service/attempt_lease.py` renews:
-`turn/group_reservation.py` checks and reserves its sandbox group,
-`turn/shared_live_attempt.py` runs it as a sequence of stages, and
-`turn/turn_stream.py` relays the admitted turn. `turn/source_preparation.py` is
-the trusted Git work on a chat's source outside the sandbox. `claimed_job.py`
-defines claim payloads and lease errors; `control_plane_client.py` owns
-attempt-scoped worker HTTP calls, request deadlines, and event replay. The
-client queues a turn's events on the ordered sender in `event_sender.py`, which
-uploads them in batches.
+each claim carries. Each claimed turn runs in a child process,
+`turn/turn_child.py`, under the lease that `service/attempt_lease.py` renews:
 
-`container/chat_sandbox_models.py` holds retained-container specs,
-inspection/status values, ownership labels, and identity bounds. Group bridges,
-relay membership, Kata guest route synchronization, and network proof/release
-live in the composed `network/chat_sandbox_network.py` component. It consumes a
-narrow container protocol; exact container identity, bounded exec, and
-fail-stop operations stay with the manager. Existing manager network entry
-points delegate to that owner. Network snapshots remain scoped to one
-operation, and operational log names are stable.
-`container/chat_sandbox.py` manages retained groups and their members. Its
-`ChatSandboxManager` is assembled from mixins, one module per concern:
-container creation (`chat_sandbox_create.py`), member execs and processes
-(`chat_sandbox_members.py`), workspace and home files
-(`chat_sandbox_workspace.py`), the guest observer (`chat_sandbox_observation.py`)
-and archive markers (`chat_sandbox_markers.py`); terminals and the retained
-backend are in `chat_sandbox_terminal.py` and `retained_backend.py`. A test pins
-the manager's method set. The in-guest network check is
-`network/guest_network_check.py`, and the retained-container inventory the
-capacity report reads is `observe/sandbox_inventory.py`.
-`container/sandbox.py` owns the container/process boundary. The Sandbox Manager
-and session supervisor coordinate native sessions and workspace operations. The
-supervisor's metadata lock protects in-memory ownership only. Stop, orphan
-recovery, and archive deletion reserve one group's lifecycle before Docker or
-marker I/O, then revalidate its group, member, container, and lifecycle
-identities before accepting the result. Other groups remain available; failed
-checks release their temporary reservation, while durable archive and
-native-flush barriers remain in force. Public sandbox model imports through
-`chat_sandbox` continue to work.
+- `turn/group_reservation.py` checks and reserves the turn's sandbox group;
+- `turn/shared_live_attempt.py` runs the attempt as a sequence of stages;
+- `turn/turn_stream.py` relays the admitted turn;
+- `turn/source_preparation.py` does the trusted Git work on the chat's source,
+  outside the sandbox.
+
+`claimed_job.py` defines claim payloads and lease errors.
+`control_plane_client.py` owns attempt-scoped worker HTTP calls, deadlines and
+event replay; it queues a turn's events on the ordered sender in
+`event_sender.py`, which uploads them in batches.
+
+### Containers and the group lifecycle
+
+- `container/chat_sandbox_models.py` holds retained-container specs,
+  inspection and status values, ownership labels and identity bounds.
+- `container/chat_sandbox.py` manages retained groups and their members. Its
+  `ChatSandboxManager` is assembled from one mixin per concern: container
+  creation (`chat_sandbox_create.py`), member execs and processes
+  (`chat_sandbox_members.py`), workspace and home files
+  (`chat_sandbox_workspace.py`), the guest observer
+  (`chat_sandbox_observation.py`) and archive markers
+  (`chat_sandbox_markers.py`). Terminals and the retained backend are in
+  `chat_sandbox_terminal.py` and `retained_backend.py`. A test pins the
+  manager's method set.
+- `network/chat_sandbox_network.py` owns group bridges, relay membership, Kata
+  guest routes, and network proof and release, through a narrow container
+  protocol. Exact container identity, bounded exec and fail-stop operations
+  stay with the manager. The in-guest network check is
+  `network/guest_network_check.py`.
+- `container/sandbox.py` owns the container and process boundary.
+  `observe/sandbox_inventory.py` is the retained-container inventory the
+  capacity report reads.
+
+Stop, orphan recovery and archive deletion reserve the group's lifecycle
+before any Docker or marker I/O, then check the group, member, container and
+lifecycle identities again before accepting the result. The supervisor's
+metadata lock protects in-memory ownership only.
 
 A group's lifecycle is one value, `GroupLifecycleState`
 (`supervisor/group_lifecycle_state.py`): which start, stop, exclusive workspace
-operation and lifecycle check hold it, each with its holder, the barriers
-still owed (a final archive, an orphan finalization), and the run's fence
-label. Only that module's transitions change it, and a test refuses any other
-assignment. `supervisor/group_lifecycle.py` is the admission table that decides
-what may run now. The [design](../agents/specs/2026-11-05-group-lifecycle-state.zh-CN.md)
-records which combinations are reachable and the invariants the tests check.
+operation and lifecycle check hold it, the barriers still owed (a final
+archive, an orphan finalization), and the run's fence label. Only that module's
+transitions change it, and a test refuses any other assignment.
+`supervisor/group_lifecycle.py` is the admission table that decides what may
+run now. The [design](../agents/specs/2026-11-05-group-lifecycle-state.zh-CN.md)
+lists the reachable combinations and the invariants the tests check.
 
-The runtime adapters are a package under `cloud_agent_host/runtimes/`, with one
-package per CLI:
+### Agent CLI adapters
+
+The adapters live in `cloud_agent_host/runtimes/`, one package per CLI:
 
 | Module | Responsibility |
 |---|---|
@@ -222,52 +222,44 @@ package per CLI:
 | `registry.py` | Adapter lookup and construction |
 | `live.py` | Each CLI's live session class, the driver that opens it, and its launch steps |
 
-`drivers.py` keeps the generic Driver, Session and Turn contract and the base
+`drivers.py` holds the generic Driver, Session and Turn contract and the base
 classes the sessions share. `resident_transport.py` opens member processes and
-journals native Forks. It does not branch on the CLI to launch one: each
-CLI's `member` module defines that CLI's launch steps (its member config or
-private home, trusted helpers, plugin installer, where platform instructions
-go, and Claude's commit attribution), and the factory calls them. Native Fork
-still branches on the CLI there. `member_setup/member_homes.py` holds the private provider homes that Codex, OpenCode
-and Kilo members use.
+journals native Forks without branching on the CLI: each CLI's `member` module
+defines its launch steps (member config or private home, trusted helpers,
+plugin installer, where platform instructions go, and Claude's commit
+attribution), and the factory calls them. Only native Fork still branches on
+the CLI. `member_setup/member_homes.py` holds the private provider homes of
+Codex, OpenCode and Kilo members.
 
-Existing callers use `cloud_agent_host.runtimes`; the package explicitly
-exports its public API, which is the dialect layer. Sessions, `live` and the
-`member` modules build on `drivers.py`, which imports that API, so callers
-import them by module name. Runtime discovery facts live in the immutable
-`cloud_agent_shared/runtime_catalog.py`, so the control plane advertises runtime
-IDs, MCP support, and reasoning efforts without loading host adapters. Runtime
-version pins remain in `cloud_agent_shared/shared_protocol.py` and image files.
+Callers import `cloud_agent_host.runtimes`, which exports the public dialect
+API; sessions, `live` and the `member` modules build on `drivers.py`, so import
+them by module name. Discovery facts (runtime IDs, MCP support, reasoning
+efforts) live in `cloud_agent_shared/runtime_catalog.py`, so the control plane
+advertises them without loading host adapters. Version pins are in
+`cloud_agent_shared/shared_protocol.py` and the image files.
 
 ## Shared operation profiling
 
-Producers continue to import `cloud_agent_shared.operation_profiling`. The
-implementation is organized under `cloud_agent_shared/profiling/` by schema,
-models, run parsing, policy, measurement collection, stage observers, process
-context, export, and clock access. See the package's
-[responsibility and contract guide](../../apps/backend/cloud_agent_shared/profiling/README.md).
-
-The facade keeps the existing producer API and operational diagnostics. Clock
-access respects its replaceable `time` object, keeping deterministic tests and
-the default-off path intact. New profiling logic belongs in its concern module
-instead of expanding the facade.
+Producers import `cloud_agent_shared.operation_profiling`, a facade over
+`cloud_agent_shared/profiling/` ([its guide](../../apps/backend/cloud_agent_shared/profiling/README.md)).
+Put new profiling logic in the matching concern module, not in the facade.
+Clock access goes through its replaceable `time` object, which keeps tests
+deterministic and the default-off path intact.
 
 ## Follow a browser action
 
-Next.js route files live under `apps/frontend/src/app/`. Shared feature UI lives
-under `components/features/` (`agents` for tasks and conversations, `settings`
-for the settings pages, `teams`, `profile` and `auth`), reusable presentation
-components under `components/`, and browser utilities and API clients under
-`lib/`. Server-only
+Next.js routes live under `apps/frontend/src/app/`. Shared feature UI is under
+`components/features/` (`agents` for tasks and conversations, `settings`,
+`teams`, `profile` and `auth`), reusable presentation components under
+`components/`, and browser utilities and API clients under `lib/`. Server-only
 integrations belong in the existing server modules; a browser component must
 not pull server credentials into its import graph.
 
-`lib/api/agents.ts` is the explicit public API facade. It delegates to focused
-modules under `lib/api/agents/`: jobs, threads, sessions, goals, configuration,
-integrations, resource and usage reads, workspace files, terminals, and event
-streams. Shared create/Fork idempotency response handling stays private to that
-package. Keep endpoint paths, retries, credentials, cursor handling, and
-notifications with their owning operation.
+`lib/api/agents.ts` is the public API facade over the modules in
+`lib/api/agents/`: jobs, threads, sessions, goals, configuration,
+integrations, resource and usage reads, workspace files, terminals and event
+streams. Keep endpoint paths, retries, credentials, cursors and notifications
+with the operation that owns them.
 
 Inside `components/features/agents/`, each concern has its own folder:
 
@@ -285,8 +277,8 @@ follow the same rule. The top level keeps what several folders share:
 `types.ts`, the job and conversation records, the read and push providers, and
 the job page. Tests sit next to the module they test.
 
-`components/features/agents/JobDetail.tsx` composes the job page. Its extracted
-implementation lives under `job-detail/`:
+`components/features/agents/JobDetail.tsx` composes the job page from the
+modules under `job-detail/`:
 
 | Module | Responsibility |
 |---|---|
@@ -299,31 +291,19 @@ implementation lives under `job-detail/`:
 | `useJobConversation` | Turn navigation, transcript scrolling, and reading position |
 | `useJobRunActions` | Stop, Fork, and restore actions with request guards |
 
-Keep state with the concern that owns it. Retained panels preserve terminals,
-file previews, and drafts while hidden; scope changes must reset the relevant
-state. Keep hooks' dependencies explicit and preserve lazy loading when
-extracting components.
+Keep state with the concern that owns it. Retained panels keep terminals, file
+previews and drafts while hidden, and a scope change must reset the state it
+affects. Keep hook dependencies explicit, and keep lazy loading when you
+extract a component.
 
 ## Add a feature without losing the structure
 
-1. Identify the service and concern that owns the behavior using the maps above.
-2. Add or update its domain rule, wire model, and port only where the behavior
-   requires them. Implement durable operations inside storage.
-3. Put orchestration in an application flow or owning service, then call it from
-   the HTTP adapter or worker. Wire new resources through bootstrap.
-4. Add public facade exports deliberately. Import implementation modules
-   directly within a package to keep its dependency graph clear.
-5. Exercise observable behavior and affected boundaries. For structural
-   refactors, compare contracts and reuse existing behavioral tests.
-6. Run the relevant complete gates and update the maintained guide for changed
-   ownership, commands, or behavior.
-
-Backend architecture checks enforce service-image independence, API import
-direction, domain/port independence, and repository isolation. Backend imports
-must use the installed package names (`cloud_agent`, `cloud_agent_host`, and
-`cloud_agent_shared`), rather than the checkout namespace `apps.backend`.
-The host image flattens these packages, so checkout-prefixed imports can work
-locally and fail after deployment; the guards reject them in all three packages.
-The import scanners include relative imports, imports inside functions, and
-`TYPE_CHECKING` blocks. Backend behavior tests remain under `tests/`; frontend
-tests remain alongside the feature or utility they exercise.
+1. Find the service and concern that own the behavior in the maps above.
+2. Add a domain rule, wire model or port only where the behavior needs one, and
+   implement durable operations inside storage.
+3. Put orchestration in an application flow or owning service, call it from the
+   HTTP adapter or worker, and wire new resources through bootstrap.
+4. Export from a public facade on purpose; inside a package, import
+   implementation modules directly.
+5. Test the observable behavior and the boundaries it crosses, run the gates,
+   and update the guide that owns any changed ownership, command or behavior.

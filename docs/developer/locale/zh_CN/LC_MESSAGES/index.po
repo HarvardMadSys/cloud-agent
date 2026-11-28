@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: HybridInference Cloud Agent \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-26 09:52+0800\n"
+"POT-Creation-Date: 2026-11-28 06:18+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: The HybridInference contributors\n"
 "Language: zh_CN\n"
@@ -13,17 +13,17 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.19.0\n"
+"Generated-By: Babel 2.18.0\n"
 
-#: ../developer/index.md:44
+#: ../developer/index.md:43
 msgid "Getting started"
 msgstr "快速上手"
 
-#: ../developer/index.md:55
+#: ../developer/index.md:54
 msgid "Concepts"
 msgstr "概念"
 
-#: ../developer/index.md:67
+#: ../developer/index.md:65
 msgid "Operations"
 msgstr "运维"
 
@@ -39,32 +39,29 @@ msgid ""
 " plane coordinates jobs and sessions, and relays the agents' own pushes "
 "and pull requests to GitHub. Accounts are its own: people sign up, apply "
 "through a waiting list and are approved by an administrator. Every task "
-"runs on a model connection: either one its owner adds with their own "
-"provider key (such as a FreeInference key), or one the deployment "
-"provides through its control-plane model relay."
+"runs on a model connection: one its owner adds with their own provider "
+"key, or one the deployment provides through its control-plane model "
+"relay."
 msgstr ""
-"Cloud Agent 在保留的沙箱容器中，针对用户的仓库运行编码 agent。用户通过 Web 界面工作，已注册的主机运行 Claude "
+"Cloud Agent 让编码 agent 在保留的沙箱容器里处理用户的仓库。用户在 Web 界面里工作，已注册的主机运行 Claude "
 "Code、Codex、pi、OpenCode 或 Kilo。控制平面协调任务和会话，并把 agent 自己的推送和 pull request "
-"中继到 GitHub。账号是它自己的：用户注册、通过等候名单申请，再由管理员批准。每个任务都运行在一个模型连接上：可以是所有者用自己的服务商密钥（例如 "
-"FreeInference 密钥）添加的连接，也可以是部署通过控制平面模型中继提供的连接。"
+"中继到 "
+"GitHub。账号由它自己管理：用户注册后通过等候名单申请，再由管理员批准。每个任务都运行在一个模型连接上：要么是所有者用自己的服务商密钥添加的连接，要么是部署通过控制平面模型中继提供的连接。"
 
 #: ../developer/index.md:12
 msgid ""
-"This is the documentation for the software itself: running it locally, "
-"operating a deployment, understanding how it works, and contributing to "
-"it. The source is at [github.com/HarvardMadSys/hybridInference-cloud-"
-"agent](https://github.com/HarvardMadSys/hybridInference-cloud-agent), "
-"under the MIT license; bugs and questions go to its [issue "
-"tracker](https://github.com/HarvardMadSys/hybridInference-cloud-"
-"agent/issues)."
+"This site documents the software: running it locally, operating a "
+"deployment, how it works, and contributing. The source is at "
+"[github.com/HarvardMadSys/cloud-agent](https://github.com/HarvardMadSys"
+"/cloud-agent), under the MIT license; bugs and questions go to its [issue"
+" tracker](https://github.com/HarvardMadSys/cloud-agent/issues)."
 msgstr ""
-"这里是软件本身的文档：怎么在本地跑起来、怎么运维一套部署、它内部怎么运作，以及怎么参与贡献。源代码在 "
-"[github.com/HarvardMadSys/hybridInference-cloud-"
-"agent](https://github.com/HarvardMadSys/hybridInference-cloud-agent)，采用 "
-"MIT 许可证。发现 bug 或有疑问，请到 [issue tracker](https://github.com/HarvardMadSys"
-"/hybridInference-cloud-agent/issues) 提出。"
+"本站介绍软件本身：如何在本地运行、如何运维一套部署、它如何工作，以及如何参与贡献。源代码在 [github.com/HarvardMadSys"
+"/cloud-agent](https://github.com/HarvardMadSys/cloud-agent)，采用 MIT "
+"许可证；bug 和问题请提交到它的 [issue tracker](https://github.com/HarvardMadSys/cloud-"
+"agent/issues)。"
 
-#: ../developer/index.md:19
+#: ../developer/index.md:18
 msgid "Where to start"
 msgstr "从哪里开始"
 
@@ -169,22 +166,21 @@ msgid "See the API this service serves, as its committed contract"
 msgstr "查看本服务所提供的 API，即已提交的契约"
 
 #: ../developer/index.md
-msgid "[API contract](api-contracts.md)"
-msgstr "[API 契约](api-contracts.md)"
+msgid "[Changing an API](development.md#changing-an-api)"
+msgstr "[修改 API](development.md#changing-an-api)"
 
-#: ../developer/index.md:36
+#: ../developer/index.md:35
 msgid "Scope of this site"
 msgstr "本站涵盖的内容"
 
-#: ../developer/index.md:38
+#: ../developer/index.md:37
 msgid ""
 "These pages document the software, not any one installation of it. How "
 "end users work with a particular deployment, which agents and models it "
 "offers, and how to get an account there are the operator's to publish. "
-"Dated designs, plans, and acceptance records stay in the repository as "
-"engineering history and are linked from here where they explain a "
-"decision."
+"Design records in the repository are linked from these pages where they "
+"explain the current design."
 msgstr ""
 "这些页面讲的是软件本身，而不是某一套具体的部署。某个部署的终端用户怎么使用它、提供哪些 agent "
-"和模型、怎么申请账号，由各自的运维方发布。带日期的设计、计划和验收记录作为工程历史留在仓库里；它们能说明某个决定的来龙去脉时，这里会附上链接。"
+"和模型、怎么申请账号，由各自的运维方发布。仓库里的设计记录能说明当前设计时，这些页面会附上链接。"
 

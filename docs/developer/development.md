@@ -1,71 +1,53 @@
 # Developer guide
 
-This guide will help you get a checkout running, find the code that owns your
-change, and choose the right checks for it. Start with
-[AGENTS.md](../../AGENTS.md) for the repository rules and
-[CONTRIBUTING.md](../../CONTRIBUTING.md) for the pull-request workflow. For an
-overview of the product and its deployment topology, see the
-[README](../../README.md).
+How to get a checkout running, find the code that owns your change, and choose
+its checks. [AGENTS.md](../../AGENTS.md) has the repository rules and
+[CONTRIBUTING.md](../../CONTRIBUTING.md) the pull-request workflow.
 
 ## Set up a checkout
 
-Run backend commands from the repository root. Make sure you have Python 3.12
-and [`uv`](https://docs.astral.sh/uv/) installed, then create the environment:
+You need Python 3.12 and [`uv`](https://docs.astral.sh/uv/). From the
+repository root:
 
 ```bash
 make setup-dev
 make check
 ```
 
-`make setup-dev` creates `.venv`, then uses `uv sync` to install the project and
-its development dependencies. It defaults to Python 3.12, which is also the
-version used in CI; the project supports both Python 3.12 and 3.13. When you
-run Python tools from this checkout, use `uv run`. Package discovery already
-includes `apps/backend/`, so you do not need to set `PYTHONPATH` for each
-package.
+`make setup-dev` creates `.venv` and installs the project with its development
+dependencies (`uv sync`). CI uses Python 3.12; 3.13 is also supported. Run
+Python tools with `uv run`. Package discovery already includes `apps/backend/`,
+so you do not need `PYTHONPATH`.
 
-If you are working on the frontend, use Node.js 22 to match CI and install the
-locked dependencies:
+For frontend work, use Node.js 22 and install the locked dependencies:
 
 ```bash
 cd apps/frontend
 npm ci
 ```
 
-When you need to exercise sign-in, migrations, host enrollment, and real Agent
-CLIs together, use the
-[complete local Docker stack](../../deploy/local/README.md). Run it from the
-repository root:
+To exercise sign-in, migrations, host enrollment and real Agent CLIs together,
+run the [local Docker stack](../../deploy/local/README.md) from the repository
+root:
 
 ```bash
 ./deploy/local/dev.sh up
 ./deploy/local/dev.sh smoke
 ```
 
-The local-stack guide covers Docker prerequisites, ports, logs, stop/resume,
-and running multiple isolated checkouts.
-
 ## Find the code that owns a change
 
-The backend is split into three installed packages under `apps/backend/`.
-Choose the package based on who should own the behavior you are changing:
+The backend is three installed packages under `apps/backend/`:
 
 | Package | Owns |
 |---|---|
-| [`cloud_agent/`](../../apps/backend/cloud_agent/) | Control plane: HTTP APIs, accounts and admission, scheduling, persistence, and the MCP and GitHub relays. |
-| [`cloud_agent_host/`](../../apps/backend/cloud_agent_host/) | Host execution: claims, retained sandboxes, workspace/session sandbox manager, and Agent CLI adapters. |
-| [`cloud_agent_shared/`](../../apps/backend/cloud_agent_shared/) | Protocol versions, capability names, shared payloads and errors, profiling collection, and shared Git/archive algorithms. |
+| [`cloud_agent/`](../../apps/backend/cloud_agent/) | Control plane: HTTP APIs, accounts and admission, scheduling, persistence, and the MCP, GitHub and model relays. |
+| [`cloud_agent_host/`](../../apps/backend/cloud_agent_host/) | Host execution: claims, retained sandboxes, the Sandbox Manager, and Agent CLI adapters. |
+| [`cloud_agent_shared/`](../../apps/backend/cloud_agent_shared/) | Protocol versions, capability names, shared payloads and errors, profiling collection, and shared Git and archive code. |
 
-Inside the control plane, look in `api/` for HTTP handlers, `application/` for
-reusable flows, `ports/` for persistence interfaces, and `storage/` for their
-database implementations. Background maintenance and reconciliation belong in
-`workers/`. Resource construction and lifecycle behavior belong in
-`bootstrap/`. Finally, `app.py` assembles the main API and the separate MCP-only
-listener. The [code structure guide](code-structure.md) maps the schema domains,
-runtime adapters, shared profiling, frontend API clients, and job-detail UI.
-
-For common changes, start with the files below. Backend paths in this table are
-relative to `apps/backend/`.
+[Code structure](code-structure.md) maps the layers inside each package. For
+common changes, start with these files (backend paths are relative to
+`apps/backend/`):
 
 | Change | Start here |
 |---|---|
@@ -80,59 +62,46 @@ relative to `apps/backend/`.
 | CLI behavior or version compatibility | `cloud_agent_host/runtimes/` and `drivers.py`; discovery facts are in `cloud_agent_shared/runtime_catalog.py`, shared pins in `shared_protocol.py`, image pins in `deploy/sandbox/Dockerfile.agent-sandbox`. |
 | Browser UI or a BFF route | `apps/frontend/src/`; browser API clients are in `src/lib/api/agents/`, job-page components and hooks in `components/features/agents/job-detail/`. |
 
-Keep your change in the module that owns the behavior. Extract a flow when it
-needs an independent test boundary, or extract a rule when multiple entry
-points share it.
+Keep a change in the module that owns the behavior. Extract a flow when it
+needs its own test boundary, and a rule when several entry points share it.
 
 ## Keep the dependency boundaries
 
 The deployment images ship different packages, so an import that works in a
-checkout can still fail in production. Follow these boundaries:
+checkout can fail in production. The
+[import-boundary tests](../../tests/unit/test_import_boundary.py) and the
+architecture checks enforce these rules, including for relative imports,
+imports inside functions and `TYPE_CHECKING` blocks:
 
+- Import the installed package names (`cloud_agent`, `cloud_agent_host`,
+  `cloud_agent_shared`), never the checkout path `apps.backend`. The host
+  image flattens the packages, so a checkout-prefixed import can work locally
+  and fail after deployment.
+- The host never imports the control plane, the control plane never imports
+  the host, and the shared package imports neither. Runtime discovery facts
+  both sides need live in `cloud_agent_shared/runtime_catalog.py`.
+- In the shared package, only `cloud_agent_shared/git/` (Git subprocesses and
+  archives) and the operation-profiling collector may import process, network
+  or background-thread modules. The tests list each exemption.
 - HTTP adapters call application flows and the storage capabilities they need.
-  Application flows and workers must not import route modules. Some application
-  flows use FastAPI's `HTTPException`; follow the actual interfaces rather than
-  assuming that package is framework-independent.
+  Bootstrap, application flows, workers and domain modules never import route
+  modules. Application flows and domain rules never import FastAPI or
+  Starlette: they raise the domain errors in `domain/errors.py`, which
+  `api/errors.py` maps onto HTTP.
 - `ports/` defines capabilities without importing their implementations.
-  `Depends(get_storage)` returns the `Storage` assembly: use the surface's
-  narrow protocol and call a capability such as `store.audit` or
-  `store.host_pool`. Repository methods belong to those capabilities.
-- The host must not import the control plane, and the shared package must
-  import neither implementation package. Shared Git subprocess and archive I/O
-  belongs in `cloud_agent_shared/git/`. The only other shared code that may
-  import a process, network or background-thread module is the
-  operation-profiling collector. The import-boundary tests list each
-  exemption and the modules it covers.
-- The control plane must not import the host implementation. Runtime discovery
-  facts live in `cloud_agent_shared/runtime_catalog.py`; host adapters and the
-  control plane both consume them. The
-  [import-boundary tests](../../tests/unit/test_import_boundary.py) enforce both
-  directions of the service boundary.
-- Nothing depends on the HybridInference Gateway: do not import `serving.*`,
-  access its database, or use its `API_KEY_SECRET` or `JWT_SECRET_KEY`. This
-  service uses its own `AGENT_CONTROL_TOKEN_SECRET`,
-  `AGENT_LOCAL_SESSION_SECRET` and `AGENT_SETTINGS_ENCRYPTION_KEY`, and every
-  model call goes to the owner's own model connection.
+  `Depends(get_storage)` returns the `Storage` assembly; type against the
+  narrow protocol you use and call a capability such as `store.audit`. Callers
+  outside storage never import `storage/repositories/`.
+- Nothing depends on the HybridInference Gateway
+  ([AGENTS.md §5](../../AGENTS.md#5-permanent-rules)).
 
-Bootstrap owns cross-component wiring. MCP session lifecycle lives in
-`mcp/runtime.py`, and eager send-now handoff task lifecycle lives in
-`application/send_now.py`. Bootstrap, application flows, workers, and domain
-modules must not import HTTP route modules. Domain rules and ports must not
-import storage implementations or HTTP frameworks. Callers outside storage
-must not import `storage/repositories/`; shared policies belong to their domain
-or owning service.
-
-Changes to sandbox networking, credential scope, or isolation also need review
+A change to sandbox networking, credential scope or isolation also needs review
 against [the security boundaries in AGENTS.md](../../AGENTS.md#7-security-boundaries--do-not-relax-without-review).
-Keep MCP tool calls on the MCP-only listener and long-lived credentials out of
-sandboxes. The owner's provider keeps its key's quota and bill; there is no
-per-task dollar budget and no local quota.
 
 ## Run the relevant checks
 
-While developing the backend, start with the focused tests that exercise the
-behavior you changed. Before you open a pull request, run the complete required
-backend gate:
+While you work, run the focused tests for the behavior you changed. Before a
+pull request, run the whole backend gate:
 
 ```bash
 uv run pytest -q tests/servers/test_agent_jobs_api.py
@@ -153,150 +122,51 @@ make check
 | `make docs` | Build this documentation site, every language, into `docs/build/html`; any warning fails. |
 | `make docs-verify` | `make docs`, then check that every translation still matches its English page. CI runs this. |
 
-### Run CI locally
+Beyond `make check`, run what your change touches:
 
-The portable launcher runs the backend, database, and frontend gates with
-check-only formatting and linting:
+| Change | Also run |
+|---|---|
+| Storage, SQL, a migration or a database test | `make test-db-local` ([Database tests](#database-tests)) |
+| Frontend | [the frontend checks](#frontend-checks), or `make ci-frontend` |
+| Environment variables, Compose files, Docker packaging or workflows | The tests that check their wiring; document new variables in [ENVIRONMENT.md](../../ENVIRONMENT.md) |
+| A page of this site, or a root guide it includes | `make docs-verify`, after updating the translation ([Translating the docs](translations.md)) |
 
-```bash
-make ci
-# Or select a tier:
-make ci-backend
-make ci-database
-make ci-frontend
-```
+`make test` and CI run the default tier with four workers, each test file on
+one worker; `make check PYTEST_WORKERS=0` runs it serially for debugging.
+Tests under `tests/servers/` exercise HTTP without a deployed server. Tests
+marked `external` list their prerequisites (Docker, a real CLI or a model
+provider) in their module, and CI runs a selection of them. Every test process
+runs with CI's umask of `022` and without an inherited `CODEX_VERSION`
+(`tests/conftest.py`). Outside the `external` and `dbtest` tiers, a host name
+no resolver answers (under `.test`, `.invalid` or `.example`, or a single label
+other than `localhost`) fails at once without a DNS lookup; use one for a host
+a test only pretends to reach.
 
-Install `uv` and Python 3.12 before running backend or database checks. Frontend
-checks require Node.js 22 and npm; database checks require a running Docker
-daemon. The launcher synchronizes locked dependencies with `uv sync --locked`
-and `npm ci`, and uses the installed runtimes. Like CI, it fails when `uv.lock`
-no longer matches `pyproject.toml`; run `uv lock` and commit the result. Direct
-invocation works from any directory:
-`./scripts/ci-local.sh [all|backend|database|frontend]` from the checkout, or
-its absolute path elsewhere. The default tier is `all`.
+### Database tests
 
-Backend checks run Ruff formatting and lint checks, mypy, and pytest with four
-workers and `--dist loadfile`, excluding `external` and `dbtest`.
-The database tier starts a fresh PostgreSQL 15 container on a random loopback
-port, creates separate databases for all four workers, and removes the container
-on exit or interruption. It rejects a database run with skipped tests or fewer
-than 100 tests. Frontend checks run lint, format check, type-check, tests, and
-both server-only and runtime-site-config build guards.
+`make test-db-local` needs only Docker. It starts one PostgreSQL 15 container
+per machine (`cloud-agent-test-postgres` on `127.0.0.1:54339`, data in
+memory), creates empty databases for this checkout, and runs the `dbtest` tier
+with up to twelve workers. Every run starts from empty databases, two worktrees
+never share tables, and two runs in one checkout take turns. The run fails if
+any database test was skipped.
 
-Each run saves logs in a fresh gitignored `.local-ci/<tier>.XXXXXX` directory.
-Set `CI_LOG_DIR` to choose an output directory. This local gate excludes external
-regressions, rolling upgrades, mixed-version protocol checks, Gitleaks, Docker
-release-image builds, and Kata qualification; those remain part of the wider
-hosted CI gate.
+- Narrow it with `ARGS`, for example
+  `make test-db-local ARGS="tests/integration/storage/test_team_store.py -x"`.
+- To run pytest yourself, `eval "$(scripts/test-db-local.sh env)"` creates the
+  databases and exports the `TEST_DB_*` values.
+- `make test-db-local-clean` drops the databases of removed worktrees.
+  `make test-db-local-down` removes the container and every checkout's
+  databases; do not run it while anyone else may be testing.
 
-Every pull request, from a fork or from a branch of this repository, runs on
-disposable GitHub-hosted VMs: ARM64 artifacts use `ubuntu-24.04-arm`, and
-everything else uses `ubuntu-24.04`. The repository is public, so these runners
-consume no minute quota. Pushes to `dev` and `main`, and authorized manual
-dispatches, keep the self-hosted pools, which also run publication and
-synchronization. Every PR has only a read token, checkout does not persist it,
-image jobs use anonymous registry pulls, and no PR job receives a secret. Release
-publication shares no builder with any of them: each publish cell creates a
-fresh builder under its own `RUNNER_TEMP` and removes it when the job ends. The
-only layers a release reuses come from its own registry cache, a
-`buildcache-<artifact>-<ISO week>` tag in the artifact's package that only the
-publish workflow writes; it is renamed weekly, so the first release of each
-week builds cold. Real
-Kata host qualification remains excluded from every PR and runs only on trusted
-`dev` events.
+`make test-db` runs the tier against a PostgreSQL of your own. Fixtures read
+`TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME`, `TEST_DB_USER` and
+`TEST_DB_PASSWORD`; `TEST_DB_NAME` must contain `_test_`, and parallel workers
+need separate pre-created databases
+([ENVIRONMENT.md](../../ENVIRONMENT.md#database)). Check the result for skipped
+tests: an unreachable database makes fixtures skip rather than fail.
 
-Pull requests only read the Actions cache. After each push to `dev`, the
-optional `pr-caches.yml` workflow fills the uv and npm caches and exports the
-sandbox image's build layers from a hosted VM, under the `dev` scope that every pull
-request into `dev` may restore. It runs separately from CI, so publication
-does not wait for it and its failure does not affect CI's conclusion. Of the
-15 real-CLI MCP cases, a pull request runs Kilo's three as `MCP conformance
-(kilo, …)` jobs, one case each, and the other twelve in
-the sandbox image job; trusted events run all 15 in the sandbox image job.
-
-A pull request also splits the default test tier, the PostgreSQL tier, and the
-frontend unit tests over two hosted VMs each, shown as `Tests (1/2)` and so on.
-`scripts/ci_shard.py` deals whole test files to the pytest shards, and vitest
-splits its own with `--shard`. Trusted events run each tier as a single shard.
-To run one shard locally, pass its files to pytest:
-
-```bash
-uv run pytest -m "not external and not dbtest" \
-  $(uv run python scripts/ci_shard.py --shard 1/2 -- -m "not external and not dbtest")
-```
-
-GitHub issue [#464](https://github.com/HarvardMadSys/hybridInference-cloud-agent/issues/464)
-tracks the remaining administrator work: the runner-group controls below,
-validated against an untrusted fork.
-
-Because the repository is public, a fork's pull request can run workflows.
-Configure GitHub's runner groups to allow persistent pools only for the trusted
-workflow references on `refs/heads/dev` and `refs/heads/main`, including the
-publication and manual synchronization workflows. The pools are registered on
-the repository today, where no such restriction applies, so they need to move
-into an organization runner group first. Deny PR merge/head refs and other
-workflow files. Until then, require approval for fork workflows from every
-external contributor, not only first-time ones. Verify those rules
-with an untrusted fork workflow edit that requests a persistent runner: it must
-remain ineligible. A fork can edit its workflow YAML, so the checked-in runner
-expressions cannot enforce this restriction themselves. If the organization
-cannot restrict runner groups by workflow reference, remove these persistent
-runners from the repository's eligible groups and run trusted CI/publication
-in a separate restricted repository, or replace them with credential-free
-single-job disposable runners. Fork approval settings alone are insufficient:
-allowing a test run must never grant access to publication's hosts or credentials.
-These are GitHub administrator settings; repository tests cannot configure or
-verify them.
-
-The default backend test tier uses four workers in both CI and `make test`,
-keeping each test file on one worker. Override the worker count when needed;
-zero disables parallel execution for debugging:
-
-```bash
-make check PYTEST_WORKERS=0
-```
-
-Use markers to select the test tier you need. For example, `tests/servers/`
-contains HTTP-level tests that do not require a deployed server. Tests marked
-`external` list their prerequisites in the test module; these may include
-Docker, a real CLI, or a model provider. CI runs selected external checks
-in addition to the default tier.
-
-If you change the database, run `make test-db-local`. It needs only Docker. It
-starts one PostgreSQL 15 container per machine (`cloud-agent-test-postgres` on
-`127.0.0.1:54339`, with its data in memory), creates empty databases for this
-checkout, named from its path, and runs the `dbtest` tier with up to twelve
-workers. Every run starts from empty databases, so one run's data or settings
-never reach the next, and two worktrees never share tables. Two runs in the
-same checkout take turns. The run fails if any database test was skipped.
-
-Pass pytest arguments with `ARGS`, for example
-`make test-db-local ARGS="tests/integration/storage/test_team_store.py -x"`. To
-run pytest yourself, `eval "$(scripts/test-db-local.sh env)"` creates the
-databases and exports the `TEST_DB_*` values. When you remove a worktree,
-`make test-db-local-clean` drops its databases. `make test-db-local-down`
-removes the container and every checkout's databases with it, so do not run it
-while someone else may be testing.
-
-To use a PostgreSQL of your own, run `make test-db` against a dedicated test
-database. Fixtures read `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME`,
-`TEST_DB_USER`, and `TEST_DB_PASSWORD`; `TEST_DB_NAME` must contain `_test_`.
-Check the result for skipped tests, because an unavailable database can cause
-fixtures to skip rather than fail. Parallel workers need separate pre-created
-databases. See [ENVIRONMENT.md](../../ENVIRONMENT.md#database) for defaults and
-worker naming.
-
-Every test process runs with CI's umask of `022` and without an inherited
-`CODEX_VERSION` (see `tests/conftest.py`), so your shell's settings do not
-change the result of `make check`.
-
-Outside the `external` and `dbtest` tiers, a host name that no resolver
-answers fails at once without a DNS lookup, as it does on CI. Such a name is
-one under `.test`, `.invalid` or `.example`, or a single label other than
-`localhost`. A slow local resolver therefore cannot stretch `make check`. Use
-such a name for a host a test only pretends to reach.
-
-For a frontend change, run these checks from the repository root:
+### Frontend checks
 
 ```bash
 cd apps/frontend
@@ -307,59 +177,144 @@ npm run type-check
 npm run test
 ```
 
-CI also runs the following build guards. Run the relevant one locally when you
-change server-only imports or runtime site configuration:
+CI also runs two build guards. Run the matching one when you change
+server-only imports or runtime site configuration:
 
 ```bash
 node scripts/check-server-only-guard.mjs
 node scripts/check-runtime-site-config.mjs
 ```
 
-Browser recovery regressions run the production Next.js app in Chromium:
+Browser recovery tests run the production Next.js build in Chromium:
 
 ```bash
 npx playwright install chromium
 npm run test:browser
 ```
 
-Run these in an isolated checkout on the test host with Node 22. Chromium's
-system libraries must be provisioned there; this command does not install OS
-packages. `PLAYWRIGHT_BROWSERS_PATH` can keep the browser download in that
-checkout's disposable test directory. The runner builds the root web variant,
-allocates its own loopback ports, and shuts down its servers afterwards. Do not
-run another build against the same `.next` directory concurrently.
+Run them on a test host with Node 22 and Chromium's system libraries; the
+command installs no OS packages, and `PLAYWRIGHT_BROWSERS_PATH` can keep the
+browser in a disposable directory. The runner builds the root web variant,
+picks its own loopback ports and stops its servers afterwards; do not run
+another build against the same `.next` directory at the same time. An HTTP
+fixture serves the API and fails the suite on an unknown request, so these
+tests cover the browser and its API calls, not the control plane, database or
+hosts.
 
-The tests use real page navigation, browser offline mode, and failed JavaScript
-chunk downloads. A separate HTTP fixture supplies explicit API responses and
-delays or truncates responses after recording a creation. Unknown API requests
-fail the suite. This covers browser recovery and client/API interactions; it
-does not exercise the Python control plane, database, authentication provider,
-or sandbox hosts. Those still need their integration and staging checks.
+A test whose failed attempt saw `net::ERR_NETWORK_CHANGED` runs once more and
+is reported as flaky; shared CI runners change addresses as other jobs start
+containers. Any other failure fails at once (`apps/frontend/e2e/network-change.ts`).
+Failures keep screenshots and traces in `apps/frontend/test-results/` and an
+HTML report in `apps/frontend/playwright-report/`. After a successful build,
+`CLOUD_AGENT_E2E_SKIP_BUILD=1 npm run test:browser` reruns the specs without
+rebuilding; rebuild after app changes.
 
-Chromium aborts requests still waiting for a connection with
-`net::ERR_NETWORK_CHANGED` whenever the host's network addresses change, which
-happens on shared CI runners when other jobs start or stop containers. A test
-whose failed attempt saw that error runs once more and is reported as flaky. The
-retry after any other failure fails at once, so that failure still fails the
-suite (`apps/frontend/e2e/network-change.ts`).
+### Run CI locally
 
-Failures retain screenshots and Playwright traces in `apps/frontend/test-results/`
-and an HTML report in `apps/frontend/playwright-report/`; CI uploads both. To
-iterate on fixture/spec changes after a successful root build, use
-`CLOUD_AGENT_E2E_SKIP_BUILD=1 npm run test:browser`. Rebuild after app changes.
+```bash
+make ci
+# Or select a tier:
+make ci-backend
+make ci-database
+make ci-frontend
+```
 
-The `make ci-frontend` target runs the checks above, including browser recovery.
-Hosted CI also
-builds and smoke-tests the web image when image changes are selected. See
-[CONTRIBUTING.md](../../CONTRIBUTING.md#continuous-integration) for the wider CI gate.
+The launcher runs each gate with check-only formatting and linting. Backend and
+database tiers need `uv` and Python 3.12, the frontend tier Node.js 22 and npm,
+and the database tier a running Docker daemon. It syncs with
+`uv sync --locked` and `npm ci`, and fails when `uv.lock` no longer matches
+`pyproject.toml`; run `uv lock` and commit the result.
+`./scripts/ci-local.sh [all|backend|database|frontend]` works from any
+directory, and `all` is the default.
+
+- Backend: Ruff format and lint checks, mypy, and pytest with four workers and
+  `--dist loadfile`, excluding `external` and `dbtest`.
+- Database: a fresh PostgreSQL 15 container on a random loopback port, one
+  database per worker, removed on exit. It fails on skipped tests or fewer
+  than 100 tests.
+- Frontend: lint, format check, type-check, tests, both build guards and the
+  browser recovery tests.
+
+Logs go to a fresh gitignored `.local-ci/<tier>.XXXXXX` directory, or to
+`CI_LOG_DIR`. External regressions, rolling upgrades, mixed-version protocol
+checks, Gitleaks, release-image builds and Kata qualification run only in
+hosted CI.
+
+### Continuous integration
+
+[CI](../../.github/workflows/ci.yml) classifies the changed paths and runs the
+backend, frontend and image jobs they need. A pull request is compared with its
+base, and a push with the newest `agent-*` release, so a released commit has
+had every change since the previous release checked. `CI Gate` requires the
+classifier to succeed and every other job to succeed or be skipped.
+
+Secret scanning and the default test tier run for every change; the tier's
+tests also read the documentation, `ENVIRONMENT.md` and the web app's sources.
+Depending on the paths, CI adds Ruff and mypy, the PostgreSQL tier, frontend
+checks, Compose rendering, image builds and smoke tests, and selected real CLI,
+session and MCP flows. Pull-request image jobs build and smoke-test without
+publishing. Real-Kata qualification runs only for trusted `dev` events, after
+review. [Releases](releases.md) cover publication.
+
+A pull request splits the default tier, the PostgreSQL tier and the frontend
+unit tests over two hosted VMs each (`Tests (1/2)` and so on).
+`scripts/ci_shard.py` deals whole test files to the pytest shards; vitest uses
+`--shard`. To run one shard locally:
+
+```bash
+uv run pytest -m "not external and not dbtest" \
+  $(uv run python scripts/ci_shard.py --shard 1/2 -- -m "not external and not dbtest")
+```
+
+Of the 15 real-CLI MCP cases, a pull request runs Kilo's three as separate
+`MCP conformance (kilo, …)` jobs and the other twelve in the sandbox image job;
+trusted events run all 15 there. Pull requests only read the Actions cache.
+After each push to `dev`, the optional `pr-caches.yml` workflow refills the uv,
+npm and sandbox-image layer caches under the `dev` scope; it runs apart from CI
+and never changes CI's result.
+
+#### Runners and forks
+
+Every pull request, from a fork or from a branch here, runs on disposable
+GitHub-hosted VMs (`ubuntu-24.04-arm` for ARM64 artifacts, `ubuntu-24.04`
+otherwise), with a read-only token that checkout does not persist, anonymous
+registry pulls and no secrets. Pushes to `dev` and `main`, authorized manual
+dispatches, publication and synchronization use the self-hosted pools. Each
+publish job builds in a fresh builder under its own `RUNNER_TEMP`. The only
+layers a release reuses are its own registry cache, a
+`buildcache-<artifact>-<ISO week>` tag that only the publish workflow writes,
+so the first release each week builds cold.
+
+A fork can edit workflow files, so the runner expressions checked in here are
+not a security boundary. The boundary is GitHub's runner-group configuration,
+which repository tests cannot set or verify; issue
+[#464](https://github.com/HarvardMadSys/cloud-agent/issues/464) tracks the
+remaining administrator work:
+
+1. Move the persistent pools from the repository into an organization runner
+   group.
+2. Allow that group only the trusted workflow references on `refs/heads/dev`
+   and `refs/heads/main`, including publication and manual synchronization.
+   Deny pull-request merge and head refs and every other workflow file.
+3. Until then, require approval for fork workflows from every external
+   contributor, not only first-time ones.
+4. Verify with an untrusted fork that edits a workflow to request a persistent
+   runner: it must stay ineligible.
+
+If the organization cannot restrict runner groups by workflow reference,
+remove the persistent runners from the repository's eligible groups and run
+trusted CI and publication in a separate restricted repository, or replace them
+with credential-free single-job disposable runners. Fork approval alone is not
+enough: approving a test run must never grant access to publication's hosts or
+credentials.
 
 ## Changing an API
 
-`apps/backend/openapi.json` records the API this service
-publishes, and the web client's contract tests check its requests against it.
-An intentional API change requires a reviewed snapshot update in the same PR.
-
-Regenerate the control-plane snapshot from the repository root:
+`apps/backend/openapi.json` is the committed snapshot of the API this service
+serves. The web client's types and contract tests are checked against it, so a
+route or schema change shows up in review as a change to this file. After an
+intentional change, regenerate it from the repository root and run the surface
+tests:
 
 ```bash
 uv run python - <<'PY'
@@ -377,29 +332,31 @@ PY
 uv run pytest -q tests/unit/test_api_surface_contract.py
 ```
 
-Review the generated diff and explain any compatibility implications. The
-surface tests also reject duplicate registrations and overlaps between the
-agent surface routers. A snapshot update records a change; the behavioral tests
-and review establish whether it is compatible. The
-[contract guide](api-contracts.md) has the one-line regeneration
-command.
+Review the diff and explain its compatibility implications in the pull
+request. The surface tests also reject duplicate registrations and overlapping
+agent surface routers. The snapshot records a change; the behavioral tests and
+review decide whether it is compatible.
+
+The shared protocols in `apps/backend/cloud_agent_shared/` are a separate
+contract between the control plane and hosts. When you change them, review the
+protocol versions, capabilities and runtime pins together.
 
 ## Packaging and documentation
 
-When adding or moving a package, review package discovery in `pyproject.toml`,
-mypy and linter roots, Docker `COPY` paths, and the path classifier in
-`.github/workflows/ci.yml`. Verify the built images contain their dependencies;
-checkout imports alone cannot establish that. CI builds and starts selected
-images, and its classifier tests derive shared package paths from the
-Dockerfiles.
+When you add or move a package, review package discovery in `pyproject.toml`,
+the mypy and linter roots, Docker `COPY` paths, and the path classifier in
+`.github/workflows/ci.yml`. Checkout imports cannot show that a built image has
+its dependencies; CI builds and starts selected images, and its classifier
+tests derive shared package paths from the Dockerfiles.
 
-Schema changes use explicit additive Alembic revisions. The current chain
-starts at `apps/backend/migrations/versions/0001_schema_baseline.py`; keep schema creation out
-of service startup. There is no SQLAlchemy model metadata for autogeneration.
-A database from before the independent-accounts release is archived, not
-upgraded; see [the cutover](upgrade-notes.md#independent-accounts-cutover).
+Schema changes are explicit additive Alembic revisions on the chain that starts
+at `apps/backend/migrations/versions/0001_schema_baseline.py`
+([why it starts there](../../AGENTS.md#2-repo-map)). Service startup never
+creates or alters the schema, and there is no SQLAlchemy model metadata to
+autogenerate from. A database from before the independent-accounts release is
+archived, not upgraded ([the cutover](upgrade-notes.md#independent-accounts-cutover)).
 
-Update the guide that owns any changed configuration, command, or behavior:
+Update the guide that owns a changed configuration, command or behavior:
 
 | Topic | Document |
 |---|---|
@@ -409,18 +366,16 @@ Update the guide that owns any changed configuration, command, or behavior:
 | Local development stack | [Local-stack guide](../../deploy/local/README.md) |
 | Release artifacts and validation | [Release guide](../../deploy/release/README.md) |
 
-These guides form the developer documentation site, built with Sphinx and MyST
-from `docs/developer/`. Add a new guide there and list it in a table of contents
-in `docs/developer/index.md`. A root-level guide such as `ENVIRONMENT.md` is
-shown through a one-line `{include}` page registered in `INCLUDED_PAGES` in
-`docs/developer/conf.py`. Links to other repository files may stay relative:
-the build points them at GitHub, and fails for a path or heading that does not
-exist. Run `make docs-verify` after changing any page; CI's Docs Build job runs
-the same target. The site is also published in Simplified Chinese, so an
-English edit needs its translation updated too; see
-[translating the docs](translations.md).
+This site is built with Sphinx and MyST from `docs/developer/`. List a new page
+in a table of contents in `docs/developer/index.md`. A root guide such as
+`ENVIRONMENT.md` appears through a one-line `{include}` page registered in
+`INCLUDED_PAGES` in `docs/developer/conf.py`. Links to other repository files
+may stay relative: the build points them at GitHub, and fails on a missing
+path, or on a missing heading in a page of this site. Run `make docs-verify`
+after changing a page; CI's Docs Build job runs the same target. The site is
+also published in Simplified Chinese, so an English edit needs its translation
+updated ([Translating the docs](translations.md)).
 
-Designs, completed migration checklists, and acceptance records under
-[`docs/agents/`](../agents/) document their own baseline. Preserve that history
-and update current-use guides when the
-implementation changes.
+Design records go in [`docs/agents/specs/`](../agents/specs/) under the rules in
+[AGENTS.md](../../AGENTS.md#4-workflow). When the implementation changes,
+update the maintained guide.

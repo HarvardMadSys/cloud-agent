@@ -1,6 +1,6 @@
 # HybridInference Cloud Agent
 
-[![CI](https://github.com/HarvardMadSys/hybridInference-cloud-agent/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/HarvardMadSys/hybridInference-cloud-agent/actions/workflows/ci.yml?query=branch%3Adev)
+[![CI](https://github.com/HarvardMadSys/cloud-agent/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/HarvardMadSys/cloud-agent/actions/workflows/ci.yml?query=branch%3Adev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.12 | 3.13](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue.svg)
 
@@ -12,11 +12,12 @@ sandboxes.
 Users give tasks from a web interface. Enrolled hosts run Claude Code, Codex,
 pi, OpenCode, or Kilo against the repository, each in its own native session
 inside a sandbox that survives between turns. The control plane schedules the
-work and streams it to the browser; when asked, the agent opens a pull request
+work and streams it to the browser. When asked, the agent opens a pull request
 as its owner.
-Accounts are Cloud Agent's own, admitted through a waiting list, and every task
-runs on a model connection its owner adds with their own provider key (for
-example a FreeInference key).
+
+Accounts are Cloud Agent's own, admitted through a waiting list. Every task
+runs on a model connection: one its owner adds with their own provider key, or
+one the deployment provides.
 
 <!-- TODO: add a screenshot of a chat with its workspace pane. -->
 
@@ -123,17 +124,19 @@ member to the same group. See
 [native conversation recall](docs/developer/context-recall.md) for the context
 states and their limits.
 
-Cloud Agent keeps its own accounts and admission; the owner's provider keeps
+Cloud Agent keeps its own accounts and admission. The owner's provider keeps
 the API key's quota and bill, and there is no per-task dollar budget. A
 deployment may also provide models of its own: an administrator saves a
-provider's endpoint and key once, every admitted owner runs on the models that
-key lists with no setup, within the key's own budget at the provider, and that
-key stays in the control plane. The Usage
-pages show the tokens agents reported, not a provider bill. A member sandbox
-holds the owner's provider key for the turn it runs (or, on a provided model,
-a placeholder only the model relay accepts), a scoped MCP token, and,
-when the GitHub App is configured, an hour-long token for the job's repository;
-it never holds a platform credential. Read [SECURITY.md](SECURITY.md) and the
+provider's endpoint and key once, and every admitted owner runs on the models
+that key lists, with no setup, within the key's own budget at the provider.
+That key stays in the control plane. The Usage pages show the tokens agents
+reported, not a provider bill.
+
+A member sandbox holds the owner's provider key for the turn it runs (on a
+provided model, a placeholder only the model relay accepts), a scoped MCP
+token, and, when the GitHub relay is configured, a placeholder only the GitHub
+relay accepts. It never holds a platform credential or a GitHub token. Read
+[SECURITY.md](SECURITY.md) and the
 [sandbox network runbook](docs/developer/operations.md#the-sandbox-network)
 before deploying for untrusted users.
 
@@ -147,40 +150,22 @@ before deploying for untrusted users.
 | Look up a configuration value | [ENVIRONMENT.md](ENVIRONMENT.md) |
 | Build and deploy a release | [Release guide](deploy/release/README.md) |
 | Learn the rules and APIs behind a web app feature | [The owner web app](docs/developer/web-app.md) |
-| Browse everything, including designs and reviews | [Documentation index](docs/README.md) |
+| Browse every guide and the design records | [Documentation index](docs/README.md) |
 
 Read the [developer documentation online](https://doc.agent.hybridinference.org/), also in
 [Simplified Chinese](https://doc.agent.hybridinference.org/zh_CN/).
 The [sources](docs/developer/index.md) live in this repository; `make docs` builds
 the site locally.
 
-## Repository layout
-
-```text
-apps/backend/cloud_agent/         FastAPI control plane and PostgreSQL storage
-apps/backend/cloud_agent_host/    Host runner, sandboxes, sandbox manager, CLI adapters
-apps/backend/cloud_agent_shared/  Shared protocols, pins, errors, Git and archive helpers
-apps/backend/migrations/          Alembic revisions for the Agent database
-apps/backend/openapi.json         The committed snapshot of this service's OpenAPI
-apps/frontend/                    Next.js user interface and admin dashboard
-deploy/                           Control-plane, host, sandbox, local, and release recipes
-tests/                            Unit, API, integration, and external verification
-docs/                             Developer guides, user notes, and agent records
-```
-
 ## Contributing
 
-Read the [contribution workflow](CONTRIBUTING.md) and the
-[repository rules](AGENTS.md). Branch from `dev` as `<user>/<scope>/<name>` and
-target pull requests at `dev`. Run `make check`, plus the frontend or database
-checks your change needs, before opening one.
-
-Report bugs and ask questions in
-[GitHub issues](https://github.com/HarvardMadSys/hybridInference-cloud-agent/issues).
-Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[repository rules](AGENTS.md) before opening a pull request. Report bugs and
+ask questions in [GitHub issues](https://github.com/HarvardMadSys/cloud-agent/issues);
+report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 
-[MIT](LICENSE). Cloud Agent was extracted from HybridInference in August 2026
-and keeps that project's copyright and license; [the repository extraction record](docs/agents/reviews/2026-08-09-repository-extraction-record.md)
-records the split.
+[MIT](LICENSE). Cloud Agent was split out of HybridInference in August 2026
+and keeps that project's copyright and license. Changing the license needs the
+copyright holder's agreement.

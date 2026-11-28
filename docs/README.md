@@ -1,41 +1,26 @@
 # Documentation
 
-Start with the [project README](../README.md) for a product overview and local
-quickstart. `docs/` has two folders:
+Start with the [project README](../README.md) for an overview and the local
+quick start.
 
 | Folder | What it holds |
 |---|---|
-| [developer/](developer/) | Maintained guides for setup, configuration, operations, and contributing. Start with the [developer guide](developer/development.md), the [code structure](developer/code-structure.md), and the [operations runbook](developer/operations.md). These describe current behavior and are updated with the code. |
-| [agents/](agents/) | Engineering records written by and for coding agents: [specs/](agents/specs/) and [reviews/](agents/reviews/). |
+| [developer/](developer/) | The maintained guides, published as the developer site. Start with the [developer guide](developer/development.md), the [code structure](developer/code-structure.md) and the [operations runbook](developer/operations.md). They describe current behavior and change with the code. |
+| [agents/specs/](agents/specs/) | Design records: accepted designs that a maintained guide cites, and plans still being carried out. A record describes its design as of its date; the guides and the code describe what runs. |
 
+A record is deleted once its work ships or is superseded and nothing maintained
+cites it; git history keeps it. Verification and review evidence belongs in
+pull requests. [AGENTS.md](../AGENTS.md#4-workflow) has the rules.
 Repository-wide references stay at the root: [AGENTS.md](../AGENTS.md),
 [CONTRIBUTING.md](../CONTRIBUTING.md), [ENVIRONMENT.md](../ENVIRONMENT.md) and
-[SECURITY.md](../SECURITY.md). The completed split's
-[extraction record](agents/reviews/2026-08-09-repository-extraction-record.md)
-is with the dated reviews.
+[SECURITY.md](../SECURITY.md).
 
-## Reading the records
+Design records to read first:
 
-| Directory | How to read it |
-|---|---|
-| `agents/specs/` | Designs and implementation plans as they stood on their date. Later work may have changed a design; the maintained guides and current source describe what is implemented. A plan's commands and checkboxes, such as those in the repository [cutover](agents/specs/cutover.md) and [gateway removal](agents/specs/gateway-removal.md) checklists, describe that work, not the current procedure. |
-| `agents/reviews/` | Acceptance runs, conformance audits, and reviews of a stated revision and environment. Their findings apply to what they reviewed; they do not certify a current deployment. |
-
-Historical filenames and line numbers can outlive the code they describe.
-Links to surviving files are maintained for navigation; references to removed
-files remain as text.
-
-Useful entry points:
-
-- [Reusable cloud environments](agents/specs/2026-10-12-repository-environment-design.zh-CN.md)
 - [Native sessions, Fork, and shared workspaces](agents/specs/2026-08-31-native-session-fork-shared-workspace-design.md)
 - [Sandbox security model](agents/specs/2026-09-01-agent-sandbox-security-model.zh.md)
-- [Public egress and accepted inference-grant replay risk](agents/specs/2026-09-23-agent-public-egress-design.zh-CN.md)
+- [Public egress and the accepted owner-key exposure](agents/specs/2026-09-23-agent-public-egress-design.zh-CN.md)
+- [Reusable cloud environments](agents/specs/2026-10-12-repository-environment-design.zh-CN.md)
+- [Teams and team environments](agents/specs/2026-10-15-team-shared-workspace-design.zh-CN.md)
 - [Compute resource lifecycle](agents/specs/2026-10-04-compute-resource-lifecycle-design.zh-CN.md)
 - [CloudLab node rotation](agents/specs/2026-10-10-cloudlab-node-rotation-design.zh-CN.md)
-- [Teams and team environments](agents/specs/2026-10-15-team-shared-workspace-design.zh-CN.md)
-- [Per-user MCP conformance audit](agents/reviews/2026-09-11-per-user-mcp-v1-conformance.md)
-
-When a change affects behavior, configuration, or commands, update the
-maintained guide in the same change. [AGENTS.md](../AGENTS.md#4-workflow) says
-where new records go.

@@ -5,16 +5,15 @@ sandbox containers. Users work from a web interface, while enrolled hosts run
 Claude Code, Codex, pi, OpenCode, or Kilo. The control plane coordinates jobs
 and sessions, and relays the agents' own pushes and pull requests to GitHub.
 Accounts are its own: people sign up, apply through a waiting list and are
-approved by an administrator. Every task runs on a model connection: either one
-its owner adds with their own provider key (such as a FreeInference key), or
-one the deployment provides through its control-plane model relay.
+approved by an administrator. Every task runs on a model connection: one its
+owner adds with their own provider key, or one the deployment provides through
+its control-plane model relay.
 
-This is the documentation for the software itself: running it locally,
-operating a deployment, understanding how it works, and contributing to it. The
-source is at
-[github.com/HarvardMadSys/hybridInference-cloud-agent](https://github.com/HarvardMadSys/hybridInference-cloud-agent),
+This site documents the software: running it locally, operating a
+deployment, how it works, and contributing. The source is at
+[github.com/HarvardMadSys/cloud-agent](https://github.com/HarvardMadSys/cloud-agent),
 under the MIT license; bugs and questions go to its
-[issue tracker](https://github.com/HarvardMadSys/hybridInference-cloud-agent/issues).
+[issue tracker](https://github.com/HarvardMadSys/cloud-agent/issues).
 
 ## Where to start
 
@@ -31,15 +30,15 @@ under the MIT license; bugs and questions go to its
 | Look up a configuration name, default, or owning component | [Configuration reference](configuration.md) |
 | Build release artifacts and deploy them in the required order | [Releases](releases.md) |
 | Understand the sandbox trust model before deploying | [Security](security.md) |
-| See the API this service serves, as its committed contract | [API contract](api-contracts.md) |
+| See the API this service serves, as its committed contract | [Changing an API](development.md#changing-an-api) |
 
 ## Scope of this site
 
 These pages document the software, not any one installation of it. How end
 users work with a particular deployment, which agents and models it offers,
-and how to get an account there are the operator's to publish. Dated designs,
-plans, and acceptance records stay in the repository as engineering history and
-are linked from here where they explain a decision.
+and how to get an account there are the operator's to publish. Design records
+in the repository are linked from these pages where they explain the current
+design.
 
 ```{toctree}
 :caption: Getting started
@@ -59,7 +58,6 @@ translations
 context-recall
 agent-access-policy
 local-accounts
-api-contracts
 security
 web-app
 ```
