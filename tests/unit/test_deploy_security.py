@@ -51,11 +51,13 @@ def test_ci_runner_routing_keeps_local_pools_and_isolates_every_pull_request() -
         "mcp": "matrix.artifact.runner",
         "compose": ["self-hosted", "Linux", "ARM64", "image-verify-arm64"],
         "kata": ["self-hosted", "Linux", "X64", "image-verify-x64"],
+        # The classifier gates every image job, so it runs hosted on every event.
+        "changes": ["ubuntu-24.04"],
     }
     assert special_runners.keys() <= jobs.keys()
     for name, job in jobs.items():
         expected = special_runners.get(name, ["self-hosted", "Linux", "ci-general"])
-        if name == "kata":
+        if name in {"kata", "changes"}:
             assert job["runs-on"] == expected, f"{name} left its pool"
             continue
         routing = job["runs-on"]
