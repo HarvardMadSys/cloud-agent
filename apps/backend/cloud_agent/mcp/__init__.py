@@ -2,8 +2,8 @@
 
 This package supersedes the provider-whitelisted shape that
 ``cloud_agent/mcp_catalogue.py`` and ``cloud_agent/mcp_registry.py`` started
-with. The design it implements is
-``docs/agents/specs/2026-09-11-per-user-mcp-v1-design.zh.md``: a person adds a
+with. The design it implements (for operators, "MCP servers" in
+``docs/developer/operations.md``): a person adds a
 standard MCP server -- remote URL, imported configuration or a stdio launch
 spec -- the platform discovers what it offers, and any coding agent on the
 platform can use the parts that person authorized for that session.

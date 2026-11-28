@@ -14,7 +14,8 @@ a worker's name), and the database derives the kind from it in a generated
 column (migration ``0114_admin_audit_attribution``), so a row a previous
 release writes is classified the same way as one this release writes.
 
-The design record is ``docs/agents/specs/2026-11-05-admin-audit-redesign.zh-CN.md``.
+Operators read the trail as "Reading a task's recorded events" in
+``docs/developer/operations.md`` describes.
 """
 
 from __future__ import annotations
