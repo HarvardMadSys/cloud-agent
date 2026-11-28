@@ -117,7 +117,7 @@ describe('provider-aware application settings', () => {
     await renderWith(values);
     const expected = [...ALWAYS, ...shown];
     expect(shownKeys().sort()).toEqual(expected.sort());
-    expect(categoryCount('Identity & access')).toBe(String(expected.length));
+    expect(categoryCount('Accounts')).toBe(String(expected.length));
     const credentials = screen.queryByRole('heading', { name: 'Tencent Cloud credentials' });
     if (shown.includes(CREDENTIALS[0])) expect(credentials).toBeVisible();
     else expect(credentials).not.toBeInTheDocument();
@@ -136,7 +136,7 @@ describe('provider-aware application settings', () => {
     expect(field('accounts.tencent_ses_from_email')).toBeInTheDocument();
     // The shared credentials appear for the provider being chosen, before it is saved.
     expect(screen.getByRole('heading', { name: 'Tencent Cloud credentials' })).toBeVisible();
-    expect(categoryCount('Identity & access')).toBe(String(ALWAYS.length + 5));
+    expect(categoryCount('Accounts')).toBe(String(ALWAYS.length + 5));
     // The hidden SMTP draft is neither counted nor submitted.
     expect(within(group('Account email')).getByText('1 unsaved change')).toBeInTheDocument();
 
@@ -308,7 +308,7 @@ describe('provider-aware application settings', () => {
   it('hides phone sign-in details again when the switch is turned off in the editor', async () => {
     await renderWith({ 'accounts.sms_enabled': true, 'accounts.sms_provider': 'tencent' });
     edit('Phone sign-in');
-    fireEvent.change(field('accounts.sms_code_ttl_s')!, { target: { value: '120' } });
+    fireEvent.change(field('accounts.tencent_sms_template_id')!, { target: { value: '2100' } });
     chooseOption(field('accounts.sms_enabled')!, 'Disabled');
     expect(shownKeys().filter((key) => key.includes('sms'))).toEqual(['accounts.sms_enabled']);
     expect(screen.queryByRole('heading', { name: 'Tencent Cloud credentials' })).toBeNull();

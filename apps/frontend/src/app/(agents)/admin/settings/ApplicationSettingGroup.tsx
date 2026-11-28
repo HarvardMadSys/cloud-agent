@@ -19,6 +19,7 @@ import type {
   AgentAdminSettings,
 } from '@/lib/api/adminSettings';
 
+import { useReportPending } from '../SettingsSection';
 import type { ApplicationSettingsState } from './ApplicationSettings';
 import { namedOptions, parseValue, valueLabel } from './settingValues';
 
@@ -337,10 +338,13 @@ export function ApplicationSettingGroup({
   title,
   fields,
   settings,
+  onPendingChange,
 }: {
   title: string;
   fields: AdminSettingDefinition[];
   settings: ApplicationSettingsState;
+  /** Told while the editor holds an unsaved change or an error, which must stay in view. */
+  onPendingChange?: (title: string, pending: boolean) => void;
 }) {
   const { snapshot, saved, busy, save, isSettingVisible, setGoverningDraft, clearGoverningDrafts } =
     settings;
@@ -363,6 +367,11 @@ export function ApplicationSettingGroup({
   const changed = shown.filter(
     (field) =>
       !field.read_only && drafts[field.key] !== undefined && drafts[field.key] !== incoming(field),
+  );
+  useReportPending(
+    title,
+    editing && (changed.length > 0 || shown.some((field) => errors[field.key])),
+    onPendingChange,
   );
 
   // A save can also update a related field in another group (for example an S3 URI's prefix).

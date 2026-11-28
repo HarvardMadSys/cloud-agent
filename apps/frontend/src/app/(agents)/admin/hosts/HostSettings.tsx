@@ -16,7 +16,13 @@ import { Select } from '@/components/ui/Select';
 
 import type { AgentRunnerHost, HostSettingDefinition, HostSettingValues } from '@/lib/api/admin';
 
-import { SettingsSection } from '../SettingsSection';
+import {
+  AdvancedSettings,
+  SettingsSection,
+  usePendingEditors,
+  useReportPending,
+  type ReportPending,
+} from '../SettingsSection';
 
 import {
   amountIn,
@@ -47,57 +53,86 @@ const UNIT_CLASS =
 const BUTTON_CLASS = 'ui-button ui-button-primary min-h-11 min-w-16';
 const CLEAR_CLASS = 'ui-button ui-button-ghost min-h-11 text-xs';
 
-interface SettingGroup {
-  title: string;
-  definitions: HostSettingDefinition[];
+/** The group a sandbox setting is listed in. */
+function settingGroup(key: string): string {
+  if (['sandbox_cpu_millicores', 'sandbox_memory_mib', 'sandbox_disk_mib'].includes(key)) {
+    return 'Container resources';
+  }
+  if (
+    [
+      'agent_timeout_s',
+      'source_import_max_mib',
+      'chat_idle_timeout_s',
+      'shared_resident_capacity',
+    ].includes(key)
+  ) {
+    return 'Session limits';
+  }
+  if (key.startsWith('terminal_')) return 'Terminal limits';
+  if (key.startsWith('workspace_')) return 'Workspace limits';
+  if (key === 'storage_min_available_mib') return 'Storage admission';
+  if (key === 'lease_ttl_s') return 'Leases';
+  // New definitions stay visible until their group has been decided.
+  return 'Other settings';
+}
+
+/**
+ * The sections both pages list, in order. The Settings page collapses the
+ * advanced ones, which most deployments keep at their defaults, under one
+ * Advanced section; a server's own panel shows them all.
+ */
+const SECTIONS = [
+  {
+    title: 'Session resources',
+    description: 'Container resources and limits for running sessions.',
+    groups: ['Container resources', 'Session limits', 'Other settings'],
+    advanced: false,
+  },
+  {
+    title: 'Terminal and storage limits',
+    description: 'Terminal, workspace and storage admission limits.',
+    groups: ['Terminal limits', 'Workspace limits', 'Storage admission'],
+    advanced: true,
+  },
+  {
+    title: 'Turn handoff',
+    description:
+      "How long a claimed turn waits for its server's renewal before another server may take it.",
+    groups: ['Leases'],
+    advanced: true,
+  },
+];
+
+/** Whether the Settings page lists a sandbox setting under its collapsed Advanced section. */
+export function isAdvancedHostSetting(key: string): boolean {
+  const group = settingGroup(key);
+  return SECTIONS.some((section) => section.advanced && section.groups.includes(group));
 }
 
 /** Keep the same organization for defaults and individual server overrides. */
 function organizeSettings(definitions: HostSettingDefinition[]) {
-  const resources: SettingGroup = { title: 'Container resources', definitions: [] };
-  const sessions: SettingGroup = { title: 'Session limits', definitions: [] };
-  const other: SettingGroup = { title: 'Other settings', definitions: [] };
-  const terminals: SettingGroup = { title: 'Terminal limits', definitions: [] };
-  const workspace: SettingGroup = { title: 'Workspace limits', definitions: [] };
-  const storage: SettingGroup = { title: 'Storage admission', definitions: [] };
+  return SECTIONS.map(({ groups, ...section }) => ({
+    ...section,
+    groups: groups
+      .map((title) => ({
+        title,
+        definitions: definitions.filter((definition) => settingGroup(definition.key) === title),
+      }))
+      .filter((group) => group.definitions.length > 0),
+  })).filter((section) => section.groups.length > 0);
+}
 
-  for (const definition of definitions) {
-    const key = definition.key;
-    if (['sandbox_cpu_millicores', 'sandbox_memory_mib', 'sandbox_disk_mib'].includes(key)) {
-      resources.definitions.push(definition);
-    } else if (
-      [
-        'agent_timeout_s',
-        'source_import_max_mib',
-        'chat_idle_timeout_s',
-        'shared_resident_capacity',
-      ].includes(key)
-    ) {
-      sessions.definitions.push(definition);
-    } else if (key.startsWith('terminal_')) {
-      terminals.definitions.push(definition);
-    } else if (key.startsWith('workspace_')) {
-      workspace.definitions.push(definition);
-    } else if (key === 'storage_min_available_mib') {
-      storage.definitions.push(definition);
-    } else {
-      // New definitions stay visible until their group has been decided.
-      other.definitions.push(definition);
-    }
-  }
+type SettingsSectionOf = ReturnType<typeof organizeSettings>[number];
 
-  return [
-    {
-      title: 'Session resources',
-      description: 'Container resources and limits for running sessions.',
-      groups: [resources, sessions, other].filter((group) => group.definitions.length > 0),
-    },
-    {
-      title: 'Terminal and storage limits',
-      description: 'Terminal, workspace and storage admission limits.',
-      groups: [terminals, workspace, storage].filter((group) => group.definitions.length > 0),
-    },
-  ].filter((section) => section.groups.length > 0);
+/** What saving a lower value than the one in use would cut short, if anything. */
+function shorteningNote(
+  definition: HostSettingDefinition,
+  typed: ReturnType<typeof parseSettingInput> | null,
+  current: number | null,
+): string | null {
+  return typed !== null && 'value' in typed && current !== null && typed.value < current
+    ? shorteningEffect(definition, typed.value)
+    : null;
 }
 
 /**
@@ -118,6 +153,7 @@ function SettingForm({
   disabled = false,
   targetId,
   onChange,
+  onPendingChange,
 }: {
   definition: HostSettingDefinition;
   saved: number | null;
@@ -128,6 +164,8 @@ function SettingForm({
   disabled?: boolean;
   targetId?: string;
   onChange: OnChange;
+  /** Told while the field holds an unsaved amount or an error, which must stay in view. */
+  onPendingChange?: ReportPending;
 }) {
   // What this level uses now: its own value, else the one it inherits.
   const current = saved ?? placeholder;
@@ -139,10 +177,8 @@ function SettingForm({
   const [error, setError] = useState<string | null>(null);
   const dirty = amount !== startAmount || (amount !== '' && unit !== startUnit);
   const typed = amount.trim() === '' ? null : parseSettingInput(definition, amount, unit);
-  const effect =
-    typed !== null && 'value' in typed && current !== null && typed.value < current
-      ? shorteningEffect(definition, typed.value)
-      : null;
+  const effect = shorteningNote(definition, typed, current);
+  useReportPending(definition.key, dirty || error !== null, onPendingChange);
   const errorId = `setting-error-${label.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
   return (
     <div>
@@ -248,70 +284,114 @@ export function GlobalSettingsCard({
   busy: boolean;
   onChange: OnChange;
 }) {
-  const hosts = servers.map(({ host }) => host);
-  const names = new Map(servers.map(({ name, host }) => [host.host, name] as const));
-  const nameOf = (host: AgentRunnerHost) => names.get(host.host) ?? host.host;
+  const [advancedPending, reportPending] = usePendingEditors();
+  const sections = organizeSettings(definitions);
+  const advanced = sections.filter((section) => section.advanced);
+  const shared = { values, servers, busy, onChange };
   return (
     <div className="ui-card mt-6 p-4 sm:p-6">
       <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
       <p className="mt-2 text-sm leading-6 text-muted">
         Defaults for every server. Individual servers can override these values.
       </p>
-      {organizeSettings(definitions).map((section) => (
-        <SettingsSection
-          key={section.title}
-          title={section.title}
-          description={section.description}
+      {sections
+        .filter((section) => !section.advanced)
+        .map((section) => (
+          <GlobalSettingsSection key={section.title} section={section} {...shared} />
+        ))}
+      {advanced.length > 0 && (
+        <AdvancedSettings
+          count={
+            advanced.flatMap(({ groups }) => groups.flatMap((group) => group.definitions)).length
+          }
+          description="Terminal, workspace and storage limits and the turn lease, which most deployments keep at their defaults."
+          pending={advancedPending}
+          className="mt-6"
         >
-          {section.groups.map((group) => (
-            <div key={group.title} className="mt-5 first:mt-0">
-              <h4 className="text-sm font-semibold text-foreground">{group.title}</h4>
-              {group.definitions.map((definition, index) => {
-                const saved = values[definition.key] ?? null;
-                return (
-                  <div
-                    key={definition.key}
-                    className={`grid gap-4 py-5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start xl:gap-8 ${
-                      index > 0 ? 'border-t border-border' : ''
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-foreground">
-                        {definition.label}
-                        {saved !== null && (
-                          <span className="ml-2 inline-flex rounded-md bg-surface-muted px-2 py-0.5 text-xs font-normal tabular-nums text-muted">
-                            {formatSettingValue(definition, saved)}
-                          </span>
-                        )}
-                      </p>
-                      <p className="mt-1.5 text-sm leading-6 text-muted">
-                        {definition.description}
-                      </p>
-                      <p className="mt-2 text-xs leading-5 text-muted">
-                        {rolloutText(definition, values, hosts, nameOf)}
-                      </p>
-                    </div>
-                    <div className="min-w-0">
-                      <SettingForm
-                        key={`${definition.key}:${saved ?? 'unset'}`}
-                        targetId={`host-setting-${definition.key}`}
-                        definition={definition}
-                        saved={saved}
-                        placeholder={definition.default}
-                        label={`${definition.label} for all servers`}
-                        clearLabel="Use deployment default"
-                        busy={busy}
-                        onChange={onChange}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          {advanced.map((section) => (
+            <GlobalSettingsSection
+              key={section.title}
+              section={section}
+              {...shared}
+              onPendingChange={reportPending}
+              className="mt-6 first:mt-0"
+            />
           ))}
-        </SettingsSection>
-      ))}
+        </AdvancedSettings>
+      )}
     </div>
+  );
+}
+
+/** One titled section of the values set for every server. */
+function GlobalSettingsSection({
+  section,
+  values,
+  servers,
+  busy,
+  onChange,
+  onPendingChange,
+  className,
+}: {
+  section: SettingsSectionOf;
+  values: HostSettingValues;
+  servers: NamedHost[];
+  busy: boolean;
+  onChange: OnChange;
+  onPendingChange?: ReportPending;
+  className?: string;
+}) {
+  const hosts = servers.map(({ host }) => host);
+  const names = new Map(servers.map(({ name, host }) => [host.host, name] as const));
+  const nameOf = (host: AgentRunnerHost) => names.get(host.host) ?? host.host;
+  return (
+    <SettingsSection title={section.title} description={section.description} className={className}>
+      {section.groups.map((group) => (
+        <div key={group.title} className="mt-5 first:mt-0">
+          <h4 className="text-sm font-semibold text-foreground">{group.title}</h4>
+          {group.definitions.map((definition, index) => {
+            const saved = values[definition.key] ?? null;
+            return (
+              <div
+                key={definition.key}
+                className={`grid gap-4 py-5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start xl:gap-8 ${
+                  index > 0 ? 'border-t border-border' : ''
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground">
+                    {definition.label}
+                    {saved !== null && (
+                      <span className="ml-2 inline-flex rounded-md bg-surface-muted px-2 py-0.5 text-xs font-normal tabular-nums text-muted">
+                        {formatSettingValue(definition, saved)}
+                      </span>
+                    )}
+                  </p>
+                  <p className="mt-1.5 text-sm leading-6 text-muted">{definition.description}</p>
+                  <p className="mt-2 text-xs leading-5 text-muted">
+                    {rolloutText(definition, values, hosts, nameOf)}
+                  </p>
+                </div>
+                <div className="min-w-0">
+                  <SettingForm
+                    key={`${definition.key}:${saved ?? 'unset'}`}
+                    targetId={`host-setting-${definition.key}`}
+                    definition={definition}
+                    saved={saved}
+                    placeholder={definition.default}
+                    label={`${definition.label} for all servers`}
+                    clearLabel="Use deployment default"
+                    busy={busy}
+                    onChange={onChange}
+                    onPendingChange={onPendingChange}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </SettingsSection>
   );
 }
 

@@ -35,8 +35,19 @@ const definitions = [
   definition('terminal_buffer_max_events'),
   definition('workspace_command_output_max_mib'),
   definition('storage_min_available_mib'),
+  definition('lease_ttl_s'),
   definition('future_setting'),
 ];
+const ADVANCED = [
+  'terminal_buffer_max_events',
+  'workspace_command_output_max_mib',
+  'storage_min_available_mib',
+  'lease_ttl_s',
+];
+
+function advancedSummary(): HTMLElement {
+  return screen.getByText('Advanced').closest('summary')!;
+}
 
 const terminalLifetime: HostSettingDefinition = {
   ...definition('terminal_hard_ttl_s', 'Terminal max lifetime'),
@@ -75,7 +86,7 @@ const host: AgentRunnerHost = {
 };
 
 describe('sandbox setting organization', () => {
-  it('shows every related setting, including future ones, under visible topic headings', () => {
+  it('shows every related setting under topic headings, with tuning limits under Advanced', () => {
     render(
       <GlobalSettingsCard
         title="Sandbox defaults"
@@ -87,14 +98,45 @@ describe('sandbox setting organization', () => {
       />,
     );
 
+    // Resources, session limits and settings not yet placed, future ones included, stay in view.
+    for (const setting of definitions.filter(({ key }) => !ADVANCED.includes(key))) {
+      const field = screen.getByLabelText(`${setting.label} for all servers`);
+      expect(field).toBeVisible();
+      expect(field.closest('details')).toBeNull();
+    }
+    expect(screen.getByRole('heading', { name: 'Session resources' })).toBeVisible();
+    expect(advancedSummary()).toHaveTextContent('Advanced4 settings');
+    for (const key of ADVANCED) {
+      expect(screen.getByLabelText(`${key} for all servers`)).not.toBeVisible();
+    }
+
+    fireEvent.click(advancedSummary());
     for (const setting of definitions) {
       expect(screen.getByLabelText(`${setting.label} for all servers`)).toBeVisible();
     }
-    expect(screen.getByRole('heading', { name: 'Session resources' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Terminal and storage limits' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Terminal limits' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Workspace limits' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Storage admission' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Turn handoff' })).toBeVisible();
+  });
+
+  it('shows every setting of one server without a collapsed section', () => {
+    render(
+      <ServerSettingsPanel
+        name="runner-a"
+        host={host}
+        definitions={definitions}
+        globalValues={{}}
+        busy={false}
+        onChange={vi.fn()}
+      />,
+    );
+
+    for (const setting of definitions) {
+      expect(screen.getByLabelText(`${setting.label} for runner-a`)).toBeVisible();
+    }
+    expect(screen.getByRole('heading', { name: 'Turn handoff' })).toBeVisible();
     expect(document.querySelector('details')).toBeNull();
   });
 
@@ -127,10 +169,17 @@ describe('sandbox setting organization', () => {
       const { rerender } = render(view(1));
       const label = `Terminal max lifetime for ${scope === 'global' ? 'all servers' : 'runner-a'}`;
 
+      // Every server's terminal limits are tuning, under the Settings page's Advanced section.
+      if (scope === 'global') fireEvent.click(advancedSummary());
       expect(screen.getByLabelText(label)).toBeVisible();
       fireEvent.change(screen.getByLabelText(label), { target: { value: '2' } });
       expect(screen.getByLabelText(`${label} unit`)).toHaveTextContent('h');
       expect(screen.getByText('Open terminals older than 2 h will close.')).toBeVisible();
+      if (scope === 'global') {
+        // An unsaved amount keeps the section open.
+        fireEvent.click(advancedSummary());
+        expect(advancedSummary()).toHaveTextContent('Unsaved changes');
+      }
       rerender(view(2));
 
       const amount = screen.getByLabelText(label);

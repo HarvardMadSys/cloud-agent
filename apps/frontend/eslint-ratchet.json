@@ -124,6 +124,7 @@
     },
     {
       "files": [
+        "src/app/(agents)/admin/hosts/HostSettings.tsx",
         "src/app/(agents)/admin/users/teams/\\[teamId\\]/page.tsx",
         "src/components/features/agents/conversation/conversationTurnNavigation.ts",
         "src/components/features/agents/job-detail/JobTranscript.tsx",
@@ -158,7 +159,6 @@
     },
     {
       "files": [
-        "src/app/(agents)/admin/hosts/HostSettings.tsx",
         "src/components/features/agents/trajectory/TrajectoryInspector.tsx",
         "src/components/features/agents/mcp/McpAddDialog.tsx"
       ],
@@ -223,16 +223,11 @@
     {
       "files": [
         "src/app/(agents)/admin/measurements/page.tsx",
+        "src/app/(agents)/admin/settings/page.tsx",
         "src/components/features/agents/trajectory/agentLiveStatus.ts"
       ],
       "rules": {
         "complexity": ["error", 37]
-      }
-    },
-    {
-      "files": ["src/app/(agents)/admin/settings/page.tsx"],
-      "rules": {
-        "complexity": ["error", 38]
       }
     },
     {

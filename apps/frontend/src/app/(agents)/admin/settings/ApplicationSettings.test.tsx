@@ -426,27 +426,49 @@ describe('application settings', () => {
     const navigation = await screen.findByRole('navigation', {
       name: 'Application setting categories',
     });
+    // Categories follow the order administrators reach for them, not the registry's.
     expect(
       within(navigation)
         .getAllByRole('button')
         .map((button) => button.textContent),
-    ).toEqual(['Identity & access2', 'Source control2', 'Content3', 'Operations3', 'Compute2']);
+    ).toEqual([
+      'General1',
+      'Source control2',
+      'Content3',
+      'Security1',
+      'Operations3',
+      'Sandbox1',
+      'CloudLab1',
+    ]);
     expect(screen.getByRole('heading', { name: 'Sign-in', level: 4 })).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Session security', level: 4 })).toBeVisible();
-    for (const [category, labels] of [
-      ['Identity & access', ['Sign-in authorization URL', 'Require HTTPS session cookies']],
-      ['Source control', ['GitHub App ID', 'Agent commit co-author']],
+    for (const [category, labels, advanced] of [
+      ['General', ['Sign-in authorization URL'], []],
+      ['Security', [], ['Require HTTPS session cookies']],
+      ['Source control', ['GitHub App ID', 'Agent commit co-author'], []],
       [
         'Content',
-        ['Maximum upload file count', 'Maximum selected skills', 'Maximum task title length'],
+        ['Maximum upload file count', 'Maximum selected skills'],
+        ['Maximum task title length'],
       ],
-      ['Operations', ['Alert webhook URL', 'Goal stall timeout']],
-      ['Compute', ['CloudLab API URL', 'New session isolation policy']],
+      ['Operations', ['Alert webhook URL', 'Private pgAdmin URL'], ['Goal stall timeout']],
+      ['Sandbox', ['New session isolation policy'], []],
+      ['CloudLab', ['CloudLab API URL'], []],
     ] as const) {
       selectCategory(category);
-      for (const label of labels) expect(screen.getByLabelText(label)).toBeVisible();
+      const region = screen.getByRole('region', { name: category });
+      for (const label of labels) {
+        expect(within(region).getByLabelText(label)).toBeVisible();
+      }
+      // Tuning is in the same category, collapsed under Advanced until opened.
+      for (const label of advanced) {
+        expect(within(region).getByLabelText(label)).not.toBeVisible();
+        fireEvent.click(within(region).getByText('Advanced'));
+        expect(within(region).getByLabelText(label)).toBeVisible();
+      }
     }
-    expect(screen.getByLabelText('Private pgAdmin URL')).toBeInTheDocument();
+    // An opened section stays open while its category is away.
+    selectCategory('Security');
+    expect(screen.getByRole('heading', { name: 'Session security', level: 4 })).toBeVisible();
   });
 
   it('shows related fields together and preserves drafts across category changes', async () => {
@@ -455,36 +477,40 @@ describe('application settings', () => {
     await loadedField('Application name');
     selectCategory('Source control');
     const appId = editField('GitHub App ID');
-    const timeout = editField('GitHub request timeout');
     expect(appId).toBeVisible();
     expect(editField('Agent commit co-author')).toBeVisible();
+    // The request timeout is tuning, in the same category under Advanced.
+    const region = screen.getByRole('region', { name: 'Source control' });
+    fireEvent.click(within(region).getByText('Advanced'));
+    const timeout = editField('GitHub request timeout');
     expect(timeout).toBeVisible();
     fireEvent.change(appId, { target: { value: '456' } });
     fireEvent.change(timeout, { target: { value: '180' } });
-    selectCategory('Appearance');
+    selectCategory('General');
     selectCategory('Source control');
     expect(editField('GitHub request timeout')).toBe(timeout);
+    expect(timeout).toBeVisible();
     expect(timeout).toHaveValue(180);
     expect(appId).toHaveValue('456');
     expect(write).not.toHaveBeenCalled();
   });
 
-  it('focuses an initially linked field from a merged original category without a disclosure', async () => {
+  it('opens Advanced to focus an initially linked tuning field in its category', async () => {
     read.mockResolvedValue(organizedSnapshot());
     window.history.replaceState(null, '', '#application-setting-trust_proxy_headers');
     render(<ApplicationSettings />);
     const input = await screen.findByLabelText('Trust forwarded client addresses');
     await waitFor(() => expect(input).toHaveFocus());
     expect(input).toBeVisible();
-    expect(input.closest('details')).toBeNull();
-    expect(screen.getByRole('region', { name: 'Identity & access' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Identity & access' })).toHaveAttribute(
+    expect(input.closest('details')).toHaveAttribute('open');
+    expect(screen.getByRole('region', { name: 'Security' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Security' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
   });
 
-  it('focuses a missing setup field in its merged category without a disclosure', async () => {
+  it('opens Advanced to focus a missing setup field in its category', async () => {
     read.mockResolvedValue({
       ...organizedSnapshot(),
       setup: {
@@ -506,12 +532,15 @@ describe('application settings', () => {
     const link = await screen.findByRole('link', { name: 'Trust forwarded client addresses' });
     const input = screen.getByLabelText('Trust forwarded client addresses');
     expect(input).not.toBeVisible();
+    expect(input.closest('details')).not.toHaveAttribute('open');
     fireEvent.click(link);
     await waitFor(() => expect(input).toHaveFocus());
     expect(input).toBeVisible();
-    expect(input.closest('details')).toBeNull();
-    expect(screen.getByRole('region', { name: 'Identity & access' })).toBeVisible();
-    expect(screen.getByLabelText('Sign-in authorization URL')).toBeVisible();
+    expect(input.closest('details')).toHaveAttribute('open');
+    const region = screen.getByRole('region', { name: 'Security' });
+    expect(region).toBeVisible();
+    expect(within(region).getByRole('heading', { name: 'Session security' })).toBeVisible();
+    expect(screen.getByText('Administrator setup required')).toBeVisible();
   });
 
   it('shows one category with accessible navigation and keeps other fields mounted', async () => {

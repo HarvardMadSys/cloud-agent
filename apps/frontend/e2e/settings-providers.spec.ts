@@ -95,7 +95,7 @@ test('mail and phone sign-in show only the selected provider’s fields', async 
 }, testInfo) => {
   // Tall enough that a screenshot shows every account group; the page scrolls inside.
   await page.setViewportSize({ width: 1440, height: 2600 });
-  await page.goto(`/admin/settings?tab=application-${encodeURIComponent('Identity & access')}`);
+  await page.goto('/admin/settings?tab=application-Accounts');
   await expect(setting(page, 'accounts.smtp_host')).toHaveText('smtp.example.test');
   for (const hidden of [
     'accounts.tencent_ses_region',
@@ -127,7 +127,7 @@ test('mail and phone sign-in show only the selected provider’s fields', async 
   await expect(await search(page, 'SMTP host')).toHaveCount(0);
   const found = await search(page, 'SecretKey');
   await expect(found).toHaveCount(1);
-  await expect(found).toHaveAccessibleName('Open Tencent Cloud SecretKey in Identity & access');
+  await expect(found).toHaveAccessibleName('Open Tencent Cloud SecretKey in Accounts');
   await page.getByRole('searchbox', { name: 'Search settings' }).fill('');
   await page.screenshot({ path: testInfo.outputPath('2-ses-draft.png'), fullPage: true });
 
@@ -151,7 +151,9 @@ test('mail and phone sign-in show only the selected provider’s fields', async 
   await page.getByRole('button', { name: 'Edit Phone sign-in settings' }).click();
   await setting(page, 'accounts.sms_enabled').click();
   await page.getByRole('option', { name: 'Enabled' }).click();
-  await expect(setting(page, 'accounts.sms_code_ttl_s')).toBeVisible();
+  // Its code lifetime now applies too: a tuning limit, collapsed under Advanced.
+  await expect(setting(page, 'accounts.sms_code_ttl_s')).toBeAttached();
+  await expect(setting(page, 'accounts.sms_code_ttl_s')).toBeHidden();
   await expect(setting(page, 'accounts.tencent_sms_app_id')).toHaveCount(0);
   await setting(page, 'accounts.sms_provider').click();
   await page.getByRole('option', { name: 'tencent' }).click();

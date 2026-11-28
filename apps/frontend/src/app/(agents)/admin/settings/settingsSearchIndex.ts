@@ -2,12 +2,14 @@ import type { HostSettingDefinition } from '@/lib/api/admin';
 import type { AgentAdminSettings } from '@/lib/api/adminSettings';
 import type { Translator } from '@/lib/i18n/translate';
 
+import { isAdvancedHostSetting } from '../hosts/HostSettings';
 import { agentName } from './AgentVersions';
 import {
   HOSTED_CATEGORIES,
   applicationCategory,
   applicationCategoryTab,
   applicationSettingGroup,
+  isAdvancedSetting,
 } from './settingsOrganization';
 import {
   GOVERNING_SEARCH_KEYWORDS,
@@ -31,6 +33,16 @@ interface StaticSearchField {
   label: string;
   description: string;
   keywords?: string[];
+  /** Listed under the section's collapsed Advanced part, which a result opens. */
+  advanced?: true;
+}
+
+/**
+ * Where a result lives. A setting under a collapsed Advanced section says so,
+ * which also lets a search for "advanced" list every such setting.
+ */
+function sectionName(section: string, advanced: boolean): string {
+  return advanced ? `${section} · Advanced` : section;
 }
 
 const CLOUDLAB_FIELDS: StaticSearchField[] = [
@@ -118,16 +130,19 @@ const ARCHIVE_FIELDS: StaticSearchField[] = [
     key: 'max_archive_bytes',
     label: 'Maximum archive bytes',
     description: 'Maximum compressed size of one archive. Hard limit: 4 GiB.',
+    advanced: true,
   },
   {
     key: 'multipart_threshold_bytes',
     label: 'Multipart threshold bytes',
     description: 'Archives at or above this size use multipart upload. Maximum: 64 MiB.',
+    advanced: true,
   },
   {
     key: 'multipart_part_bytes',
     label: 'Multipart part bytes',
     description: 'Size of each uploaded part, from 5 MiB through 64 MiB.',
+    advanced: true,
   },
 ];
 
@@ -137,11 +152,11 @@ function staticItems(
   section: string,
   tab: string,
 ): SettingsSearchItem[] {
-  return fields.map(({ key, label, description, keywords = [] }) => ({
+  return fields.map(({ key, label, description, keywords = [], advanced = false }) => ({
     id: `${prefix}:${key}`,
     label,
     description,
-    section,
+    section: sectionName(section, advanced),
     tab,
     targetId: `${prefix}-setting-${key}`,
     keywords: [key, ...keywords],
@@ -171,7 +186,10 @@ export function buildSettingsSearchItems({
         id: `application:${definition.key}`,
         label: definition.label,
         description: definition.description,
-        section: HOSTED_CATEGORIES.get(category)?.section ?? category,
+        section: sectionName(
+          HOSTED_CATEGORIES.get(category)?.section ?? category,
+          isAdvancedSetting(definition),
+        ),
         tab,
         targetId: `application-setting-${definition.key}`,
         applicationKey: definition.key,
@@ -187,7 +205,7 @@ export function buildSettingsSearchItems({
       id: `host:${definition.key}`,
       label: definition.label,
       description: definition.description,
-      section: 'Sandbox',
+      section: sectionName('Sandbox', isAdvancedHostSetting(definition.key)),
       tab: 'sandbox',
       targetId: `host-setting-${definition.key}`,
       keywords: [definition.key, definition.env, 'all servers'],
