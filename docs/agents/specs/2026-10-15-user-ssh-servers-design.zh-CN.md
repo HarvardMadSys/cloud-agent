@@ -2,7 +2,7 @@
 
 - 日期：2026-10-15
 - 状态：已在同一个功能 PR 中实现，AGENTS.md §6–§7 的安全边界同步更新。下文按实现后的结果修订，与最初草案的差异列在 §14。
-- 相关：[AGENTS.md](../../../AGENTS.md) §6–§7、[统一公网出口](2026-09-23-agent-public-egress-design.zh-CN.md)、[可复用云端环境](2026-10-12-repository-environment-design.zh-CN.md)（Secret 注入与脱敏）、[每用户 MCP](2026-09-11-per-user-mcp-v1-design.zh.md)（会话级勾选）、[记忆重设计](2026-10-13-memory-redesign.zh-CN.md)（给 Agent 的说明怎么送达）。
+- 相关：[AGENTS.md](../../../AGENTS.md) §6–§7、[统一公网出口](2026-09-23-agent-public-egress-design.zh-CN.md)、[可复用云端环境](2026-10-12-repository-environment-design.zh-CN.md)（Secret 注入与脱敏）、每用户 MCP（会话级勾选）、[记忆重设计](2026-10-13-memory-redesign.zh-CN.md)（给 Agent 的说明怎么送达）。
 - 实现位置核对基线：`dev` 提交 `353a4db5`。
 
 ## 0. 一页看懂

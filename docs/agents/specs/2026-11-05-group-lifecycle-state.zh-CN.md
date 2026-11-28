@@ -4,7 +4,7 @@
 
 设计核对基线：分支 `murphy/refactor/structural`（PR #1111），提交 `6c930f118`。supervisor 在这个分支上已经拆开，A1 的外观层 `group_lifecycle.py` 已经存在。文中代码路径都相对 `apps/backend/cloud_agent_host/`，行号都是基线上的。
 
-相关：结构重构 §5.1、§13.2、§15、§16；[host 协议 v2](2026-11-05-host-protocol-v2.zh-CN.md)；[原生会话、Fork 与共享工作区](2026-08-31-native-session-fork-shared-workspace-design.md)；推迟初始 archive 上传。
+相关：结构重构 §5.1、§13.2、§15、§16；host 协议 v2；[原生会话、Fork 与共享工作区](2026-08-31-native-session-fork-shared-workspace-design.md)；推迟初始 archive 上传。
 
 ## 1. 结论
 

@@ -7,7 +7,7 @@
 
 **2026-09-18 整合修订**：#218 的存储与 Admin 读面已经接到 #258 的统一采集器，
 具体身份、预算、持久化、版本与交付契约见
-[存储/Admin 整合设计](2026-09-16-operation-measurement-storage-admin-integration-design.zh-CN.md)。
+存储/Admin 整合设计。
 `e77e3e6` 的历史
 五项 review 问题已经关闭；
 身份已拆为 interaction_id 与每请求唯一 measurement_id。

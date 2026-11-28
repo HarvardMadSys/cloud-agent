@@ -11,7 +11,7 @@
 仍是后续切片的目标形态，已实现的子集以 `apps/backend/cloud_agent_shared/operation_profiling.py` 为准。
 
 **2026-09-18 整合结果**：#218 的持久化/API/Admin 能力已接入 #258 的唯一采集链路。
-[存储/Admin 整合设计](2026-09-16-operation-measurement-storage-admin-integration-design.zh-CN.md)
+存储/Admin 整合设计
 规定新的记录身份、覆盖范围、异步写入、鉴权、幂等和交付顺序；与本文的早期
 存储草案或实施顺序有差异时以整合设计为准。`e77e3e6` 的历史
 五项 review 问题已关闭。
