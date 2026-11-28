@@ -562,8 +562,8 @@ credentials.
 - Run the policy for **two weeks with at least two automatic moves**, checking
   alerts, cleanup and retained chats.
 
-The [2026-10-10 manual staging drill](../agents/specs/2026-10-10-cloudlab-node-rotation-design.zh-CN.md#验证二结果2026-10-10staging)
-moved real sessions from Clemson to Utah with a 161-second pause. Losing the only
+A manual staging drill on 2026-10-10 moved real sessions from Clemson to Utah
+with a 161-second pause. Losing the only
 source disk, or having no replacement capacity before expiry, can still lose
 sessions; keep off-node backups where required. Before live traffic, verify the
 CloudLab profile end to end: deployment, a real task, retained continuation and
