@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: HybridInference Cloud Agent \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-11 21:12-0500\n"
+"POT-Creation-Date: 2026-11-28 06:22+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: The HybridInference contributors\n"
 "Language: zh_CN\n"
@@ -21,24 +21,18 @@ msgstr "发布"
 
 #: ../../deploy/release/README.md:4
 msgid ""
-"A Cloud Agent release consists of `release.json` and `recipe.tar.gz`. The"
-" manifest identifies one source commit, every owned image by registry "
-"digest, each image's platforms, the sandbox runtime catalog, the database"
-" revision, the deployment protocol, and recorded compatibility checks. "
-"The recipe contains scripts and configuration templates for installing "
-"those images without a source checkout."
+"A Cloud Agent release is two files. `release.json`, the manifest, names "
+"one source commit, every owned image by registry digest with its "
+"platforms, the sandbox runtime catalog, the database revision, the "
+"deployment protocol and the recorded compatibility checks. "
+"`recipe.tar.gz` holds the scripts and Compose templates that install "
+"those images without a source checkout. A downstream distribution pins "
+"the SHA-256 of the manifest's exact bytes in its own reviewed lock; the "
+"manifest pins the recipe and images."
 msgstr ""
-"一个 Cloud Agent 发布由 `release.json` 和 `recipe.tar.gz` "
-"两个文件组成。清单（manifest）里写明了：对应哪一个源 "
-"commit；每个自有镜像在镜像仓库里的摘要，以及各自支持的平台；沙箱的运行时目录；数据库修订号；部署协议；还有已经记录的兼容性检查结果。recipe"
-" 里是安装这些镜像要用的脚本和配置模板，有了它就不需要源码仓库。"
-
-#: ../../deploy/release/README.md:11
-msgid ""
-"A downstream distribution pins the SHA-256 of the manifest's exact bytes "
-"in its own reviewed lock. The manifest, in turn, pins the recipe archive "
-"and images."
-msgstr "下游发行版在自己评审过的锁定文件里，固定这份清单原始字节的 SHA-256；清单再反过来固定 recipe 归档和各个镜像。"
+"一个 Cloud Agent 发布包含两个文件。清单 `release.json` 列出一个源码提交、每个自有镜像的仓库 digest "
+"及其平台、沙箱运行时目录、数据库版本、部署协议和已记录的兼容性检查。`recipe.tar.gz` 包含无需源码仓库副本就能安装这些镜像的脚本和 "
+"Compose 模板。下游发行版在自己经过审查的锁文件中固定清单原始字节的 SHA-256；清单再固定配方和镜像。"
 
 #: ../developer/releases.md:1
 msgid "File"
@@ -54,43 +48,41 @@ msgstr "[artifact_catalog.json](artifact_catalog.json)"
 
 #: ../developer/releases.md:1
 msgid ""
-"One dependency-free source for build cells, native platforms, web "
-"mount/API variants, runner labels, and smoke keys."
-msgstr "一个不依赖其他代码的统一来源，定义构建单元、原生平台、Web 挂载/API 变体、runner 标签和冒烟测试键。"
+"The single source for build cells, native platforms, web variants, runner"
+" labels and smoke keys"
+msgstr "构建单元、原生平台、Web 变体、runner 标签和冒烟测试键的唯一来源"
 
 #: ../developer/releases.md:1
 msgid "[manifest.schema.json](manifest.schema.json)"
 msgstr ""
 
 #: ../developer/releases.md:1
-msgid "Published manifest schema; consumers validate against it."
-msgstr "对外发布的清单 schema，使用方用它来校验。"
+msgid "The published manifest schema that consumers validate against"
+msgstr "发布的清单 schema，使用方据此校验"
 
 #: ../developer/releases.md:1
 msgid "[release_manifest.py](release_manifest.py)"
 msgstr ""
 
 #: ../developer/releases.md:1
-msgid "Generates a complete manifest from build records."
-msgstr "根据构建记录生成一份完整的清单。"
+msgid "Generates the manifest from build records"
+msgstr "根据构建记录生成清单"
 
 #: ../developer/releases.md:1
 msgid "[generate_artifact_contracts.py](generate_artifact_contracts.py)"
 msgstr "[generate_artifact_contracts.py](generate_artifact_contracts.py)"
 
 #: ../developer/releases.md:1
-msgid ""
-"Deterministically projects the catalog into the published schema "
-"vocabulary/cardinality and publication matrix."
-msgstr "按照确定性规则，把目录投影为对外 schema 的词汇和基数约束，以及发布矩阵。"
+msgid "Projects the catalog into the schema and the publication matrix"
+msgstr "把目录投影到 schema 和发布矩阵"
 
 #: ../developer/releases.md:1
 msgid "[build_recipe.py](build_recipe.py)"
 msgstr ""
 
 #: ../developer/releases.md:1
-msgid "Packages the explicit recipe file list into a deterministic archive."
-msgstr "把明确列出的 recipe 文件打包成一个可复现的归档。"
+msgid "Packages the explicit recipe file list into a deterministic archive"
+msgstr "把明确列出的配方文件打包成确定性的归档"
 
 #: ../developer/releases.md:1
 msgid ""
@@ -99,40 +91,36 @@ msgid ""
 msgstr ""
 
 #: ../developer/releases.md:1
-msgid "Validate release configuration and render digest-bound deployment inputs."
-msgstr "校验发布配置，并生成绑定到镜像摘要的部署输入。"
+msgid "Validate release configuration and render digest-bound deployment inputs"
+msgstr "校验发布配置，并渲染绑定 digest 的部署输入"
 
-#: ../../deploy/release/README.md:23
-msgid ""
-"After editing catalog metadata, regenerate and check its reviewed "
-"projections:"
-msgstr "编辑目录元数据后，重新生成并检查已评审的投影："
+#: ../../deploy/release/README.md:21
+msgid "After editing the catalog, regenerate and check its projections:"
+msgstr "编辑目录后，重新生成并检查它的投影："
 
-#: ../../deploy/release/README.md:30
+#: ../../deploy/release/README.md:28
 msgid ""
-"Manifest-visible changes (role, variant, base path, platform, or cell "
-"cardinality) are locked by `manifest_contract.artifact_shape_sha256`. "
-"Review their compatibility and schema-version impact, then acknowledge "
-"that decision explicitly with `--write --accept-contract-change`; "
-"ordinary generation will refuse to bless it. Behavior remains "
-"independent: a new catalog cell still needs a Dockerfile, a real case in "
-"`smoke.py`, deployment integration, and an independent contract fixture "
-"when compatibility changes."
+"A change visible in the manifest (role, variant, base path, platform or "
+"cell count) changes `manifest_contract.artifact_shape_sha256`. Review its"
+" compatibility and schema impact, then accept it with `--write --accept-"
+"contract-change`; plain `--write` refuses. A new catalog cell still needs"
+" a Dockerfile, a real case in `smoke.py`, deployment integration, and a "
+"contract fixture when compatibility changes."
 msgstr ""
-"清单中可见的变更（角色、变体、基础路径、平台或构建单元基数）由 `manifest_contract.artifact_shape_sha256`"
-" 锁定。先评审兼容性和 schema 版本影响，再用 `--write --accept-contract-change` "
-"明确认可这个决定；普通生成命令不会自行接受变更。行为检查仍独立进行：新增目录单元仍然需要 Dockerfile、`smoke.py` "
-"中的真实测试分支和部署集成；兼容性变化时还需要独立的契约 fixture。"
+"清单中可见的变化（角色、变体、基础路径、平台或单元数量）会改变 "
+"`manifest_contract.artifact_shape_sha256`。先评审它对兼容性和 schema 的影响，再用 "
+"`--write --accept-contract-change` 接受；单独的 `--write` 会拒绝。新的目录单元仍然需要 "
+"Dockerfile、`smoke.py` 中真实的测试用例、部署集成，以及兼容性变化时的契约测试夹具。"
 
-#: ../../deploy/release/README.md:38
-msgid "What the generator checks, and what it deliberately does not"
-msgstr "生成器检查什么，又故意不检查什么"
+#: ../../deploy/release/README.md:35
+msgid "What the generator checks"
+msgstr "生成器检查什么"
 
-#: ../../deploy/release/README.md:40
+#: ../../deploy/release/README.md:37
 msgid ""
-"The generator requires all five artifacts, with distinct digests and "
+"The generator requires these five artifacts, with distinct digests and "
 "exactly these platforms:"
-msgstr "生成器要求五个产物一个不少，摘要互不相同，平台必须正好是下面这样："
+msgstr "生成器要求以下五个产物，digest 各不相同，平台必须完全一致："
 
 #: ../developer/releases.md:1
 msgid "Role"
@@ -182,169 +170,142 @@ msgstr ""
 msgid "`tunnel`"
 msgstr ""
 
-#: ../../deploy/release/README.md:51
+#: ../../deploy/release/README.md:48
 msgid ""
-"The `agents` web variant (base path `/agents`) is retired: it is no "
-"longer built, and the schema keeps accepting it in published v1 manifests"
-" (`manifest_contract.retired_web_variants`) so a rollback still "
-"validates."
-msgstr ""
-"`agents` 这个 Web 变体（base path 为 `/agents`）已经退役：不再构建，但清单格式仍然接受已发布的 v1 "
-"清单里带着它（见 `manifest_contract.retired_web_variants`），这样回滚到旧版本时清单检查照样能通过。"
-
-#: ../../deploy/release/README.md:55
-msgid ""
+"The `agents` web variant (base path `/agents`) is no longer built, but "
+"the schema still accepts it in v1 manifests "
+"(`manifest_contract.retired_web_variants`) so that a rollback validates. "
 "New manifests name the source repository `HarvardMadSys/cloud-agent`, and"
-" the generator accepts a `publisher_run_url` only under that name. The "
-"repository was `HarvardMadSys/hybridInference-cloud-agent` until "
-"2026-11-10, and releases published before then carry that name in "
-"`source_repository`, `publisher_run_url`, and the recipe URL. The schema "
-"accepts exactly these two names, so those releases still validate."
+" the generator accepts a `publisher_run_url` only under that name. "
+"Releases published before 2026-11-10 carry the former name, "
+"`HarvardMadSys/hybridInference-cloud-agent`, in `source_repository`, "
+"`publisher_run_url` and the recipe URL; the schema accepts exactly these "
+"two names."
 msgstr ""
-"新清单写的源仓库是 `HarvardMadSys/cloud-agent`，生成器也只接受这个名字下的 "
-"`publisher_run_url`。仓库在 2026-11-10 之前叫 `HarvardMadSys/hybridInference-"
-"cloud-agent`，在那之前发布的版本，`source_repository`、`publisher_run_url` 和 recipe 的"
-" URL 里用的都是这个旧名字。schema 只接受这两个名字，所以这些版本照样能通过校验。"
+"`agents` Web 变体（基础路径 `/agents`）已不再构建，但 schema 在 v1 "
+"清单中仍接受它（`manifest_contract.retired_web_variants`），以便回滚时能通过校验。新清单把源码仓库写为 "
+"`HarvardMadSys/cloud-agent`，生成器只接受该名称下的 `publisher_run_url`。2026-11-10 "
+"之前发布的版本在 `source_repository`、`publisher_run_url` 和配方 URL 中带的是旧名称 "
+"`HarvardMadSys/hybridInference-cloud-agent`；schema 恰好接受这两个名称。"
 
-#: ../../deploy/release/README.md:62
+#: ../../deploy/release/README.md:57
 msgid ""
-"Image references must use digests under this organization's registry. The"
-" schema enforces role and web-variant cardinality, and the generator "
-"validates its output against that schema before writing it. The generator"
-" also checks that each runtime's `default` appears in its `versions`; "
-"this relationship cannot be expressed by the published JSON Schema, so "
-"consumers must check it separately."
+"Image references must be digests under this organization's registry. The "
+"schema enforces role and web-variant cardinality, and the generator "
+"validates its output against the schema before writing it. It also checks"
+" that each runtime's `default` appears in its `versions`, which JSON "
+"Schema cannot express, so consumers must check that themselves. "
+"`deploy_protocol` comes from `deploy/DEPLOY_PROTOCOL`, "
+"`database_revision` from Alembic's script directory, and "
+"`runtime_catalog` from the sandbox image's labels."
 msgstr ""
-"镜像引用必须用本组织镜像仓库下的摘要。schema 会限制每种角色和每种 Web 变体各有几个，生成器写出清单之前会先用这个 schema "
-"校验一遍。生成器还会检查每个运行时的 `default` 是否在它的 `versions` 里；这层关系没法用对外发布的 JSON Schema "
-"表达，所以使用方需要自己另外检查。"
+"镜像引用必须是本组织仓库下的 digest。schema 强制角色和 Web 变体的数量，生成器在写出之前会用 schema "
+"校验自己的输出。它还检查每个运行时的 `default` 是否出现在其 `versions` 中，这一点 JSON Schema "
+"无法表达，所以使用方必须自行检查。`deploy_protocol` 来自 "
+"`deploy/DEPLOY_PROTOCOL`，`database_revision` 来自 Alembic "
+"的脚本目录，`runtime_catalog` 来自沙箱镜像的标签。"
 
-#: ../../deploy/release/README.md:69
-msgid ""
-"Version fields come from their sources: `deploy_protocol` from "
-"`deploy/DEPLOY_PROTOCOL`, `database_revision` from Alembic's script "
-"directory, and `runtime_catalog` from the sandbox image's labels. Runtime"
-" versions should not be supplied as a second hand-maintained list."
-msgstr ""
-"版本字段都直接取自各自的来源：`deploy_protocol` 取自 "
-"`deploy/DEPLOY_PROTOCOL`，`database_revision` 取自 Alembic "
-"的脚本目录，`runtime_catalog` 取自沙箱镜像的标签。不要再另外手工维护一份运行时版本列表。"
-
-#: ../../deploy/release/README.md:74
+#: ../../deploy/release/README.md:65
 msgid ""
 "The generator does not query the registry. A downstream resolver must "
-"verify that each digest exists, carries the declared platforms, and has "
+"verify that each digest exists, has the declared platforms, and carries "
 "the expected `org.opencontainers.image.revision` and "
-"`io.hybridinference.artifact.role` labels on each platform image. "
-"Manifest validation alone does not prove those claims."
+"`io.hybridinference.artifact.role` labels on each platform image."
 msgstr ""
-"生成器不会去查镜像仓库。下游的解析器必须自己确认：每个摘要都真实存在，带有声明的那些平台，并且每个平台的镜像上都有预期的 "
+"生成器不查询镜像仓库。下游解析器必须核实每个 digest 存在、具备声明的平台，并且每个平台镜像都带有预期的 "
 "`org.opencontainers.image.revision` 和 `io.hybridinference.artifact.role` "
-"标签。清单本身校验通过，并不能证明这些都成立。"
+"标签。"
 
-#: ../../deploy/release/README.md:80
+#: ../../deploy/release/README.md:70
 msgid "Producing one"
 msgstr "生成发布"
 
+#: ../../deploy/release/README.md:72
+msgid ""
+"[The publication workflow](../../.github/workflows/publish.yml) runs on "
+"pushes to `dev`, on successful CI, and by manual dispatch for a `dev` "
+"commit with successful CI. A push builds alongside CI, but publishes only"
+" after the newest push CI run on that commit succeeds. The workflow:"
+msgstr ""
+"[发布工作流](../../.github/workflows/publish.yml)在推送到 `dev`、CI 成功完成时运行，也可以对 CI"
+" 已成功的 `dev` 提交手动触发。推送触发的构建与 CI 并行，但只有该提交最新一次推送触发的 CI 成功后才会发布。工作流的步骤："
+
+#: ../../deploy/release/README.md:77
+msgid ""
+"Checks that the commit is on `dev`, and leaves an existing release "
+"unchanged."
+msgstr "确认提交在 `dev` 上，并且不改动已存在的发布。"
+
+#: ../../deploy/release/README.md:79
+msgid ""
+"Builds and pushes each artifact by digest with `SOURCE_COMMIT` set to the"
+" full commit SHA, pulls the digest back, smoke-tests it, and records its "
+"digest, platform and labels."
+msgstr ""
+"以完整提交 SHA 作为 `SOURCE_COMMIT`，按 digest 构建并推送每个产物，再拉回该 digest 做冒烟测试，记录其 "
+"digest、平台和标签。"
+
 #: ../../deploy/release/README.md:82
 msgid ""
-"[The publication workflow](../../.github/workflows/publish.yml) handles "
-"pushes to `dev`, successful CI completion, and manual dispatch for a "
-"`dev` commit with successful CI. A push can build alongside CI, but "
-"publication waits for the newest push CI run on that exact commit to "
-"succeed. A successful CI rerun can trigger publication later."
-msgstr ""
-"[发布工作流](../../.github/workflows/publish.yml)会在三种情况下运行：推送到 `dev`、CI "
-"成功完成，以及对一个 CI 已通过的 `dev` commit 手动触发。推送触发时可以和 CI 同时构建，但要等这个 commit "
-"上最近一次推送触发的 CI 成功，才会真正发布。之后某次 CI 重跑成功，也可以再触发发布。"
+"Assembles the five cell records, builds the recipe and writes the "
+"manifest."
+msgstr "汇总五个单元的记录，构建配方并写出清单。"
 
-#: ../../deploy/release/README.md:88
-msgid "The workflow:"
-msgstr "工作流的步骤："
+#: ../../deploy/release/README.md:83
+msgid "Runs control-plane integration acceptance on those exact files."
+msgstr "对这些文件运行控制平面集成验收。"
 
-#: ../../deploy/release/README.md:90
+#: ../../deploy/release/README.md:84
 msgid ""
-"Verifies that the commit is on `dev` and leaves an existing release "
-"unchanged."
-msgstr "确认这个 commit 在 `dev` 上；如果已经有对应的发布，就不去动它。"
+"Creates a draft release tagged `agent-<full-sha>`, uploads both files and"
+" makes it visible; a failed upload deletes the draft."
+msgstr "创建标签为 `agent-<full-sha>` 的草稿发布，上传两个文件后将其公开；上传失败会删除草稿。"
+
+#: ../../deploy/release/README.md:87
+msgid ""
+"Failed or cancelled CI leaves built images in the registry without a "
+"manifest. The workflow has no pull-request trigger, and it publishes "
+"artifacts without deploying any environment."
+msgstr "CI 失败或取消时，已构建的镜像会留在镜像仓库中，但没有清单。该工作流没有拉取请求触发器，它只发布产物，不部署任何环境。"
 
 #: ../../deploy/release/README.md:91
 msgid ""
-"Builds and pushes each artifact by digest with `SOURCE_COMMIT` set to the"
-" full commit SHA. It pulls the digest back, smoke-tests the pulled image,"
-" and records its digest, platform, and labels."
+"To generate by hand from the repository root, put the five cell JSON "
+"files in `cells/`, and set `SOURCE_COMMIT` to their full 40-character SHA"
+" and `PUBLISHER_RUN_URL` to the publisher's Actions run URL:"
 msgstr ""
-"把 `SOURCE_COMMIT` 设为完整的 commit "
-"SHA，构建每个产物并按摘要推送。然后把这个摘要拉回来，对拉回的镜像做冒烟测试，记下它的摘要、平台和标签。"
+"要在仓库根目录手动生成，把五个单元的 JSON 文件放进 `cells/`，并把 `SOURCE_COMMIT` 设为它们完整的 40 位 "
+"SHA，把 `PUBLISHER_RUN_URL` 设为发布者的 Actions 运行 URL："
 
-#: ../../deploy/release/README.md:94
+#: ../../deploy/release/README.md:112
 msgid ""
-"Assembles the six cell records, builds the recipe, and writes the "
-"manifest."
-msgstr "把六个构建单元的记录汇总起来，构建 recipe，写出清单。"
-
-#: ../../deploy/release/README.md:95
-msgid "Runs control-plane integration acceptance on those exact candidate files."
-msgstr "对这几个候选文件本身，跑一遍控制平面的集成验收。"
-
-#: ../../deploy/release/README.md:96
-msgid ""
-"Waits for CI success, creates a draft release tagged `agent-<full-sha>`, "
-"uploads both assets, then makes the release visible. A failed upload "
-"deletes the draft."
-msgstr "等 CI 成功后，创建一个标签为 `agent-<full-sha>` 的草稿发布，上传两个文件，再把发布设为可见。上传失败的话，草稿会被删掉。"
-
-#: ../../deploy/release/README.md:100
-msgid ""
-"Failed or cancelled CI leaves any built images in the registry without a "
-"published manifest. The release workflow has no pull-request trigger and "
-"runs merged code. It publishes artifacts; it does not deploy a named "
-"environment."
+"`inputs.json` holds `source_commit`, `artifacts` and `runtime_labels`, "
+"the sandbox's label map from `docker image inspect` (what the host reads "
+"when stamping attempts). The manifest is written atomically, after every "
+"check passes."
 msgstr ""
-"如果 CI 失败或被取消，已经构建好的镜像会留在镜像仓库里，但不会有对应的清单发布出来。发布工作流不会被 pull request "
-"触发，只跑已经合并的代码。它只负责发布产物，不会部署到任何具体的环境。"
+"`inputs.json` 包含 `source_commit`、`artifacts` 和 `runtime_labels`，后者是 "
+"`docker image inspect` 给出的沙箱标签表（主机给 attempt "
+"打标记时读取的就是它）。所有检查通过后，清单才会以原子方式写出。"
 
-#: ../../deploy/release/README.md:104
-msgid ""
-"For a manual generation run from the repository root, collect the six "
-"publication cell JSON files in `cells/`. Set `SOURCE_COMMIT` to their "
-"full 40-character SHA and `PUBLISHER_RUN_URL` to the actual publisher's "
-"Actions run URL, then use the same generation commands as the workflow:"
-msgstr ""
-"如果要在仓库根目录手动生成，先把六个构建单元的 JSON 文件放进 `cells/`。把 `SOURCE_COMMIT` 设为它们完整的 40 位"
-" SHA，把 `PUBLISHER_RUN_URL` 设为实际执行发布的那次 Actions 运行的 URL，然后用和工作流相同的命令生成："
+#: ../../deploy/release/README.md:117
+msgid "Smoke tests"
+msgstr "冒烟测试"
 
-#: ../../deploy/release/README.md:126
-msgid ""
-"`inputs.json` contains `source_commit`, `artifacts`, and "
-"`runtime_labels`. `runtime_labels` is the sandbox's label map from "
-"`docker image inspect`, matching what the host reads when stamping "
-"attempts. The manifest is written atomically only after all checks pass."
-msgstr ""
-"`inputs.json` 里有 `source_commit`、`artifacts` 和 "
-"`runtime_labels`。`runtime_labels` 是用 `docker image inspect` "
-"读出来的沙箱镜像标签，和主机给 attempt 打标记时读到的内容一致。只有全部检查都通过后，清单才会一次性写出，不会出现写了一半的文件。"
-
-#: ../../deploy/release/README.md:131
-msgid "Starting, not just building"
-msgstr "光能构建还不够，还得能启动"
-
-#: ../../deploy/release/README.md:133
+#: ../../deploy/release/README.md:119
 msgid ""
 "[smoke.py](smoke.py) starts each artifact and checks its identity labels."
-" CI and publication use the same implementation; publication applies it "
-"to images pulled back from the registry."
-msgstr ""
-"[smoke.py](smoke.py) 会把每个产物启动起来，并检查它的身份标签。CI "
-"和发布用的是同一套代码；发布时检查的是从镜像仓库拉回来的镜像。"
+" CI and publication share it; publication runs it on the images pulled "
+"back from the registry."
+msgstr "[smoke.py](smoke.py) 会启动每个产物并检查其身份标签。CI 和发布共用它；发布时针对从镜像仓库拉回的镜像运行。"
 
 #: ../developer/releases.md:1
 msgid "Artifact"
 msgstr "产物"
 
 #: ../developer/releases.md:1
-msgid "Smoke-test evidence"
-msgstr "冒烟测试检查的内容"
+msgid "What starting it proves"
+msgstr "启动后能证明什么"
 
 #: ../developer/releases.md:1
 msgid "Control"
@@ -353,96 +314,95 @@ msgstr "控制平面"
 #: ../developer/releases.md:1
 msgid ""
 "Migrates real Postgres with `alembic upgrade head`, then answers "
-"`/healthz`."
-msgstr "用 `alembic upgrade head` 对真实的 Postgres 执行迁移，然后能响应 `/healthz`。"
+"`/healthz`"
+msgstr "用 `alembic upgrade head` 迁移真实的 Postgres，然后响应 `/healthz`"
 
 #: ../developer/releases.md:1
-msgid "Web, both variants"
-msgstr "Web，两个变体都测"
+msgid "Web"
+msgstr "Web"
 
 #: ../developer/releases.md:1
-msgid ""
-"Serves `/login` under the selected mount prefix and renders runtime site "
-"identity."
-msgstr "在选定的挂载前缀下能打开 `/login`，并正确显示运行时配置的站点信息。"
+msgid "Serves `/login` and renders the runtime site identity"
+msgstr "提供 `/login` 页面并渲染运行时站点标识"
 
 #: ../developer/releases.md:1
 msgid "Runner"
 msgstr ""
 
 #: ../developer/releases.md:1
-msgid "Imports its modules and provides the Docker CLI and `nft`."
-msgstr "能导入自己的模块，并且带有 Docker CLI 和 `nft`。"
+msgid "Imports its modules and has the Docker CLI and `nft`"
+msgstr "能导入自身模块，并带有 Docker CLI 和 `nft`"
 
 #: ../developer/releases.md:1
 msgid "Sandbox"
 msgstr "沙箱"
 
 #: ../developer/releases.md:1
-msgid "Each Agent CLI reports the version declared in its image labels."
-msgstr "每个 Agent CLI 报告的版本，和镜像标签里声明的一致。"
+msgid "Each Agent CLI reports the version its image labels declare"
+msgstr "每个 Agent CLI 报告的版本与镜像标签声明的一致"
 
 #: ../developer/releases.md:1
 msgid "Tunnel"
 msgstr "隧道"
 
 #: ../developer/releases.md:1
-msgid "Runs its entrypoint and fails clearly for an unreachable peer."
-msgstr "能运行入口程序；对端连不上时，会明确地报错退出。"
+msgid "Runs its entrypoint and fails clearly for an unreachable peer"
+msgstr "能运行入口程序，对端不可达时明确报错"
 
-#: ../../deploy/release/README.md:145
+#: ../../deploy/release/README.md:131
 msgid ""
 "The tests also check `org.opencontainers.image.revision`, "
-"`io.hybridinference.artifact.role`, and the web variant's "
+"`io.hybridinference.artifact.role` and the web image's "
 "`io.hybridinference.artifact.base_path`. Dockerfiles default the revision"
-" to `unknown`; publication must supply the source commit. These checks "
-"establish startup behavior, not successful job execution or Kata "
-"readiness on an execution host."
+" to `unknown`, so publication must supply the commit. None of this proves"
+" that a job runs or that Kata works on a host."
 msgstr ""
-"测试还会检查 "
-"`org.opencontainers.image.revision`、`io.hybridinference.artifact.role`，以及"
-" Web 变体的 `io.hybridinference.artifact.base_path`。Dockerfile 默认把 revision "
-"设为 `unknown`；发布时必须提供源提交。这些检查只证明启动行为，不证明任务能成功执行，也不证明执行主机已具备 Kata 条件。"
+"测试还检查 "
+"`org.opencontainers.image.revision`、`io.hybridinference.artifact.role` 以及"
+" Web 镜像的 `io.hybridinference.artifact.base_path`。Dockerfile 默认把版本设为 "
+"`unknown`，所以发布时必须提供提交。这些都不能证明任务能运行，也不能证明 Kata 在主机上可用。"
 
-#: ../../deploy/release/README.md:152
+#: ../../deploy/release/README.md:137
 msgid "Control-plane integration acceptance"
 msgstr "控制平面集成验收"
 
-#: ../../deploy/release/README.md:154
+#: ../../deploy/release/README.md:139
 msgid ""
 "[acceptance.py](acceptance.py) installs the candidate from an extracted "
-"recipe in a directory without application source or Dockerfiles. It runs "
-"the real control-plane deployer in artifact mode, pulls the candidate "
-"digests, and compares running containers with the manifest through "
-"[accept_artifacts.py](accept_artifacts.py)."
+"recipe, in a directory with no application source or Dockerfiles. It runs"
+" the real control-plane deployer in artifact mode, pulls the candidate "
+"digests, and compares the running containers with the manifest through "
+"[accept_artifacts.py](accept_artifacts.py), by registry `RepoDigests` and"
+" role labels."
 msgstr ""
-"[acceptance.py](acceptance.py) 会在一个既没有应用源码、也没有 Dockerfile 的目录里，用解压出来的 "
-"recipe 安装候选版本。它以产物模式运行真实的控制平面部署脚本，拉取候选镜像的摘要，再通过 "
-"[accept_artifacts.py](accept_artifacts.py) 拿正在运行的容器和清单逐一比对。"
+"[acceptance.py](acceptance.py) 在一个没有应用源码和 Dockerfile "
+"的目录中，从解压出的配方安装候选版本。它以产物模式运行真实的控制平面部署器，拉取候选 digest，并通过 "
+"[accept_artifacts.py](accept_artifacts.py) 按镜像仓库的 `RepoDigests` "
+"和角色标签，把运行中的容器与清单比对。"
 
 #: ../developer/releases.md:1
 msgid "Acceptance establishes"
 msgstr "验收能证明的"
 
 #: ../developer/releases.md:1
-msgid "Remaining environment acceptance"
-msgstr "仍需在实际环境中验收的"
+msgid "Left to environment acceptance"
+msgstr "留给环境验收的"
 
 #: ../developer/releases.md:1
-msgid "Checkout-free installation with no image build"
-msgstr "不需要源码仓库、也不构建镜像就能安装"
+msgid "Installation with no checkout and no image build"
+msgstr "无需仓库副本、无需构建镜像的安装"
 
 #: ../developer/releases.md:1
-msgid "Execution host, Kata, and real jobs"
+msgid "An execution host, Kata and real jobs"
 msgstr "执行主机、Kata 和真实任务"
 
 #: ../developer/releases.md:1
-msgid "Registry pulls and digest identity of running containers"
-msgstr "能从镜像仓库拉取镜像，运行中容器的摘要与清单一致"
+msgid "Registry pulls and the digest of each running container"
+msgstr "从镜像仓库拉取，以及每个运行中容器的 digest"
 
 #: ../developer/releases.md:1
-msgid "Any additional architecture"
-msgstr "其他 CPU 架构"
+msgid "Any other architecture"
+msgstr "其他任何架构"
 
 #: ../developer/releases.md:1
 msgid "The read-only account-namespace check, then real Postgres migrations"
@@ -453,8 +413,8 @@ msgid "Browser sign-in"
 msgstr "浏览器登录"
 
 #: ../developer/releases.md:1
-msgid "Healthy API and MCP listeners; correct web variant labels"
-msgstr "API 和 MCP 监听器运行正常；Web 变体的标签正确"
+msgid "Healthy API and MCP listeners and the right web labels"
+msgstr "API 和 MCP 监听器健康，Web 标签正确"
 
 #: ../developer/releases.md:1
 msgid "User-visible console behavior"
@@ -465,41 +425,31 @@ msgid "Refusal of conflicting configured images before pulling"
 msgstr "配置里的镜像相互冲突时，在拉取之前就拒绝"
 
 #: ../developer/releases.md:1
-msgid "Independent registry validation by the downstream resolver"
-msgstr "由下游解析器对镜像仓库做独立校验"
+msgid "Registry validation by the downstream resolver"
+msgstr "由下游解析器进行的镜像仓库校验"
 
-#: ../../deploy/release/README.md:168
+#: ../../deploy/release/README.md:154
 msgid ""
-"The exact-commit host readiness fence is expected to time out: this "
-"acceptance has no execution host. The test asserts that the deploy "
-"reached the fence after all earlier stages passed. It does not bypass or "
-"weaken that check."
+"There is no execution host, so the exact-commit host readiness fence is "
+"expected to time out; the test asserts that the deploy reached it after "
+"every earlier stage passed. Because the deployer starts `web` only after "
+"the fence, acceptance then starts it with the generated Compose file and "
+"`--no-build --pull never`. The workflow publishes the same bytes that "
+"passed."
 msgstr ""
-"按确切 commit "
-"判断的主机就绪栅栏，在这里本来就会超时，因为这次验收根本没有执行主机。测试断言的是：前面所有阶段都通过后，部署确实走到了这道栅栏。它不会绕过这项检查，也不会放松它。"
+"验收中没有执行主机，所以精确提交的主机就绪栅栏预期会超时；测试断言部署在之前每个阶段都通过后到达了这里。由于部署器只在栅栏之后启动 "
+"`web`，验收随后用生成的 Compose 文件和 `--no-build --pull never` "
+"启动它。工作流发布的正是通过验收的那些字节。"
 
-#: ../../deploy/release/README.md:172
+#: ../../deploy/release/README.md:160
+msgid "Registry layout"
+msgstr "镜像仓库布局"
+
+#: ../../deploy/release/README.md:162
 msgid ""
-"Because normal deployment starts `web` after the fence, acceptance starts"
-" it explicitly using the generated Compose file with `--no-build --pull "
-"never`. Container comparisons use registry `RepoDigests`, rather than "
-"image IDs, and role labels, rather than registry paths. The workflow "
-"publishes the same manifest and recipe bytes that passed this acceptance."
-msgstr ""
-"正常部署要等过了栅栏才启动 `web`，所以验收时会用生成的 Compose 文件，加上 `--no-build --pull "
-"never`，手动把它启动起来。比对容器时，用的是镜像仓库的 `RepoDigests` 而不是镜像 "
-"ID，看的是角色标签而不是镜像仓库路径。工作流最终发布的清单和 recipe，与通过这次验收的文件逐字节相同。"
-
-#: ../../deploy/release/README.md:178
-msgid "Registry layout is not part of this contract"
-msgstr "镜像仓库的目录布局不属于这份契约"
-
-#: ../../deploy/release/README.md:180
-msgid ""
-"The image's role label defines its role. Repository names and human-"
-"readable tags are storage conventions; deployments select the manifest's "
-"digests."
-msgstr "镜像是什么角色，看它的角色标签。仓库名和方便人看的标签只是存放上的约定；部署时认的是清单里的摘要。"
+"Deployments select images by the manifest's digests and read each image's"
+" role from its label. Repository names and tags are storage conventions."
+msgstr "部署按清单中的 digest 选择镜像，并从镜像标签读取其角色。仓库名称和标签只是存储约定。"
 
 #: ../developer/releases.md:1
 msgid "Package"
@@ -514,310 +464,236 @@ msgid "`ghcr.io/harvardmadsys/cloud-agent`"
 msgstr ""
 
 #: ../developer/releases.md:1
-msgid "Control, both web variants, runner, and tunnel"
-msgstr "控制平面、两个 Web 变体、runner 和隧道"
+msgid "Control, web, runner and tunnel"
+msgstr "Control、Web、runner 和隧道"
 
 #: ../developer/releases.md:1
 msgid "`ghcr.io/harvardmadsys/cloud-agent-sandbox`"
 msgstr ""
 
 #: ../developer/releases.md:1
-msgid "Sandbox, with a separate visibility setting for bundled third-party CLIs"
-msgstr "沙箱；因为里面打包了第三方 CLI，单独设置了可见性"
-
-#: ../../deploy/release/README.md:188
 msgid ""
-"After its smoke test passes, each digest receives a tag such as "
-"`control-<sha>`, `web-root-<sha>`, or `sandbox-<sha>`. These tags help "
-"people inspect images and are not deployment selectors."
+"Sandbox, with its own visibility setting because it bundles third-party "
+"CLIs"
+msgstr "沙箱；因为捆绑了第三方 CLI，它有单独的可见性设置"
+
+#: ../../deploy/release/README.md:170
+msgid ""
+"After its smoke test passes, each digest is also tagged, for example "
+"`control-<sha>`, `web-root-<sha>` or `sandbox-<sha>`, to help people "
+"inspect images. Tags such as `buildcache-sandbox-2026-w42` are the "
+"publication workflow's layer cache, a new one each ISO week; unchanged "
+"layers keep their digests, so a host on the previous release pulls only "
+"what changed. When moving images between registries, check that the copy "
+"keeps the original index digest: a recreated or converted index has a new"
+" digest and needs a reviewed lock update. Keep old addresses until the "
+"rollback window closes."
 msgstr ""
-"冒烟测试通过后，每个摘要会打上 `control-<sha>`、`web-root-<sha>`、`sandbox-<sha>` "
-"这样的标签。这些标签只是方便人查看镜像，部署时不靠它们来选镜像。"
+"冒烟测试通过后，每个 digest 还会打上标签，例如 `control-<sha>`、`web-root-<sha>` 或 "
+"`sandbox-<sha>`，方便人工查看镜像。`buildcache-sandbox-2026-w42` 这类标签是发布工作流的层缓存，每个 "
+"ISO 周新建一个；未变化的层保持原 digest，所以运行上一版本的主机只拉取变化的部分。在镜像仓库之间搬迁镜像时，要确认副本保留了原来的 "
+"index digest：重新创建或转换格式的 index 会得到新 digest，需要经审查的锁文件更新。在回滚窗口结束前保留旧地址。"
 
-#: ../../deploy/release/README.md:192
+#: ../../deploy/release/README.md:179
+msgid "Deployment protocol"
+msgstr "部署协议"
+
+#: ../../deploy/release/README.md:181
 msgid ""
-"Tags such as `buildcache-sandbox-2026-w42` are the publication workflow's"
-" layer cache, not images. Only that workflow writes them, and it starts a"
-" new one each ISO week. Because a layer whose inputs did not change keeps"
-" its digest from one release to the next, a host that runs the previous "
-"release pulls only the layers that changed."
+"The protocol is `shared-live-exact-sha-v4` (`deploy/DEPLOY_PROTOCOL`). v4"
+" introduced the [single sandbox "
+"network](../../docs/agents/specs/2026-09-23-agent-public-egress-design"
+".zh-CN.md), removed the Squid `egress` artifact, and requires "
+"`AGENT_EGRESS_CHAT_NETWORK_POOL` and `AGENT_EGRESS_DNS_SERVER` on every "
+"runner host. A v3 deployer cannot install a v4 release, and rollback does"
+" not cross the boundary. Runtime labels keep the "
+"`org.freeinference.runtime.*` namespace; renaming them needs a separate "
+"dual-read migration."
 msgstr ""
-"`buildcache-sandbox-2026-w42` 这类标签是发布工作流的层缓存，不是镜像。只有这个工作流会写入它们，每个 ISO "
-"周换一个新的。输入没变的层，在相邻两次发布之间摘要也不变，所以正在运行上一个发布的主机，只需要拉取有变化的那些层。"
+"协议为 `shared-live-exact-sha-v4`（`deploy/DEPLOY_PROTOCOL`）。v4 "
+"引入了[单一沙箱网络](../../docs/agents/specs/2026-09-23-agent-public-egress-design"
+".zh-CN.md)，移除了 Squid `egress` 产物，并要求每台 runner 主机设置 "
+"`AGENT_EGRESS_CHAT_NETWORK_POOL` 和 `AGENT_EGRESS_DNS_SERVER`。v3 的部署器不能安装 "
+"v4 发布，回滚也不能跨越这个边界。运行时标签沿用 `org.freeinference.runtime.*` "
+"命名空间；重命名需要单独做一次双读迁移。"
 
-#: ../../deploy/release/README.md:198
-msgid ""
-"When changing registry layout, verify whether the copy preserves the "
-"original index digest. Recreating an index or converting its format can "
-"change that digest and requires a reviewed lock update. Keep old "
-"addresses available until the rollback window closes."
-msgstr "调整镜像仓库布局时，要确认复制过去的镜像是否保留了原来的索引摘要。重新创建索引或转换格式都可能让摘要改变，这时就要更新锁定文件并经过评审。在回滚窗口结束之前，旧地址要一直可用。"
-
-#: ../../deploy/release/README.md:203
-msgid "Where this differs from the design document"
-msgstr "和设计文档不一样的地方"
-
-#: ../../deploy/release/README.md:205
-msgid ""
-"The [original release design](../../docs/agents/specs/2026-09-10-cloud-"
-"agent-release-fi-deploy-design.zh.md) is historical. The implemented "
-"differences are:"
-msgstr ""
-"[最初的发布设计](../../docs/agents/specs/2026-09-10-cloud-agent-release-fi-"
-"deploy-design.zh.md)已经是历史文档了。实际实现和它不同的地方有："
-
-#: ../../deploy/release/README.md:208
-msgid ""
-"**Deployment protocol v4.** `shared-live-exact-sha-v4` replaced the "
-"design's v2. v3 introduced the schema baseline rewrite; v4 introduced the"
-" [single sandbox network](../../docs/agents/specs/2026-09-23-agent-"
-"public-egress-design.zh-CN.md). It retired the Squid `egress` artifact "
-"and requires `AGENT_EGRESS_CHAT_NETWORK_POOL` and "
-"`AGENT_EGRESS_DNS_SERVER` on every runner host. v3 deployers cannot "
-"install v4 releases, and rollback does not cross this protocol boundary."
-msgstr ""
-"**部署协议是 v4。** 设计里写的是 v2，现在用的是 `shared-live-exact-sha-v4`。v3 引入了 schema "
-"baseline 的重写；v4 引入了[单一沙箱网络](../../docs/agents/specs/2026-09-23-agent-"
-"public-egress-design.zh-CN.md)，去掉了基于 Squid 的 `egress` 产物，并要求每台 runner "
-"主机都配置 `AGENT_EGRESS_CHAT_NETWORK_POOL` 和 `AGENT_EGRESS_DNS_SERVER`。v3 "
-"的部署脚本装不了 v4 的发布，回滚也不能跨过这条协议边界。"
-
-#: ../../deploy/release/README.md:215
-msgid ""
-"**Six images from five Dockerfiles.** The web Dockerfile builds twice "
-"because the mount prefix is compiled into the bundle. The retired egress "
-"image accounts for the original design's seventh artifact."
-msgstr ""
-"**五个 Dockerfile 产出六个镜像。** Web 的 Dockerfile "
-"要构建两次，因为挂载前缀是编译进前端包里的。最初设计里的第七个产物，就是现在已经退役的 egress 镜像。"
-
-#: ../../deploy/release/README.md:218
-msgid ""
-"**Existing runtime-label namespace.** Runtime labels remain "
-"`org.freeinference.runtime.*`. Renaming them requires a separate dual-"
-"read migration."
-msgstr ""
-"**运行时标签沿用原来的命名空间。** 运行时标签仍然叫 "
-"`org.freeinference.runtime.*`。要改名，需要单独做一次新旧名字同时读取的迁移。"
-
-#: ../../deploy/release/README.md:222
+#: ../../deploy/release/README.md:190
 msgid "Deploying a recipe"
 msgstr "部署 recipe"
 
-#: ../../deploy/release/README.md:224
+#: ../../deploy/release/README.md:192
 msgid ""
-"Verify the manifest against the downstream lock, verify the recipe's "
-"SHA-256 against the manifest, and resolve and verify its image digests "
-"before replacing services. Extract `recipe.tar.gz` into a release "
-"directory; it creates a `recipe/` directory containing deployment "
-"helpers, examples, and Compose templates without `build:` entries."
+"Before replacing services, verify the manifest against the downstream "
+"lock, the recipe's SHA-256 against the manifest, and the image digests. "
+"Extracting `recipe.tar.gz` creates a `recipe/` directory of deployment "
+"helpers, examples and Compose templates without `build:` entries."
 msgstr ""
-"替换服务之前，先拿下游的锁定文件核对清单，拿清单核对 recipe 的 SHA-256，再解析并核对各个镜像的摘要。把 "
-"`recipe.tar.gz` 解压到一个发布目录里，会得到一个 `recipe/` 目录，里面有部署辅助脚本、配置示例，以及不含 "
-"`build:` 的 Compose 模板。"
+"替换服务之前，先用下游锁文件核对清单，用清单核对配方的 SHA-256，并核实镜像 digest。解压 `recipe.tar.gz` 会得到一个"
+" `recipe/` 目录，其中有部署辅助脚本、示例和不含 `build:` 条目的 Compose 模板。"
 
-#: ../../deploy/release/README.md:230
+#: ../../deploy/release/README.md:197
 msgid ""
-"Both machines need Bash, Docker with Compose v2, and Python 3.12 or newer"
-" for recipe helpers. The execution host additionally needs its existing "
-"Kata provisioning; deployment does not install a sandbox runtime. Install"
-" the helper dependencies on each machine:"
+"Both machines need Bash, Docker with Compose v2, and Python 3.12 or "
+"newer. The execution host also needs its Kata provisioning; deployment "
+"installs no sandbox runtime. Install the helper dependencies on each "
+"machine:"
 msgstr ""
-"两台机器都需要 Bash、带 Compose v2 的 Docker，以及 Python 3.12 或更新版本（recipe "
-"的辅助脚本要用）。执行主机还需要事先配置好 Kata；部署过程不会帮你安装沙箱运行时。在每台机器上安装辅助脚本的依赖："
+"两台机器都需要 Bash、带 Compose v2 的 Docker，以及 Python 3.12 或更新版本。执行主机还需要事先完成 Kata "
+"配置；部署不会安装沙箱运行时。在每台机器上安装辅助脚本的依赖："
+
+#: ../../deploy/release/README.md:207
+msgid ""
+"Keep `DEPLOY_ROOT` the same across releases: its optional `.env`, "
+"`.deployed-sha` and `.shared-live-ready` describe the deployment, while "
+"each recipe can be extracted anywhere. A new control plane needs no "
+"`.env`; its first `prepare` phase starts the `keys` service, which "
+"generates its keys ([new installation](../../docs/developer/operations.md"
+"#admin-settings)). A host's `.env` is the one server setup writes; a "
+"downstream deployer that manages hosts itself writes the same variables "
+"([host configuration](../../docs/developer/operations.md#host-"
+"configuration-reference)). An existing installation keeps its "
+"configuration, Compose project name, host enrollment root and Docker data"
+" root. Generated Compose files stay under `DEPLOY_ROOT`, so relative "
+"mounts keep their data paths. `AGENT_WEB_VARIANT` may be omitted or "
+"`root`; an `AGENT_WEB_BASE_PATH` with a value is refused."
+msgstr ""
+"各版本之间保持 `DEPLOY_ROOT` 不变：其中可选的 `.env`、`.deployed-sha` 和 `.shared-live-"
+"ready` 描述这个部署，而每个配方可以解压到任何地方。新的控制平面不需要 `.env`；它的第一个 `prepare` 阶段会启动 "
+"`keys` 服务来生成密钥（[新安装](../../docs/developer/operations.md#admin-"
+"settings)）。主机的 `.env` "
+"由服务器设置写入；自己管理主机的下游部署器写入相同的变量（[主机配置](../../docs/developer/operations.md"
+"#host-configuration-reference)）。已有安装保留其配置、Compose 项目名、主机注册根目录和 Docker "
+"数据根目录。生成的 Compose 文件留在 `DEPLOY_ROOT` "
+"下，因此相对挂载保持原来的数据路径。`AGENT_WEB_VARIANT` 可以省略或设为 `root`；设置了值的 "
+"`AGENT_WEB_BASE_PATH` 会被拒绝。"
+
+#: ../../deploy/release/README.md:221
+msgid ""
+"Set the artifact environment on the control-plane machine, and the same "
+"on the execution host with its own root (`DEPLOY_ROOT=/srv/cloud-agent-"
+"host`). Use absolute paths: `deploy.sh` changes into `DEPLOY_ROOT` before"
+" it reads `AGENT_RELEASE_MANIFEST`."
+msgstr ""
+"在控制平面机器上设置产物模式的环境变量，执行主机上设置相同的变量，但使用它自己的根目录（`DEPLOY_ROOT=/srv/cloud-"
+"agent-host`）。请使用绝对路径：`deploy.sh` 会先切换到 `DEPLOY_ROOT`，再读取 "
+"`AGENT_RELEASE_MANIFEST`。"
+
+#: ../../deploy/release/README.md:233
+msgid ""
+"The manifest supplies the commit and image references, so remove old "
+"image and commit overrides; a conflicting effective Compose value is "
+"refused before anything is pulled. The default `source` mode still "
+"deploys from a checkout."
+msgstr ""
+"清单提供提交和镜像引用，所以请删掉旧的镜像和提交覆盖项；有冲突的 Compose 实际取值会在拉取任何内容之前被拒绝。默认的 `source` "
+"模式仍从仓库副本部署。"
+
+#: ../../deploy/release/README.md:237
+msgid "Rolling out both machines"
+msgstr "依次部署两台机器"
+
+#: ../../deploy/release/README.md:239
+msgid ""
+"Run the phases in this order, with the environment above set on each "
+"machine:"
+msgstr "在每台机器上设置好上面的环境变量后，按以下顺序运行各阶段："
 
 #: ../../deploy/release/README.md:241
 msgid ""
-"Keep `DEPLOY_ROOT` stable across releases. Its optional `.env`, "
-"`.deployed-sha`, and `.shared-live-ready` describe the persistent "
-"deployment, while each extracted recipe can live elsewhere. For a new "
-"installation, create that root. The control plane needs no `.env`: its "
-"first `prepare` phase starts the `keys` service, which generates the "
-"database, account and settings keys into the `agent-keys` volume, as "
-"described in [the new-installation "
-"steps](../../docs/developer/operations.md#admin-settings); a `.env` holds"
-" only the overrides the deployment chooses. A host's `.env` is the one "
-"server setup writes; a downstream deployer that manages its hosts itself "
-"writes the same variables ([host "
-"configuration](../../docs/developer/operations.md#host-configuration-"
-"reference)). For an existing installation, retain its configuration, "
-"Compose project name, host enrollment root, and Docker data root. "
-"Generated Compose files stay under `DEPLOY_ROOT` so relative mounts "
-"preserve their data paths; the edge proxy configuration comes from the "
-"selected recipe."
-msgstr ""
-"在各个版本之间保持 `DEPLOY_ROOT` 不变。其中可选的 `.env`、`.deployed-sha` 和 `.shared-live-"
-"ready` 描述持久的部署，而每个解压出来的 recipe 可以放在别处。新安装时创建这个根目录即可。控制平面不需要 `.env`：它的首次 "
-"`prepare` 阶段会启动 `keys` 服务，把数据库、账号和设置密钥生成到 `agent-keys` volume "
-"中，如[新安装步骤](../../docs/developer/operations.md#admin-settings)所述；`.env` "
-"只保存部署自己选择的覆盖项。主机的 `.env` 由 server setup "
-"写入；自行管理主机的下游部署方写入同样的变量（[主机配置](../../docs/developer/operations.md#host-"
-"configuration-reference)）。对已有安装，保留其配置、Compose 项目名、主机登记根目录和 Docker "
-"数据根目录。生成的 Compose 文件留在 `DEPLOY_ROOT` 下，使相对挂载保持其数据路径；edge 代理配置来自所选的 "
-"recipe。"
+"Prepare both sides. They may run in parallel and replace no serving "
+"service."
+msgstr "准备两边。它们可以并行运行，不会替换任何正在服务的组件。"
 
-#: ../../deploy/release/README.md:257
-msgid ""
-"`AGENT_WEB_VARIANT` may be omitted or set to `root`, the only web image. "
-"A leftover `AGENT_WEB_BASE_PATH` with a value is refused."
-msgstr ""
-"`AGENT_WEB_VARIANT` 可以不设，或者设为 `root`，这是唯一的 Web 镜像。如果还留着有值的 "
-"`AGENT_WEB_BASE_PATH`，部署会被拒绝。"
-
-#: ../../deploy/release/README.md:260
-msgid "Set the artifact environment on the control-plane machine:"
-msgstr "在控制平面机器上设置产物模式的环境变量："
-
-#: ../../deploy/release/README.md:269
-msgid ""
-"Set the same release and interpreter on the execution host, with its own "
-"root:"
-msgstr "在执行主机上设置同一个发布和同一个解释器，但用它自己的根目录："
-
-#: ../../deploy/release/README.md:278
-msgid ""
-"The manifest supplies the commit and owned image references. Remove old "
-"image and commit overrides when moving to artifact mode; any conflicting "
-"effective Compose values are refused before pulling or replacing "
-"services. The default `source` mode remains available for checkout-based "
-"deployment."
-msgstr ""
-"commit 和自有镜像的引用都由清单提供。切换到产物模式时，要把以前覆盖镜像和 commit 的设置删掉；最终生效的 Compose "
-"值只要有冲突，在拉取镜像或替换服务之前就会被拒绝。默认的 `source` 模式仍然可以用于基于源码仓库的部署。"
-
-#: ../../deploy/release/README.md:283
-msgid "Deploying the two in the order the design specifies"
-msgstr "按设计规定的顺序部署两台机器"
-
-#: ../../deploy/release/README.md:285
-msgid ""
-"Use phases to coordinate the machines. With the environment above set in "
-"each machine's shell, run these commands in order:"
-msgstr "用阶段（phase）来协调两台机器。在每台机器的 shell 里设好上面的环境变量，然后按顺序执行："
-
-#: ../../deploy/release/README.md:288
-msgid ""
-"Prepare both sides; these commands may run in parallel on their "
-"respective machines and replace no serving services."
-msgstr "两边各自做准备。这两条命令可以在各自的机器上同时跑，不会替换任何正在服务的服务。"
-
-#: ../../deploy/release/README.md:298
+#: ../../deploy/release/README.md:251
 msgid ""
 "Prepare the database on the control-plane machine. This migrates and "
-"checks the identity namespace. On a cold machine it also starts the API "
-"and MCP listener needed by the host readiness probes; existing listeners "
-"stay in place."
-msgstr ""
-"在控制平面机器上准备数据库：执行迁移，并检查身份命名空间。如果是从零开始的机器，还会启动主机就绪探测要用到的 API 和 MCP "
-"监听器；已有的监听器保持不动。"
+"checks the identity namespace; on a cold machine it also starts the API "
+"and MCP listener that the host readiness probes need."
+msgstr "在控制平面机器上准备数据库。这一步执行迁移并检查身份命名空间；在冷启动的机器上，它还会启动主机就绪探测需要的 API 和 MCP 监听器。"
 
-#: ../../deploy/release/README.md:306
+#: ../../deploy/release/README.md:259
 msgid ""
 "Activate the execution host. It drains and replaces runners, checks the "
-"replacement, records the deployment, and publishes its generation."
-msgstr "激活执行主机：排空并替换 runner，检查新 runner，记录这次部署，并发布这台主机的新代次。"
+"replacement, records the deployment and publishes its generation."
+msgstr "激活执行主机。它排空并替换 runner，检查替换结果，记录部署并发布其 generation。"
 
-#: ../../deploy/release/README.md:313
+#: ../../deploy/release/README.md:266
 msgid ""
 "Activate the control plane. The readiness fence must pass before public "
 "services switch."
 msgstr "激活控制平面：必须先通过就绪栅栏，对外的服务才会切换过去。"
 
-#: ../../deploy/release/README.md:320
+#: ../../deploy/release/README.md:273
 msgid ""
-"Omitting `--phase` runs all phases for that side. Use the phased sequence"
-" for a coordinated rollout; two whole-script invocations cannot express "
-"the ordering above. Phases can be retried. Database preparation retains "
-"ownership of any listeners it started, and activation restarts those "
-"stopped during a failed attempt so they can accept the heartbeat the "
-"readiness fence needs."
+"Without `--phase`, a script runs all its phases, which cannot express "
+"this cross-machine order. Phases can be retried: database preparation "
+"keeps track of the listeners it started, and activation restarts any a "
+"failed attempt stopped so they can accept the heartbeat the fence needs. "
+"If the other machine fails and you abandon the rollout, remove the "
+"listeners started only for this cold deployment; serving listeners are "
+"left alone:"
 msgstr ""
-"不加 `--phase` "
-"会把这一边的所有阶段一口气跑完。要协调两台机器上线，就得按阶段执行；整段脚本各跑一次，是没办法保证上面这个顺序的。每个阶段都可以重试。数据库准备阶段会一直掌管它自己启动的监听器；激活阶段会把上次失败时停掉的监听器重新启动，好让它们能收到就绪栅栏需要的心跳。"
+"不带 `--phase` "
+"时，脚本会运行它的所有阶段，这样无法表达跨机器的顺序。各阶段可以重试：数据库准备会记住它启动过的监听器，激活会重新启动上次失败尝试停掉的监听器，让它们能接收栅栏需要的心跳。如果另一台机器失败而你放弃了这次部署，请删除仅为这次冷部署启动的监听器；正在服务的监听器不受影响："
 
-#: ../../deploy/release/README.md:326
+#: ../../deploy/release/README.md:284
 msgid ""
-"If the other machine fails and activation is abandoned, clean up "
-"listeners started solely for this cold deployment on the control-plane "
-"machine:"
-msgstr "如果另一台机器失败了、决定放弃这次激活，就在控制平面机器上，把只为这次从零部署而启动的监听器清理掉："
-
-#: ../../deploy/release/README.md:333
-msgid ""
-"This leaves previously serving listeners alone. Image pulls and host Kata"
-" checks precede runner drain. Migrations, identity-namespace "
-"verification, exact-commit readiness, reverse-sandbox-manager probes, and"
-" deferred host readiness publication keep their deployment ordering. A "
-"failed readiness check prevents activation of the replacement control-"
-"plane stack."
+"Image pulls and host Kata checks run before runners drain. A failed "
+"readiness check keeps the replacement control-plane stack from "
+"activating. The script tests run extracted recipes with Docker calls "
+"recorded and failures injected; they do not prove a particular host, live"
+" Kata runtime or registry release, so verify those when cutting over an "
+"environment."
 msgstr ""
-"之前就在服务的监听器不受影响。镜像拉取和主机的 Kata 检查都在排空 runner 之前完成。迁移、身份命名空间核对、按确切 commit "
-"的就绪判断、反向 sandbox manager "
-"探测，以及延后发布的主机就绪状态，都按原定的部署顺序进行。只要就绪检查失败，新的控制平面服务就不会被激活。"
+"镜像拉取和主机 Kata 检查在排空 runner 之前进行。就绪检查失败时，替换用的控制平面不会被激活。脚本测试会运行解压出的配方，记录 "
+"Docker 调用并注入故障；它们不能证明某台具体主机、实际运行的 Kata 或镜像仓库中的发布是否可用，所以切换环境时要核实这些。"
 
-#: ../../deploy/release/README.md:339
-msgid ""
-"Script tests run extracted recipes with Docker calls recorded and "
-"failures injected, and use the real Compose environment parser when "
-"available. They do not establish readiness of a particular Linux host, "
-"live Kata runtime, or registry release; verify those during environment "
-"cutover."
-msgstr ""
-"脚本测试会在解压出来的 recipe 上运行，期间记录所有 Docker 调用并注入故障；如果环境里有真实的 Compose "
-"环境变量解析器，也会用上。但这些测试证明不了某台具体的 Linux 主机、真实运行的 "
-"Kata，或者镜像仓库里的某个发布已经就绪；这些要在实际切换环境时逐一确认。"
-
-#: ../../deploy/release/README.md:344
+#: ../../deploy/release/README.md:290
 msgid "What a downstream deployment still owns"
 msgstr "下游部署仍要自己负责的事"
 
-#: ../../deploy/release/README.md:346
+#: ../../deploy/release/README.md:292
 msgid ""
-"The upstream publication workflow does not deploy a named environment. A "
-"consuming distribution must:"
-msgstr "上游的发布工作流不会部署到任何具体的环境。使用它的发行版必须："
+"This repository publishes artifacts and deploys nothing. A consuming "
+"distribution must:"
+msgstr "本仓库只发布产物，不部署任何东西。使用它的发行版必须："
 
-#: ../../deploy/release/README.md:349
+#: ../../deploy/release/README.md:295
 msgid ""
 "pin the exact manifest bytes in a reviewed lock and verify the schema, "
-"recipe hash, registry digests, image labels, and platforms;"
-msgstr "在评审过的锁定文件里固定清单的原始字节，并核对 schema、recipe 哈希、镜像仓库摘要、镜像标签和平台；"
+"recipe hash, registry digests, image labels and platforms;"
+msgstr "在经过审查的锁文件中固定清单的原始字节，并核实 schema、配方哈希、镜像仓库 digest、镜像标签和平台；"
 
-#: ../../deploy/release/README.md:351
+#: ../../deploy/release/README.md:297
 msgid ""
 "check protocol compatibility and the manifest's `verified_upgrade_from` "
-"and `verified_rollback_to` records; an empty list means that path was not"
-" verified;"
+"and `verified_rollback_to` records, where an empty list means the path "
+"was not verified;"
 msgstr ""
-"检查协议是否兼容，并查看清单里的 `verified_upgrade_from` 和 `verified_rollback_to` "
-"记录；列表为空，说明这条升级或回滚路径没有验证过；"
+"检查协议兼容性以及清单中的 `verified_upgrade_from` 和 `verified_rollback_to` "
+"记录，空列表表示该路径未经验证；"
 
-#: ../../deploy/release/README.md:353
-msgid ""
-"run preparation, Kata checks, and environment acceptance on the actual "
-"hosts;"
-msgstr "在实际的主机上执行准备阶段、Kata 检查和环境验收；"
+#: ../../deploy/release/README.md:300
+msgid "run preparation, Kata checks and environment acceptance on its own hosts;"
+msgstr "在自己的主机上运行准备、Kata 检查和环境验收；"
 
-#: ../../deploy/release/README.md:354
+#: ../../deploy/release/README.md:301
 msgid ""
-"keep environment configuration, deployment records, and recovery material"
-" outside this upstream repository."
-msgstr "环境配置、部署记录和恢复材料都放在这个上游仓库之外。"
+"keep environment configuration, deployment records and recovery material "
+"outside this repository."
+msgstr "把环境配置、部署记录和恢复材料保存在本仓库之外。"
 
-#: ../../deploy/release/README.md:357
+#: ../../deploy/release/README.md:304
 msgid ""
-"Retain previous verified manifests, recipes, reviewed hashes and digest-"
-"addressed images separately from the persistent deployment roots. "
-"Artifact-mode host rollouts receive only one manifest and cannot "
-"automatically select an older release. Follow the [backup and recovery "
-"runbook](../../docs/developer/disaster-recovery.md#recover-a-previous-"
-"artifact-release) to check database/protocol compatibility and run the "
-"same phased readiness sequence with a previous verified recipe; a "
-"previous release is not automatically compatible with newer installed "
-"migrations."
+"Keep previous verified manifests, recipes, hashes and digest-addressed "
+"images apart from the deployment roots. An artifact-mode host rollout "
+"receives one manifest and cannot select an older release by itself, and a"
+" previous release is not automatically compatible with newer migrations. "
+"To roll back, follow [recover a previous artifact "
+"release](../../docs/developer/disaster-recovery.md#recover-a-previous-"
+"artifact-release)."
 msgstr ""
-"之前验证过的清单、recipe、评审过的哈希和按摘要寻址的镜像，要和长期使用的部署根目录分开保存。产物模式下，主机上线时只拿到一份清单，没法自动选用更早的发布。请按[备份与恢复手册](../../docs/developer"
-"/disaster-recovery.md#recover-a-previous-artifact-"
-"release)检查数据库和部署协议是否兼容，然后用上一个验证过的 "
-"recipe，走同样的分阶段就绪流程。注意，上一个发布并不一定兼容已经装上的、更新的迁移。"
+"把之前验证过的清单、配方、哈希和按 digest "
+"寻址的镜像与部署根目录分开保存。产物模式下的主机部署只接收一个清单，不能自行选择更早的发布；而且之前的发布并不自动兼容较新的迁移。要回滚，请按照[恢复之前的产物发布](../../docs/developer"
+"/disaster-recovery.md#recover-a-previous-artifact-release)操作。"
 

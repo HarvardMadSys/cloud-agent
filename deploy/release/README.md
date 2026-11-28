@@ -1,42 +1,39 @@
 # Releases
 
-A Cloud Agent release consists of `release.json` and `recipe.tar.gz`. The
-manifest identifies one source commit, every owned image by registry digest,
-each image's platforms, the sandbox runtime catalog, the database revision,
-the deployment protocol, and recorded compatibility checks. The recipe contains
-scripts and configuration templates for installing those images without a
-source checkout.
-
-A downstream distribution pins the SHA-256 of the manifest's exact bytes in its
-own reviewed lock. The manifest, in turn, pins the recipe archive and images.
+A Cloud Agent release is two files. `release.json`, the manifest, names one
+source commit, every owned image by registry digest with its platforms, the
+sandbox runtime catalog, the database revision, the deployment protocol and
+the recorded compatibility checks. `recipe.tar.gz` holds the scripts and
+Compose templates that install those images without a source checkout. A
+downstream distribution pins the SHA-256 of the manifest's exact bytes in its
+own reviewed lock; the manifest pins the recipe and images.
 
 | File | Purpose |
 |---|---|
-| [artifact_catalog.json](artifact_catalog.json) | One dependency-free source for build cells, native platforms, web mount/API variants, runner labels, and smoke keys. |
-| [manifest.schema.json](manifest.schema.json) | Published manifest schema; consumers validate against it. |
-| [release_manifest.py](release_manifest.py) | Generates a complete manifest from build records. |
-| [generate_artifact_contracts.py](generate_artifact_contracts.py) | Deterministically projects the catalog into the published schema vocabulary/cardinality and publication matrix. |
-| [build_recipe.py](build_recipe.py) | Packages the explicit recipe file list into a deterministic archive. |
-| [release_env.py](release_env.py), [artifact_compose.py](artifact_compose.py) | Validate release configuration and render digest-bound deployment inputs. |
+| [artifact_catalog.json](artifact_catalog.json) | The single source for build cells, native platforms, web variants, runner labels and smoke keys |
+| [manifest.schema.json](manifest.schema.json) | The published manifest schema that consumers validate against |
+| [release_manifest.py](release_manifest.py) | Generates the manifest from build records |
+| [generate_artifact_contracts.py](generate_artifact_contracts.py) | Projects the catalog into the schema and the publication matrix |
+| [build_recipe.py](build_recipe.py) | Packages the explicit recipe file list into a deterministic archive |
+| [release_env.py](release_env.py), [artifact_compose.py](artifact_compose.py) | Validate release configuration and render digest-bound deployment inputs |
 
-After editing catalog metadata, regenerate and check its reviewed projections:
+After editing the catalog, regenerate and check its projections:
 
 ```bash
 python3 deploy/release/generate_artifact_contracts.py --write
 python3 deploy/release/generate_artifact_contracts.py --check
 ```
 
-Manifest-visible changes (role, variant, base path, platform, or cell
-cardinality) are locked by `manifest_contract.artifact_shape_sha256`. Review
-their compatibility and schema-version impact, then acknowledge that decision
-explicitly with `--write --accept-contract-change`; ordinary generation will
-refuse to bless it. Behavior remains independent: a new catalog cell still
-needs a Dockerfile, a real case in `smoke.py`, deployment integration, and an
-independent contract fixture when compatibility changes.
+A change visible in the manifest (role, variant, base path, platform or cell
+count) changes `manifest_contract.artifact_shape_sha256`. Review its
+compatibility and schema impact, then accept it with
+`--write --accept-contract-change`; plain `--write` refuses. A new catalog
+cell still needs a Dockerfile, a real case in `smoke.py`, deployment
+integration, and a contract fixture when compatibility changes.
 
-## What the generator checks, and what it deliberately does not
+## What the generator checks
 
-The generator requires all five artifacts, with distinct digests and exactly
+The generator requires these five artifacts, with distinct digests and exactly
 these platforms:
 
 | Role | Variant | Platform |
@@ -47,63 +44,52 @@ these platforms:
 | `sandbox` | — | `linux/amd64` |
 | `tunnel` | — | `linux/amd64` |
 
-The `agents` web variant (base path `/agents`) is retired: it is no longer
-built, and the schema keeps accepting it in published v1 manifests
-(`manifest_contract.retired_web_variants`) so a rollback still validates.
+The `agents` web variant (base path `/agents`) is no longer built, but the
+schema still accepts it in v1 manifests (`manifest_contract.retired_web_variants`)
+so that a rollback validates. New manifests name the source repository
+`HarvardMadSys/cloud-agent`, and the generator accepts a `publisher_run_url`
+only under that name. Releases published before 2026-11-10 carry the former
+name, `HarvardMadSys/hybridInference-cloud-agent`, in `source_repository`,
+`publisher_run_url` and the recipe URL; the schema accepts exactly these two
+names.
 
-New manifests name the source repository `HarvardMadSys/cloud-agent`, and the
-generator accepts a `publisher_run_url` only under that name. The repository
-was `HarvardMadSys/hybridInference-cloud-agent` until 2026-11-10, and releases
-published before then carry that name in `source_repository`,
-`publisher_run_url`, and the recipe URL. The schema accepts exactly these two
-names, so those releases still validate.
-
-Image references must use digests under this organization's registry. The
+Image references must be digests under this organization's registry. The
 schema enforces role and web-variant cardinality, and the generator validates
-its output against that schema before writing it. The generator also checks
-that each runtime's `default` appears in its `versions`; this relationship
-cannot be expressed by the published JSON Schema, so consumers must check it
-separately.
-
-Version fields come from their sources: `deploy_protocol` from
+its output against the schema before writing it. It also checks that each
+runtime's `default` appears in its `versions`, which JSON Schema cannot
+express, so consumers must check that themselves. `deploy_protocol` comes from
 `deploy/DEPLOY_PROTOCOL`, `database_revision` from Alembic's script directory,
-and `runtime_catalog` from the sandbox image's labels. Runtime versions should
-not be supplied as a second hand-maintained list.
+and `runtime_catalog` from the sandbox image's labels.
 
 The generator does not query the registry. A downstream resolver must verify
-that each digest exists, carries the declared platforms, and has the expected
+that each digest exists, has the declared platforms, and carries the expected
 `org.opencontainers.image.revision` and `io.hybridinference.artifact.role`
-labels on each platform image. Manifest validation alone does not prove those
-claims.
+labels on each platform image.
 
 ## Producing one
 
-[The publication workflow](../../.github/workflows/publish.yml) handles pushes
-to `dev`, successful CI completion, and manual dispatch for a `dev` commit with
-successful CI. A push can build alongside CI, but publication waits for the
-newest push CI run on that exact commit to succeed. A successful CI rerun can
-trigger publication later.
+[The publication workflow](../../.github/workflows/publish.yml) runs on pushes
+to `dev`, on successful CI, and by manual dispatch for a `dev` commit with
+successful CI. A push builds alongside CI, but publishes only after the newest
+push CI run on that commit succeeds. The workflow:
 
-The workflow:
-
-1. Verifies that the commit is on `dev` and leaves an existing release unchanged.
+1. Checks that the commit is on `dev`, and leaves an existing release
+   unchanged.
 2. Builds and pushes each artifact by digest with `SOURCE_COMMIT` set to the
-   full commit SHA. It pulls the digest back, smoke-tests the pulled image, and
-   records its digest, platform, and labels.
-3. Assembles the six cell records, builds the recipe, and writes the manifest.
-4. Runs control-plane integration acceptance on those exact candidate files.
-5. Waits for CI success, creates a draft release tagged `agent-<full-sha>`,
-   uploads both assets, then makes the release visible. A failed upload deletes
-   the draft.
+   full commit SHA, pulls the digest back, smoke-tests it, and records its
+   digest, platform and labels.
+3. Assembles the five cell records, builds the recipe and writes the manifest.
+4. Runs control-plane integration acceptance on those exact files.
+5. Creates a draft release tagged `agent-<full-sha>`, uploads both files and
+   makes it visible; a failed upload deletes the draft.
 
-Failed or cancelled CI leaves any built images in the registry without a
-published manifest. The release workflow has no pull-request trigger and runs
-merged code. It publishes artifacts; it does not deploy a named environment.
+Failed or cancelled CI leaves built images in the registry without a
+manifest. The workflow has no pull-request trigger, and it publishes
+artifacts without deploying any environment.
 
-For a manual generation run from the repository root, collect the six
-publication cell JSON files in `cells/`. Set `SOURCE_COMMIT` to their full
-40-character SHA and `PUBLISHER_RUN_URL` to the actual publisher's Actions run
-URL, then use the same generation commands as the workflow:
+To generate by hand from the repository root, put the five cell JSON files in
+`cells/`, and set `SOURCE_COMMIT` to their full 40-character SHA and
+`PUBLISHER_RUN_URL` to the publisher's Actions run URL:
 
 ```bash
 mkdir -p release
@@ -122,114 +108,94 @@ uv run python -m deploy.release.release_manifest \
   --output release/release.json
 ```
 
-`inputs.json` contains `source_commit`, `artifacts`, and `runtime_labels`.
-`runtime_labels` is the sandbox's label map from `docker image inspect`, matching
-what the host reads when stamping attempts. The manifest is written atomically
-only after all checks pass.
+`inputs.json` holds `source_commit`, `artifacts` and `runtime_labels`, the
+sandbox's label map from `docker image inspect` (what the host reads when
+stamping attempts). The manifest is written atomically, after every check
+passes.
 
-## Starting, not just building
+## Smoke tests
 
-[smoke.py](smoke.py) starts each artifact and checks its identity labels. CI and
-publication use the same implementation; publication applies it to images pulled
-back from the registry.
+[smoke.py](smoke.py) starts each artifact and checks its identity labels. CI
+and publication share it; publication runs it on the images pulled back from
+the registry.
 
-| Artifact | Smoke-test evidence |
+| Artifact | What starting it proves |
 |---|---|
-| Control | Migrates real Postgres with `alembic upgrade head`, then answers `/healthz`. |
-| Web, both variants | Serves `/login` under the selected mount prefix and renders runtime site identity. |
-| Runner | Imports its modules and provides the Docker CLI and `nft`. |
-| Sandbox | Each Agent CLI reports the version declared in its image labels. |
-| Tunnel | Runs its entrypoint and fails clearly for an unreachable peer. |
+| Control | Migrates real Postgres with `alembic upgrade head`, then answers `/healthz` |
+| Web | Serves `/login` and renders the runtime site identity |
+| Runner | Imports its modules and has the Docker CLI and `nft` |
+| Sandbox | Each Agent CLI reports the version its image labels declare |
+| Tunnel | Runs its entrypoint and fails clearly for an unreachable peer |
 
 The tests also check `org.opencontainers.image.revision`,
-`io.hybridinference.artifact.role`, and the web variant's
+`io.hybridinference.artifact.role` and the web image's
 `io.hybridinference.artifact.base_path`. Dockerfiles default the revision to
-`unknown`; publication must supply the source commit. These checks establish
-startup behavior, not successful job execution or
-Kata readiness on an execution host.
+`unknown`, so publication must supply the commit. None of this proves that a
+job runs or that Kata works on a host.
 
 ## Control-plane integration acceptance
 
-[acceptance.py](acceptance.py) installs the candidate from an extracted recipe
-in a directory without application source or Dockerfiles. It runs the real
-control-plane deployer in artifact mode, pulls the candidate digests, and
-compares running containers with the manifest through
-[accept_artifacts.py](accept_artifacts.py).
+[acceptance.py](acceptance.py) installs the candidate from an extracted
+recipe, in a directory with no application source or Dockerfiles. It runs the
+real control-plane deployer in artifact mode, pulls the candidate digests, and
+compares the running containers with the manifest through
+[accept_artifacts.py](accept_artifacts.py), by registry `RepoDigests` and role
+labels.
 
-| Acceptance establishes | Remaining environment acceptance |
+| Acceptance establishes | Left to environment acceptance |
 |---|---|
-| Checkout-free installation with no image build | Execution host, Kata, and real jobs |
-| Registry pulls and digest identity of running containers | Any additional architecture |
+| Installation with no checkout and no image build | An execution host, Kata and real jobs |
+| Registry pulls and the digest of each running container | Any other architecture |
 | The read-only account-namespace check, then real Postgres migrations | Browser sign-in |
-| Healthy API and MCP listeners; correct web variant labels | User-visible console behavior |
-| Refusal of conflicting configured images before pulling | Independent registry validation by the downstream resolver |
+| Healthy API and MCP listeners and the right web labels | User-visible console behavior |
+| Refusal of conflicting configured images before pulling | Registry validation by the downstream resolver |
 
-The exact-commit host readiness fence is expected to time out: this acceptance
-has no execution host. The test asserts that the deploy reached the fence after
-all earlier stages passed. It does not bypass or weaken that check.
+There is no execution host, so the exact-commit host readiness fence is
+expected to time out; the test asserts that the deploy reached it after every
+earlier stage passed. Because the deployer starts `web` only after the fence,
+acceptance then starts it with the generated Compose file and
+`--no-build --pull never`. The workflow publishes the same bytes that passed.
 
-Because normal deployment starts `web` after the fence, acceptance starts it
-explicitly using the generated Compose file with `--no-build --pull never`.
-Container comparisons use registry `RepoDigests`, rather than image IDs, and
-role labels, rather than registry paths. The workflow publishes the same
-manifest and recipe bytes that passed this acceptance.
+## Registry layout
 
-## Registry layout is not part of this contract
-
-The image's role label defines its role. Repository names and human-readable
-tags are storage conventions; deployments select the manifest's digests.
+Deployments select images by the manifest's digests and read each image's role
+from its label. Repository names and tags are storage conventions.
 
 | Package | Contents |
 |---|---|
-| `ghcr.io/harvardmadsys/cloud-agent` | Control, both web variants, runner, and tunnel |
-| `ghcr.io/harvardmadsys/cloud-agent-sandbox` | Sandbox, with a separate visibility setting for bundled third-party CLIs |
+| `ghcr.io/harvardmadsys/cloud-agent` | Control, web, runner and tunnel |
+| `ghcr.io/harvardmadsys/cloud-agent-sandbox` | Sandbox, with its own visibility setting because it bundles third-party CLIs |
 
-After its smoke test passes, each digest receives a tag such as
-`control-<sha>`, `web-root-<sha>`, or `sandbox-<sha>`. These tags help people
-inspect images and are not deployment selectors.
+After its smoke test passes, each digest is also tagged, for example
+`control-<sha>`, `web-root-<sha>` or `sandbox-<sha>`, to help people inspect
+images. Tags such as `buildcache-sandbox-2026-w42` are the publication
+workflow's layer cache, a new one each ISO week; unchanged layers keep their
+digests, so a host on the previous release pulls only what changed. When
+moving images between registries, check that the copy keeps the original
+index digest: a recreated or converted index has a new digest and needs a
+reviewed lock update. Keep old addresses until the rollback window closes.
 
-Tags such as `buildcache-sandbox-2026-w42` are the publication workflow's layer
-cache, not images. Only that workflow writes them, and it starts a new one each
-ISO week. Because a layer whose inputs did not change keeps its digest from one
-release to the next, a host that runs the previous release pulls only the
-layers that changed.
+## Deployment protocol
 
-When changing registry layout, verify whether the copy preserves the original
-index digest. Recreating an index or converting its format can change that
-digest and requires a reviewed lock update. Keep old addresses available until
-the rollback window closes.
-
-## Where this differs from the design document
-
-The [original release design](../../docs/agents/specs/2026-09-10-cloud-agent-release-fi-deploy-design.zh.md)
-is historical. The implemented differences are:
-
-- **Deployment protocol v4.** `shared-live-exact-sha-v4` replaced the design's
-  v2. v3 introduced the schema baseline rewrite; v4 introduced the
-  [single sandbox network](../../docs/agents/specs/2026-09-23-agent-public-egress-design.zh-CN.md).
-  It retired the Squid `egress` artifact and requires
-  `AGENT_EGRESS_CHAT_NETWORK_POOL` and `AGENT_EGRESS_DNS_SERVER` on every runner
-  host. v3 deployers cannot install v4 releases, and rollback does not cross
-  this protocol boundary.
-- **Six images from five Dockerfiles.** The web Dockerfile builds twice because
-  the mount prefix is compiled into the bundle. The retired egress image
-  accounts for the original design's seventh artifact.
-- **Existing runtime-label namespace.** Runtime labels remain
-  `org.freeinference.runtime.*`. Renaming them requires a separate dual-read
-  migration.
+The protocol is `shared-live-exact-sha-v4` (`deploy/DEPLOY_PROTOCOL`). v4
+introduced the
+[single sandbox network](../../docs/agents/specs/2026-09-23-agent-public-egress-design.zh-CN.md),
+removed the Squid `egress` artifact, and requires
+`AGENT_EGRESS_CHAT_NETWORK_POOL` and `AGENT_EGRESS_DNS_SERVER` on every
+runner host. A v3 deployer cannot install a v4 release, and rollback does not
+cross the boundary. Runtime labels keep the `org.freeinference.runtime.*`
+namespace; renaming them needs a separate dual-read migration.
 
 ## Deploying a recipe
 
-Verify the manifest against the downstream lock, verify the recipe's SHA-256
-against the manifest, and resolve and verify its image digests before replacing
-services. Extract `recipe.tar.gz` into a release directory; it creates a
-`recipe/` directory containing deployment helpers, examples, and Compose
-templates without `build:` entries.
+Before replacing services, verify the manifest against the downstream lock,
+the recipe's SHA-256 against the manifest, and the image digests. Extracting
+`recipe.tar.gz` creates a `recipe/` directory of deployment helpers, examples
+and Compose templates without `build:` entries.
 
-Both machines need Bash, Docker with Compose v2, and Python 3.12 or newer for
-recipe helpers. The execution host additionally needs its existing Kata
-provisioning; deployment does not install a sandbox runtime. Install the helper
-dependencies on each machine:
+Both machines need Bash, Docker with Compose v2, and Python 3.12 or newer. The
+execution host also needs its Kata provisioning; deployment installs no
+sandbox runtime. Install the helper dependencies on each machine:
 
 ```bash
 python3.12 -m venv /opt/cloud-agent/deployer
@@ -237,26 +203,24 @@ python3.12 -m venv /opt/cloud-agent/deployer
   -r /opt/cloud-agent/release/recipe/deploy/release/requirements.txt
 ```
 
-Keep `DEPLOY_ROOT` stable across releases. Its optional `.env`,
-`.deployed-sha`, and `.shared-live-ready` describe the persistent deployment,
-while each extracted recipe can live elsewhere. For a new installation, create
-that root. The control plane needs no `.env`: its first `prepare` phase starts
-the `keys` service, which generates the database, account and settings keys
-into the `agent-keys` volume, as described in
-[the new-installation steps](../../docs/developer/operations.md#admin-settings);
-a `.env` holds only the overrides the deployment chooses. A host's `.env` is
-the one server setup writes; a downstream deployer that manages its hosts
-itself writes the same variables
+Keep `DEPLOY_ROOT` the same across releases: its optional `.env`,
+`.deployed-sha` and `.shared-live-ready` describe the deployment, while each
+recipe can be extracted anywhere. A new control plane needs no `.env`; its
+first `prepare` phase starts the `keys` service, which generates its keys
+([new installation](../../docs/developer/operations.md#admin-settings)). A
+host's `.env` is the one server setup writes; a downstream deployer that
+manages hosts itself writes the same variables
 ([host configuration](../../docs/developer/operations.md#host-configuration-reference)).
-For an existing installation, retain its configuration, Compose project name,
-host enrollment root, and Docker data root. Generated Compose files stay under
-`DEPLOY_ROOT` so relative mounts preserve their data paths; the edge proxy
-configuration comes from the selected recipe.
+An existing installation keeps its configuration, Compose project name, host
+enrollment root and Docker data root. Generated Compose files stay under
+`DEPLOY_ROOT`, so relative mounts keep their data paths.
+`AGENT_WEB_VARIANT` may be omitted or `root`; an `AGENT_WEB_BASE_PATH` with a
+value is refused.
 
-`AGENT_WEB_VARIANT` may be omitted or set to `root`, the only web image. A
-leftover `AGENT_WEB_BASE_PATH` with a value is refused.
-
-Set the artifact environment on the control-plane machine:
+Set the artifact environment on the control-plane machine, and the same on the
+execution host with its own root (`DEPLOY_ROOT=/srv/cloud-agent-host`). Use
+absolute paths: `deploy.sh` changes into `DEPLOY_ROOT` before it reads
+`AGENT_RELEASE_MANIFEST`.
 
 ```bash
 export AGENT_DEPLOY_MODE=artifacts
@@ -265,27 +229,16 @@ export AGENT_DEPLOY_PYTHON=/opt/cloud-agent/deployer/bin/python
 export DEPLOY_ROOT=/srv/cloud-agent-control
 ```
 
-Set the same release and interpreter on the execution host, with its own root:
+The manifest supplies the commit and image references, so remove old image
+and commit overrides; a conflicting effective Compose value is refused before
+anything is pulled. The default `source` mode still deploys from a checkout.
 
-```bash
-export AGENT_DEPLOY_MODE=artifacts
-export AGENT_RELEASE_MANIFEST=/opt/cloud-agent/release/release.json
-export AGENT_DEPLOY_PYTHON=/opt/cloud-agent/deployer/bin/python
-export DEPLOY_ROOT=/srv/cloud-agent-host
-```
+### Rolling out both machines
 
-The manifest supplies the commit and owned image references. Remove old image
-and commit overrides when moving to artifact mode; any conflicting effective
-Compose values are refused before pulling or replacing services. The default
-`source` mode remains available for checkout-based deployment.
+Run the phases in this order, with the environment above set on each machine:
 
-### Deploying the two in the order the design specifies
-
-Use phases to coordinate the machines. With the environment above set in each
-machine's shell, run these commands in order:
-
-1. Prepare both sides; these commands may run in parallel on their respective
-   machines and replace no serving services.
+1. Prepare both sides. They may run in parallel and replace no serving
+   service.
 
    ```bash
    # Control-plane machine
@@ -295,15 +248,15 @@ machine's shell, run these commands in order:
    ```
 
 2. Prepare the database on the control-plane machine. This migrates and checks
-   the identity namespace. On a cold machine it also starts the API and MCP
-   listener needed by the host readiness probes; existing listeners stay in place.
+   the identity namespace; on a cold machine it also starts the API and MCP
+   listener that the host readiness probes need.
 
    ```bash
    bash /opt/cloud-agent/release/recipe/deploy/control-plane/deploy.sh --phase prepare-database
    ```
 
 3. Activate the execution host. It drains and replaces runners, checks the
-   replacement, records the deployment, and publishes its generation.
+   replacement, records the deployment and publishes its generation.
 
    ```bash
    bash /opt/cloud-agent/release/recipe/deploy/host/deploy.sh --phase activate
@@ -316,47 +269,39 @@ machine's shell, run these commands in order:
    bash /opt/cloud-agent/release/recipe/deploy/control-plane/deploy.sh --phase activate
    ```
 
-Omitting `--phase` runs all phases for that side. Use the phased sequence for a
-coordinated rollout; two whole-script invocations cannot express the ordering
-above. Phases can be retried. Database preparation retains ownership of any
-listeners it started, and activation restarts those stopped during a failed
-attempt so they can accept the heartbeat the readiness fence needs.
-
-If the other machine fails and activation is abandoned, clean up listeners
-started solely for this cold deployment on the control-plane machine:
+Without `--phase`, a script runs all its phases, which cannot express this
+cross-machine order. Phases can be retried: database preparation keeps track
+of the listeners it started, and activation restarts any a failed attempt
+stopped so they can accept the heartbeat the fence needs. If the other machine
+fails and you abandon the rollout, remove the listeners started only for this
+cold deployment; serving listeners are left alone:
 
 ```bash
 bash /opt/cloud-agent/release/recipe/deploy/control-plane/deploy.sh --phase abandon
 ```
 
-This leaves previously serving listeners alone. Image pulls and host Kata checks
-precede runner drain. Migrations, identity-namespace verification, exact-commit
-readiness, reverse-sandbox-manager probes, and deferred host readiness publication keep
-their deployment ordering. A failed readiness check prevents activation of the
-replacement control-plane stack.
-
-Script tests run extracted recipes with Docker calls recorded and failures
-injected, and use the real Compose environment parser when available. They do
-not establish readiness of a particular Linux host, live Kata runtime, or
-registry release; verify those during environment cutover.
+Image pulls and host Kata checks run before runners drain. A failed readiness
+check keeps the replacement control-plane stack from activating. The script
+tests run extracted recipes with Docker calls recorded and failures injected;
+they do not prove a particular host, live Kata runtime or registry release, so
+verify those when cutting over an environment.
 
 ## What a downstream deployment still owns
 
-The upstream publication workflow does not deploy a named environment. A
-consuming distribution must:
+This repository publishes artifacts and deploys nothing. A consuming
+distribution must:
 
 - pin the exact manifest bytes in a reviewed lock and verify the schema,
-  recipe hash, registry digests, image labels, and platforms;
+  recipe hash, registry digests, image labels and platforms;
 - check protocol compatibility and the manifest's `verified_upgrade_from` and
-  `verified_rollback_to` records; an empty list means that path was not verified;
-- run preparation, Kata checks, and environment acceptance on the actual hosts;
-- keep environment configuration, deployment records, and recovery material
-  outside this upstream repository.
+  `verified_rollback_to` records, where an empty list means the path was not
+  verified;
+- run preparation, Kata checks and environment acceptance on its own hosts;
+- keep environment configuration, deployment records and recovery material
+  outside this repository.
 
-Retain previous verified manifests, recipes, reviewed hashes and digest-addressed
-images separately from the persistent deployment roots. Artifact-mode host
-rollouts receive only one manifest and cannot automatically select an older
-release. Follow the [backup and recovery runbook](../../docs/developer/disaster-recovery.md#recover-a-previous-artifact-release)
-to check database/protocol compatibility and run the same phased readiness
-sequence with a previous verified recipe; a previous release is not automatically
-compatible with newer installed migrations.
+Keep previous verified manifests, recipes, hashes and digest-addressed images
+apart from the deployment roots. An artifact-mode host rollout receives one
+manifest and cannot select an older release by itself, and a previous release
+is not automatically compatible with newer migrations. To roll back, follow
+[recover a previous artifact release](../../docs/developer/disaster-recovery.md#recover-a-previous-artifact-release).

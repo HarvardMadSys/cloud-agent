@@ -56,7 +56,6 @@ translations
 :maxdepth: 2
 
 context-recall
-agent-access-policy
 local-accounts
 security
 web-app
