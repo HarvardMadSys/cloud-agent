@@ -33,7 +33,7 @@ project = "HybridInference Cloud Agent"
 copyright = "2026, The HybridInference contributors"
 author = "The HybridInference contributors"
 
-REPOSITORY_URL = "https://github.com/HarvardMadSys/hybridInference-cloud-agent"
+REPOSITORY_URL = "https://github.com/HarvardMadSys/cloud-agent"
 # Links to repository files point at the integration branch, which is what the
 # published site is built from.
 REPOSITORY_BRANCH = "dev"
