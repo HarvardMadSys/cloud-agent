@@ -1,39 +1,118 @@
 # Environment inventory
 
-Use this inventory to find a configuration value, see which component reads it,
-and learn where to set it. When application defaults differ from the supported
-Compose deployment, both are listed.
+This page lists the configuration values Cloud Agent reads: which component
+reads each one, its default, and where to set it. Where the application default
+differs from the supported Compose deployment, both are given.
 
-For local setup, start with the [developer guide](docs/developer/development.md). A
-deployment needs no hand-written configuration: a new control plane starts with
-no `.env` (see [Settings and bootstrap configuration](#settings-and-bootstrap-configuration)),
-and each host's configuration is written by Admin → Servers → Add server
+A deployment needs no hand-written configuration. A new control plane starts
+without a `.env` ([Settings and bootstrap configuration](#settings-and-bootstrap-configuration)),
+and Admin → Servers → Add server writes each host's configuration
 ([Compute resources](docs/developer/operations-compute.md)). The variables below
-are the optional overrides a deployment may still set in its environment or
-`.env`. The [release contract](deploy/release/README.md) describes packaged
-artifacts. Names inherited from HybridInference remain in use.
+are optional overrides. For local setup, start with the
+[developer guide](docs/developer/development.md); the
+[release contract](deploy/release/README.md) describes the packaged artifacts.
 
 > **Keep deployment values outside this public repository.**
 >
-> Store secrets in the operator's private environment/unit files or read-only
-> key mounts. Keep actual identifiers, hostnames, port allocations, tunnel
-> topology and app registrations in the private deployment overlay. Public
-> examples use placeholders such as `agents.example.org`; documented protocol
-> ports and defaults are safe to retain here.
+> Keep secrets in the operator's private environment or unit files, or in
+> read-only key mounts, and back them up with the data they protect. Keep real
+> identifiers, hostnames, port allocations, tunnel topology and app
+> registrations in the private deployment overlay. Public examples use
+> placeholders such as `agents.example.org`.
 
 ## Settings and bootstrap configuration
 
+Set a value where it belongs:
+
+- **Admin → Settings**: application behavior, integration URLs and
+  credentials, web appearance, operational intervals, upload and skill limits,
+  task titles, and global sandbox and workspace limits.
+- A server's page under **Servers**: sandbox and workspace values for that
+  server only.
+- Deployment files: bootstrap configuration, which gives access to the database
+  or configures processes outside the control plane.
+
+Bootstrap configuration covers database access, the settings encryption root
+(`AGENT_SETTINGS_ENCRYPTION_KEY`, or the legacy `AGENT_SESSION_SECRET`),
+recovery access (`ADMIN_TOKEN`), host enrollment and sandbox manager
+provisioning, networking, tunnels and listeners, host isolation, image and
+build routing, mounted paths, and trusted compute deployment profiles. The
+Settings page lists these names with their values hidden.
+
+### Deployment keys
+
+A new installation has no `.env` and no keys to make up. The values the stack
+needs before it can read a setting (`AGENT_DATABASE_URL`,
+`AGENT_POSTGRES_PASSWORD`, `AGENT_LOCAL_SESSION_SECRET` and
+`AGENT_SETTINGS_ENCRYPTION_KEY`, or an older deployment's `AGENT_SESSION_SECRET`
+root) live in the `agent-keys` Docker volume, one file each, readable only by
+the user that needs it. The Compose `keys` service
+(`cloud_agent.deployment.deployment_keys`) runs before anything that needs one:
+
+| The value is | The `keys` service |
+|---|---|
+| Set in the environment or `.env` | Stores it. After one start you can delete the line. |
+| A settings root that differs from the stored one | Stops the start: the stored root may be the only copy of the key every saved secret needs. |
+| Already stored | Keeps it. |
+| Missing, and the bundled database volume holds no database | Generates it. |
+| Missing, with an existing database or an `AGENT_DATABASE_URL` naming another database | Stops the start and names what to set. A missing settings root is only a warning, because a legacy `AGENT_SESSION_SECRET` may be supplied another way. |
+
+Each control-plane process fills these variables from their files when the
+environment leaves them unset, so `docker compose exec` and `docker compose run`
+see them too; Postgres reads its password through `POSTGRES_PASSWORD_FILE`.
+Back the keys up apart from the database
+([Disaster recovery](docs/developer/disaster-recovery.md)). This command prints
+them as single-quoted `.env` lines that restore them byte for byte on another
+machine (unquoted, Compose would read a `$` as interpolation):
+
+```bash
+docker exec <project>-control-plane-1 python -m cloud_agent.deployment.deployment_keys export
+```
+
+The control plane then creates its first settings row with random
+`AGENT_CONTROL_TOKEN_SECRET`, `AGENT_SOURCE_CONTROL_ENCRYPTION_KEY`,
+`AGENT_COMPUTE_SECRET_KEY` and `AGENT_SANDBOX_MANAGER_TOKEN` values where the
+environment supplies none. Server setup writes that sandbox manager credential
+into each host it deploys. An existing settings row never gets generated values.
+
+### Saved settings
+
+Saved settings live in the Agent database and stay in force across restarts.
+A row marked *Initial import* is such a setting: its environment value is
+imported once, and later `.env` changes are ignored.
+
+Run `alembic upgrade head` (through `0120_operator_model_budgets`) before
+starting this release; the [upgrade notes](docs/developer/upgrade-notes.md)
+say what each recent migration changes. The main listener then imports the
+settings from its environment. On an upgrade it imports only fields a new
+migration added and never overwrites a saved value, even an empty one. The
+other listeners wait for that import and use the same saved values.
+
+After that, edit values in **Admin → Settings**. **Reset** restores the built-in
+default (empty for a credential), never an old environment value. Listeners pick
+up changes within five seconds, and the web server reads saved appearance on
+every request, with no rebuild or restart. Existing user and compute encryption
+keys cannot be replaced or reset in the editor; that needs a separate
+re-encryption procedure.
+
+The Settings page shows missing required fields and incomplete integrations.
+A new deployment's first administrator signs in with the one-time setup code
+the control plane logs and completes them there. When no administrator can sign
+in, an operator with `ADMIN_TOKEN` can open `/setup`, which uses the same
+audited settings API and keeps the token in page memory only.
+
+Host sandbox and workspace settings have their own precedence
+([Sandbox settings from the admin pages](#sandbox-settings-from-the-admin-pages)),
+and sandbox archives are configured in Admin only ([Sandbox archives](#sandbox-archives)).
+
 ### Sandbox Manager naming compatibility
 
-The service is named **Sandbox Manager** (`sandbox-manager` in Compose and
-`cloud_agent_host.sandbox_manager` in Python). Use `AGENT_SANDBOX_MANAGER_*`
-names for new deployments. The previous names remain accepted until 2026-12-31.
-When one supplies a value, the host or local deployment script that reads it
-prints a warning naming the variable, never its value, and a Python service
-that reads one itself, as from a deployment profile's Host environment, logs
-`sandbox_manager_legacy_env`. The fallbacks in the Compose files themselves
-are silent, the control plane's among them, so check each deployment's `.env`
-for these names before then:
+The service is **Sandbox Manager** (`sandbox-manager` in Compose,
+`cloud_agent_host.sandbox_manager` in Python); use the `AGENT_SANDBOX_MANAGER_*`
+names. The previous names still work until 2026-12-31. The deploy scripts warn
+when one supplies a value and a Python service logs `sandbox_manager_legacy_env`,
+but the fallbacks inside the Compose files, the control plane's included, are
+silent. Check each deployment's `.env` for:
 
 | Current name | Previous name |
 | --- | --- |
@@ -47,144 +126,16 @@ for these names before then:
 | `AGENT_SANDBOX_MANAGER_REVERSE_TARGET_PORT` | `AGENT_BROKER_REVERSE_TARGET_PORT` |
 | `AGENT_SANDBOX_MANAGER_STOP_GRACE` | `AGENT_BROKER_STOP_GRACE` |
 
-The supported host and local deployment scripts normalize the old token before
-invoking Compose. For a direct `docker compose` invocation, provide
-`AGENT_SANDBOX_MANAGER_TOKEN`; the recipe still refuses to render without it.
-
-Host activation drains and removes the old service before creating its
-replacement. In the host and local Compose files the `sandbox-manager` service
-keeps `workspace-broker` as a network alias; the old
-`cloud_agent_host.workspace_broker` Python entry point is gone. Saved
-credentials keep their existing encryption domain; no secret rotation or
-database migration is needed for this rename. The physical `broker_url`
-database column, the `broker_url` field in which hosts of the previous release
-still report their address, and the telemetry producer ID remain compatibility
-details. New API fields and code use `sandbox_manager_url`; the UI displays
-**Sandbox Manager**, including for old measurement records.
-
-Durable archive markers and deletion receipts also keep their existing paths
-(`/var/lib/freeinference-broker` inside retained sandboxes and
-`/var/lib/hybridinference/broker-archives` inside the manager). Renaming these
-would hide existing lifecycle fences or pending deletion receipts.
-
-Choose the configuration location by what the value controls:
-
-- Use **Admin → Settings** for application behavior, integration URLs and
-  credentials, web appearance, operational intervals, upload and
-  skill limits, task titles, and global sandbox/workspace limits.
-- Use a server's **Servers** page for sandbox and workspace values that should
-  apply only to that server.
-- Keep bootstrap configuration in deployment files. This includes database
-  access, encryption roots, recovery access, host provisioning, networking,
-  isolation, image/build routing, and mounted paths.
-
-Saved application settings live in the Agent database and remain authoritative
-across restarts. The inventory below records built-in defaults and the
-environment names used for an initial import. Once a setting is registered, the
-service no longer reads it continuously from `.env`.
-
-Run `alembic upgrade head` (through `0120_operator_model_budgets`) before
-starting this release; the [upgrade notes](docs/developer/upgrade-notes.md)
-say what each recent migration changes. The main control-plane listener then
-initializes the settings document once from its existing environment. The
-MCP-only listener waits for that document and uses the same saved values.
-
-After the initial import, edit values in **Admin → Settings**. Later
-environment edits do not overwrite saved values. **Reset** restores a setting's
-built-in default, including an empty default for a credential; it does not
-restore an old environment value. Listeners synchronize changes every five
-seconds, and the web server reads saved appearance settings for every request
-without rebuilding or restarting the web image.
-
-For each host sandbox or workspace setting, the service uses the first available
-value in this order:
-
-1. the override saved for that server;
-2. the global value saved by an administrator;
-3. the built-in default.
-
-Migration `0036_host_settings_import` preserves valid nondefault legacy host
-values as per-server overrides when an administrator has not already configured
-them. Hosts without a complete report finish this import through their initial
-heartbeats. An admin edit or reset excludes only the changed keys from pending
-imports, so unrelated legacy values are preserved. Global exclusions
-also apply to newly enrolled hosts. Later environment changes are ignored.
-Clearing an override falls through to the global value or built-in default; it
-never reactivates an old environment value.
-
-Configure automatic lifecycle archives only in **Admin → Settings → Sandbox**.
-Cloud Agent stores them as one revisioned policy in the Agent database, and no
-environment variable sets that policy or its destination. The
-**Archive to S3 and delete** control uses the same policy: its bucket, region
-and saved access key. `AGENT_SANDBOX_ARCHIVE_STATE_DIR` is where a Sandbox
-Manager keeps the local state of both, restorable checkpoints included. Lifecycle
-archives go to `s3://<bucket>/cloud-agent/sandbox`, and the bucket defaults to
-`freeinference`. The saved policy contains enablement, the bucket, region,
-bounded upload sizes, and either an AWS access key or the workload
-identity fields (customer-managed KMS key ARN and expected bucket owner). The
-secret access key is encrypted with the settings encryption key and is not
-returned by the admin API. With no access key, sandbox managers authenticate
-with their deployment workload identity through the standard AWS SDK credential
-chain. See [Sandbox archives](docs/developer/operations.md#sandbox-archives) for IAM,
-bucket versioning, rollout, and lifecycle semantics.
-
-The database also stores the control-plane runtime identity, signing/encryption
-keys, sandbox manager credentials, cookie/proxy policy, MCP target policy, and default
-execution profile. During an upgrade, the main listener imports only newly
-migrated fields that are missing. It never overwrites an existing value,
-including an empty reset, and the relay waits for the import to finish. The
-database stays bound to the account system. Existing user/compute encryption
-keys cannot be replaced or reset through the settings editor without a separate
-re-encryption procedure.
-
-The Settings page identifies missing required fields and incomplete optional
-integrations. A new deployment's first administrator signs in with the one-time
-setup code the control plane logs and completes them in Admin → Settings. When
-no administrator can sign in, an operator with `ADMIN_TOKEN` can open
-`/setup` instead. Setup uses the same authenticated, audited
-settings API. The recovery token stays in page memory and is never saved in
-browser storage.
-
-A new installation has no `.env` and no keys to invent. The values every
-control-plane process needs before it can read a setting — `AGENT_DATABASE_URL`,
-`AGENT_POSTGRES_PASSWORD`, `AGENT_LOCAL_SESSION_SECRET` and
-`AGENT_SETTINGS_ENCRYPTION_KEY` (or an older deployment's `AGENT_SESSION_SECRET`
-root) — live in the `agent-keys` Docker volume, one file each, readable only by
-the user that reads it. The Compose `keys` service
-(`cloud_agent.deployment.deployment_keys`) runs before anything that needs one:
-
-- a value set in the environment or `.env` is stored there, so an existing
-  deployment can delete those lines after one start on this release. A
-  settings root key that differs from the stored one stops the start instead:
-  the stored root may be the only copy of the key every saved secret needs;
-- a stored value is kept;
-- a missing value is generated only while the bundled database volume holds no
-  database. With an existing database, or `AGENT_DATABASE_URL` naming another
-  database, the start stops and names what to set; it never invents a value.
-  A missing settings root is a warning instead, since a legacy
-  `AGENT_SESSION_SECRET` may be supplied another way.
-
-Every control-plane process fills each of those variables the environment
-leaves empty from its file when it imports `cloud_agent`, so `docker compose exec`
-and `docker compose run` commands see them too, and Postgres reads
-`POSTGRES_PASSWORD_FILE`. Back the keys up apart from the
-database ([Disaster recovery](docs/developer/disaster-recovery.md)):
-`docker exec <project>-control-plane-1 python -m cloud_agent.deployment.deployment_keys export`
-prints them as `.env` lines that restore them on another machine. The values are stored and exported byte for byte, each
-exported line single-quoted, because Compose reads an unquoted `.env` value's
-`$` as interpolation. The control plane then creates its settings with random
-`AGENT_CONTROL_TOKEN_SECRET`, `AGENT_SOURCE_CONTROL_ENCRYPTION_KEY`,
-`AGENT_COMPUTE_SECRET_KEY` and `AGENT_SANDBOX_MANAGER_TOKEN` values when the
-environment supplies none (server setup writes that sandbox manager credential
-into each host it deploys); an existing settings row is never given one.
-
-Keep bootstrap configuration in deployment files: database access; the settings
-encryption root (`AGENT_SETTINGS_ENCRYPTION_KEY`, with the legacy environment
-`AGENT_SESSION_SECRET` fallback); administrator recovery access (`ADMIN_TOKEN`);
-host enrollment/sandbox manager provisioning; networking; tunnels/listeners; actual host
-isolation; image/build routing; mounted paths; and trusted compute deployment
-profiles. These values establish database access or configure processes outside
-the control plane. Their names appear on the Settings page with hidden values.
+A direct `docker compose` run must set `AGENT_SANDBOX_MANAGER_TOKEN`; only the
+host and local deploy scripts map the old token name. The `sandbox-manager`
+service keeps `workspace-broker` as a network alias, and the old
+`cloud_agent_host.workspace_broker` entry point no longer exists. The rename
+needs no secret rotation or database migration. A few old names stay on purpose:
+the `broker_url` column and the field in which previous-release hosts report
+their address (new API fields use `sandbox_manager_url`), the telemetry producer
+ID, and the paths `/var/lib/freeinference-broker` (in retained sandboxes) and
+`/var/lib/hybridinference/broker-archives` (in the manager), which hold lifecycle
+fences and pending deletion receipts.
 
 ## The one rule
 
@@ -192,102 +143,90 @@ the control plane. Their names appear on the Settings page with hidden values.
 > database credentials, must never appear in this repository, in its
 > configuration, or on any host that runs it.
 
-Cloud Agent keeps its own accounts and signs its own tokens with independent
-secrets; it has no Gateway dependency. A mail transport credential an
-operator chooses to reuse (SMTP) is configuration, kept in the operator's
-secret store, never in this repository.
-
-## Provisioning status
-
-The original extraction provisioned staging on 2026-08-06 and production on
-2026-08-07; [the cutover record](docs/agents/specs/cutover.md) documents that history. Those
-dates do not show whether a current deployment is ready.
-
-This repository publishes neutral releases. As a downstream operator, you own
-your configuration, provisioning status, rollout record, and recovery evidence.
-Keep secret material outside Git and back it up with the data it protects.
+Cloud Agent keeps its own accounts and signs its own tokens with its own
+secrets; it does not depend on the Gateway. An SMTP credential an operator
+chooses to share is configuration: keep it in the operator's secret store,
+never in this repository.
 
 ## Local development tools
 
-These values are read by local tooling and are not saved application settings.
+Local tooling reads these; they are not saved settings.
 
 | Variable | Value / who provisions |
 |---|---|
-| `CI_LOG_DIR` | Optional output directory set by the developer invoking `scripts/ci-local.sh`. Defaults to a fresh gitignored `.local-ci/<tier>.XXXXXX` directory in the checkout for each run. Contains gate logs and the database JUnit report; no application secret is required. |
-
-## Control plane (`cloud_agent`)
+| `CI_LOG_DIR` | Optional log directory for `scripts/ci-local.sh`: gate logs and the database JUnit report. Defaults to a fresh gitignored `.local-ci/<tier>.XXXXXX` directory in the checkout. |
 
 ### Local and CI permission regression
 
-`AGENT_PERMISSION_TEST_IMAGE` enables the opt-in Linux UID regression in
+`AGENT_PERMISSION_TEST_IMAGE` turns on the opt-in Linux UID regression in
 `tests/external/test_shared_member_permissions.py`. It names an already-pulled
-Docker image with Python 3 and GNU `find`/`stat`, such as `python:3.12-slim`.
-After pulling the image, run:
+Docker image with Python 3 and GNU `find`/`stat`, such as `python:3.12-slim`:
 
 ```bash
 AGENT_PERMISSION_TEST_IMAGE=python:3.12-slim \
   uv run pytest -q -m external tests/external/test_shared_member_permissions.py
 ```
 
-The test uses disposable containers without network access or mounts and runs
-the production normalizer as separate member UIDs without capabilities. CI runs
-it before deployment; it needs no model API key or deployed-service setting.
+The test runs the production normalizer as separate member UIDs without
+capabilities, in disposable containers with no network or mounts. CI runs it
+before deployment; it needs no model API key or deployed service.
 
 ### Local and CI restore regression
 
 `AGENT_RESTORE_TEST_IMAGE` names the base image for
 `tests/external/test_checkpoint_restore_roundtrip.py`, `python:3.12-slim` by
-default; it must already be pulled. The test stops a chat container the way
-the Sandbox Manager does, checkpoints it, loads the checkpoint as a later
-generation and starts that container through the archive start fence, all in
-real Docker. Only S3 is a local file. Run:
+default; pull it first. In real Docker, the test stops a chat container as the
+Sandbox Manager does, checkpoints it, loads the checkpoint as a later generation
+and starts it through the archive start fence; only S3 is a local file:
 
 ```bash
 uv run pytest -q -m external tests/external/test_checkpoint_restore_roundtrip.py
 ```
 
-CI runs it before deployment; it needs no S3 bucket, model API key or
-deployed-service setting.
+CI runs it before deployment; it needs no S3 bucket, model API key or deployed
+service.
+
+## Control plane (`cloud_agent`)
 
 ### Database
 
 | Variable | Value / who provisions |
 |---|---|
-| `AGENT_DATABASE_URL` | Postgres DSN for a database owned exclusively by Cloud Agent. A new deployment starts on an empty one; a database from before the independent-accounts release is refused and kept as an archive ([cutover](docs/developer/upgrade-notes.md#independent-accounts-cutover)). |
-| `AGENT_POSTGRES_USER` / `AGENT_POSTGRES_DB` / `AGENT_POSTGRES_PASSWORD` | The bundled `postgres` service's user, the database the deployment uses on it, and its password. User and database default to `cloudagent`. PostgreSQL applies these only to an empty data directory. On a new installation with both the password and `AGENT_DATABASE_URL` empty, the `keys` service generates the password and a DSN for this user and database. `AGENT_POSTGRES_DB` must name the database `AGENT_DATABASE_URL` uses on the bundled service: the Postgres healthcheck, pgAdmin's bundled server and the documented backup, drain and undrain commands open it. A deployment that points `AGENT_DATABASE_URL` at another database there sets `AGENT_POSTGRES_DB` to its name too; while the two differ, the `keys` service logs a warning at every start. |
+| `AGENT_DATABASE_URL` | Postgres DSN of a database only Cloud Agent uses. A new deployment starts on an empty one. A database from before the independent-accounts release is refused and kept as an archive ([cutover](docs/developer/upgrade-notes.md#independent-accounts-cutover)). |
+| `AGENT_POSTGRES_USER` / `AGENT_POSTGRES_DB` / `AGENT_POSTGRES_PASSWORD` | The bundled `postgres` service's user, the database the deployment uses on it, and its password. User and database default to `cloudagent`; PostgreSQL applies these only to an empty data directory. On a new installation the `keys` service generates the password and a matching DSN. `AGENT_POSTGRES_DB` must name the database `AGENT_DATABASE_URL` uses on the bundled service, because the healthcheck, pgAdmin's bundled server and the documented backup, drain and undrain commands open it; while the two differ, the `keys` service logs a warning at every start. |
 | `TEST_DB_HOST` / `TEST_DB_PORT` / `TEST_DB_NAME` / `TEST_DB_USER` / `TEST_DB_PASSWORD` | Read by `make test-db` and the CI `dbtest` tier as five separate values, not a DSN. Defaults: `localhost` / `5432` / `hybridinference_test_db` / `postgres` / `postgres`. The database name must contain `_test_`; fixtures refuse other names. With xdist, each worker appends its ID and needs a pre-created database. CI creates `<TEST_DB_NAME>_gw0`…`_gw3` for `-n 4`. |
 
 ### pgAdmin database administration
 
 The optional `pgadmin` Compose profile adds **Admin → Database → Open pgAdmin**.
-The private service has no published port. Every request requires a current
-`agent.admin` decision; pgAdmin also requires its own account login. Its
-accounts, sessions, and saved connections persist in `agent-pgadmin`.
+The service has no published port. Every request needs a current `agent.admin`
+decision, and pgAdmin asks for its own login too. Its accounts, sessions and
+saved connections persist in `agent-pgadmin`.
 
 | Variable | Value / who provisions |
 |---|---|
-| `AGENT_PGADMIN_URL` | *Optional.* Private pgAdmin origin; use `http://pgadmin:5050` for the bundled service. Empty disables the launch link. Credentials, paths, queries, and fragments are refused. Set `COMPOSE_PROFILES=pgadmin` to start the service, or add `pgadmin` to existing profiles. Also names a service that the saved **Private pgAdmin URL** may select: besides the bundled service, that setting can only use the scheme, host and port of this variable or `AGENT_PGADMIN_BOOTSTRAP_URL`, so keep a custom address set here after the import. |
-| `AGENT_PGADMIN_PUBLIC_URL` | *Optional override.* Full public proxy URL ending in `/admin/agent/pgadmin`. Normally derived from `AGENT_WEB_BASE_URL` plus `/api/admin/agent/pgadmin`, preserving `/agents` when present. Set explicitly for a separately mounted API. Never derived from browser headers. |
-| `AGENT_PGADMIN_BOOTSTRAP_DIR` | *Required for dashboard setup.* Set `/var/lib/cloud-agent/pgadmin-bootstrap` for the bundled service. The first administrator chooses an email and password in **Admin → Database**. Credentials are committed once in the private `agent-pgadmin-bootstrap` volume, readable only by the control plane and pgAdmin's supplementary group. Passwords never appear in responses, audit records, Compose, or source control. Existing accounts and later password changes remain managed by pgAdmin. |
-| `AGENT_PGADMIN_BOOTSTRAP_URL` | *Required for dashboard setup.* Private origin used only to initialize the bundled service, normally `http://pgadmin:5050`. Setup saves this URL in Admin Settings when no pgAdmin URL has been saved. Subsequent requests respect the saved setting, including resets that disable access. |
-| `AGENT_PGADMIN_BOOTSTRAP_PUBLIC_URL` | *Optional.* Public proxy URL for first-time setup, ending in `/admin/agent/pgadmin`. Defaults to the saved public pgAdmin URL or the saved web base URL plus `/api/admin/agent/pgadmin`. |
-| `AGENT_PGADMIN_ENTRYPOINT_FILE` | *Optional.* Startup wrapper that waits for first-time dashboard setup before executing pgAdmin's native entrypoint. Defaults to the bundled `pgadmin-entrypoint.py`; artifact deployments resolve it from the selected release recipe. |
-| `AGENT_PGADMIN_SERVERS_FILE` | *Optional.* Read-only server-definition JSON. Defaults to the bundled `pgadmin-servers.json`, which registers `postgres:5432` with the database `AGENT_POSTGRES_DB` names, the user `AGENT_POSTGRES_USER` names and no password. The bundled entrypoint fills in `${AGENT_POSTGRES_DB}` and `${AGENT_POSTGRES_USER}` wherever the file has them, so a custom file may use them too. Artifact deployments resolve the default file from the selected release recipe. Imported on first initialization; later edits are made in pgAdmin. |
-| `AGENT_PGADMIN_COOKIE_SECURE` | *Optional.* pgAdmin Python boolean, default `True`. Use `False` only for an HTTP local stack. The proxy independently scopes pgAdmin cookies to its public route, sets HttpOnly and SameSite=Lax, and requires Secure on HTTPS. |
+| `AGENT_PGADMIN_URL` | *Initial import*, as **Private pgAdmin URL**: the private origin, `http://pgadmin:5050` for the bundled service. Empty disables the launch link; credentials, paths, queries and fragments are refused. Start the service with `COMPOSE_PROFILES=pgadmin`. The saved setting may only name the bundled service or the scheme, host and port of this variable or `AGENT_PGADMIN_BOOTSTRAP_URL`, so keep a custom address set here. |
+| `AGENT_PGADMIN_PUBLIC_URL` | *Initial import.* Optional public proxy URL ending in `/admin/agent/pgadmin`. Empty derives it from the saved web base URL plus `/api/admin/agent/pgadmin`; set it for a separately mounted API. Never derived from browser headers. |
+| `AGENT_PGADMIN_BOOTSTRAP_DIR` | *Required for dashboard setup.* `/var/lib/cloud-agent/pgadmin-bootstrap` for the bundled service. The first administrator chooses pgAdmin's email and password in **Admin → Database**. They are written once to the private `agent-pgadmin-bootstrap` volume, readable only by the control plane and pgAdmin's supplementary group, and never appear in responses, audit records, Compose or source control. pgAdmin manages accounts and passwords after that. |
+| `AGENT_PGADMIN_BOOTSTRAP_URL` | *Required for dashboard setup.* Private origin used only to initialize the bundled service, normally `http://pgadmin:5050`. Setup saves it as the pgAdmin URL when none is saved; later requests follow the saved setting, including a reset that disables access. |
+| `AGENT_PGADMIN_BOOTSTRAP_PUBLIC_URL` | *Optional.* Public proxy URL for first-time setup, ending in `/admin/agent/pgadmin`, used while no public pgAdmin URL is saved. Without either, setup derives it from the saved web base URL plus `/api/admin/agent/pgadmin`. |
+| `AGENT_PGADMIN_ENTRYPOINT_FILE` | *Optional.* Startup wrapper that waits for dashboard setup, then runs pgAdmin's entrypoint. Defaults to the bundled `pgadmin-entrypoint.py`; artifact deployments take it from the release recipe. |
+| `AGENT_PGADMIN_SERVERS_FILE` | *Optional.* Read-only server definitions, imported on first initialization. The bundled `pgadmin-servers.json` registers `postgres:5432` with the database and user that `AGENT_POSTGRES_DB` and `AGENT_POSTGRES_USER` name and no password; the entrypoint fills in `${AGENT_POSTGRES_DB}` and `${AGENT_POSTGRES_USER}` in a custom file too. Artifact deployments take the default from the release recipe. |
+| `AGENT_PGADMIN_COOKIE_SECURE` | *Optional.* pgAdmin Python boolean, default `True`; `False` only for an HTTP local stack. The proxy scopes pgAdmin's cookies to its route itself, with HttpOnly, SameSite=Lax and, on HTTPS, Secure. |
 
 ### Public addresses
 
 | Variable | Value / who provisions |
 |---|---|
-| `AGENT_WEB_BASE_URL` | Public web-app URL, for example `https://agents.example.org`. Every emailed link is built from it, never from a request's `Host`. Its origin is also one the main API accepts session-cookie writes from: a POST, PUT, PATCH or DELETE carrying the session cookie is refused with 403 when the browser reports it came from another origin (`Sec-Fetch-Site`, or `Origin` without it) that is neither this one, the request's own host, nor the pgAdmin public URL's. |
-| `AGENT_PUBLIC_API_URL` | NEW. This API's public base URL, including its prefix, for example `https://agents.example.org/api`. OAuth callbacks (MCP sign-in, compute registration) are built from it. It replaces the address `AGENT_SESSION_REDIRECT_URI` used to give. |
+| `AGENT_WEB_BASE_URL` | *Initial import.* Public web-app URL, for example `https://agents.example.org`. Every emailed link is built from it, never from a request's `Host`. The main API refuses with 403 a POST, PUT, PATCH or DELETE that carries the session cookie and that the browser reports as coming from another origin, unless that origin is this one, the pgAdmin public URL's or, for a browser that sends no `Sec-Fetch-Site`, the request's own host. |
+| `AGENT_PUBLIC_API_URL` | NEW. *Initial import.* This API's public base URL with its prefix, for example `https://agents.example.org/api`. OAuth callbacks (MCP sign-in, compute registration) are built from it. It replaces the retired `AGENT_SESSION_REDIRECT_URI`. |
 
 ### Retired Gateway variables
 
-HybridInference Gateway sign-in, admission and inference were removed. Each of
-these is refused: the control plane stops at startup naming it, and
-`deploy/control-plane/deploy.sh` stops before pulling anything
-([cutover](docs/developer/upgrade-notes.md#independent-accounts-cutover)).
+Cloud Agent no longer supports HybridInference Gateway sign-in, admission or
+inference. Each variable below is refused: the control plane stops at startup
+and names it, and `deploy/control-plane/deploy.sh` stops before pulling
+anything ([cutover](docs/developer/upgrade-notes.md#independent-accounts-cutover)).
 
 | Variable | Status |
 |---|---|
@@ -315,26 +254,26 @@ these is refused: the control plane stops at startup naming it, and
 
 | Variable | Value / who provisions |
 |---|---|
-| `AGENT_SETTINGS_ENCRYPTION_KEY` | Optional dedicated key of at least 32 bytes for encrypted admin setting secrets. If absent, `AGENT_SESSION_SECRET` supplies the key. Keep the same effective key on the main API and MCP-only listener, and preserve it with database backups. Changing the effective key requires re-encrypting existing settings first; session-key rotation also changes it when the fallback is in use. `deploy.sh` generates it on a new installation only, never beside an `AGENT_SESSION_SECRET`. |
-| `AGENT_SOURCE_CONTROL_ENCRYPTION_KEY` | Encrypts stored source-control credentials, per-user MCP credentials, and reusable cloud-environment variables/overrides under separate domain separators. Generated into the first settings row when unset; otherwise random 32 bytes, unique per environment. A new value saved in Admin → Settings must be at least 32 bytes; a shorter value saved or imported earlier still loads, and startup logs `agent_weak_credential` until it is replaced. Without a key, none store plaintext; MCP offers an empty picker and value-bearing environment operations fail closed. |
-| `AGENT_CONTROL_TOKEN_SECRET` | Signs host/worker control tokens. Generated into the first settings row when unset; otherwise random 32 bytes, unique per environment. A new value saved in Admin → Settings must be at least 32 bytes; a shorter value saved earlier still loads, and startup logs `agent_weak_credential` until it is replaced. |
-| `AGENT_SESSION_SECRET` | Legacy. Only the fallback root for `AGENT_SETTINGS_ENCRYPTION_KEY` on an installation that never set that key; no session uses it. New deployments set `AGENT_SETTINGS_ENCRYPTION_KEY` instead. If both it and `AGENT_LOCAL_SESSION_SECRET` are set, they must differ. |
-| `AGENT_DEFAULT_EXECUTION_PROFILE` | Server-owned policy for new root threads. Application default: `trusted-v1`; supported production Compose default: `untrusted-kata-v1`; local Compose uses `trusted-v1`. The untrusted profile requires the current enrolled Host credential and the exact claiming replica's attestation of `io.containerd.kata.v2` with a guest kernel different from the host. The trusted profile permits runc for trusted internal/dev repositories. Follow-ups and Fork inherit the stored policy; callers cannot select it. |
-| `AGENT_ALERT_WEBHOOK_URL` | Operator-owned JSON webhook for queue incidents, recovery and compute replacement events. Queue monitoring runs every minute, reports ten-minute-old runnable queue heads after two observations, retries delivery on the next pass and repeats unchanged incidents at most every 30 minutes. Delivery timeout: five seconds. Queue payloads contain event, deployment SHA and aggregate counts; compute events also contain Host identity and reason codes. Unset retains structured logs. Downstream distributions own deployment-workflow alerts. This URL never enters runners or sandboxes. |
-| `AGENT_RESIDENCY_TTL_S` | How long a member's independently fenced live-process residency survives between host heartbeats. Default 1800. Shared-live uses one residency per chat membership. This is credential/process ownership, not a second chat lifecycle clock: `AGENT_CHAT_IDLE_TIMEOUT_S` alone decides when a settled retained sandbox group is stopped. |
-| `ADMIN_TOKEN` | Optional machine-to-machine admin credential, and the recovery door to `/setup` when no administrator can sign in; a new deployment does not need it. An unset value opens no token access; admin sessions remain a separate authorization path. Use at least 32 random bytes; startup logs `agent_weak_credential` for a shorter value. |
+| `AGENT_SETTINGS_ENCRYPTION_KEY` | The settings root key, at least 32 bytes, which encrypts the secrets saved in Admin. Without it, `AGENT_SESSION_SECRET` is the root. Every listener must use the same effective root; keep it with every database backup. Changing it, or rotating `AGENT_SESSION_SECRET` while that is the root, requires re-encrypting the saved settings first. The `keys` service generates it on a new installation, never beside an `AGENT_SESSION_SECRET`. |
+| `AGENT_SOURCE_CONTROL_ENCRYPTION_KEY` | *Initial import*, generated into the first settings row when unset. Encrypts the credentials users store, each kind in its own domain: source-control credentials, MCP connections, environment variables and Secrets, SSH server keys and model connection keys. The control plane refuses to start without it. Use 32 random bytes, unique per environment; a shorter value saved earlier still loads, and startup logs `agent_weak_credential` until you replace it. Replacing it needs a separate re-encryption procedure. |
+| `AGENT_CONTROL_TOKEN_SECRET` | *Initial import*, generated into the first settings row when unset. Signs host and worker control tokens. Use 32 random bytes, unique per environment; a shorter value saved earlier still loads, and startup logs `agent_weak_credential` until you replace it. Replacing it invalidates host and worker credentials, so hosts must re-enroll. |
+| `AGENT_SESSION_SECRET` | Legacy settings root, for an installation that never set `AGENT_SETTINGS_ENCRYPTION_KEY`; no session uses it. If set, it must differ from `AGENT_LOCAL_SESSION_SECRET`. |
+| `AGENT_DEFAULT_EXECUTION_PROFILE` | *Initial import.* Isolation policy for new conversations. Application default `trusted-v1`; the production Compose file sets `untrusted-kata-v1` and the local one `trusted-v1`. The untrusted profile needs the host's current enrolled credential and the claiming replica's attestation of `io.containerd.kata.v2` with a guest kernel different from the host's. The trusted profile allows runc, for trusted internal or development repositories. Follow-ups and Fork keep the stored policy; callers cannot choose it. |
+| `AGENT_ALERT_WEBHOOK_URL` | *Initial import.* An operator-owned JSON webhook for queue incidents and recoveries ([queue monitoring](docs/developer/deployment-reliability.md#detection-after-deployment)) and compute replacement events. Unset, events go only to the structured logs. Payloads carry the event, deployment SHA and aggregate counts; compute events add the Host identity and reason codes. Delivery times out after five seconds. The URL never reaches runners or sandboxes. |
+| `AGENT_RESIDENCY_TTL_S` | *Initial import.* How long a member's live-process residency survives between host heartbeats, default 1800 seconds. It governs credential and process ownership only: `AGENT_CHAT_IDLE_TIMEOUT_S` alone decides when a settled sandbox group stops. |
+| `ADMIN_TOKEN` | Optional machine-to-machine admin credential, and the way into `/setup` when no administrator can sign in. Unset, it grants nothing. Use at least 32 random bytes; startup logs `agent_weak_credential` for a shorter value. |
 
 ### Accounts
 
-`AGENT_LOCAL_SESSION_SECRET` is read from the process environment only, never
-from Admin Settings, by both listeners. Every other variable
-here is the initial value of a setting in Admin → Settings → Accounts: imported once, the
-first time the settings registry sees it, and edited there afterwards. Secrets are stored
-encrypted and never shown again. See [accounts](docs/developer/local-accounts.md).
+Every control-plane listener reads `AGENT_LOCAL_SESSION_SECRET` from the process
+environment only. Every other variable here is the initial value of a setting in
+Admin → Settings → Accounts, imported once and edited there afterwards. Saved
+secrets are encrypted and never shown again. See
+[accounts](docs/developer/local-accounts.md).
 
 | Variable | Value / who provisions |
 |---|---|
-| `AGENT_LOCAL_SESSION_SECRET` | Required: at least 32 random bytes, different from `AGENT_SESSION_SECRET`; `deploy.sh` generates it on a new installation. Keys the hashes of session cookies, emailed tokens and abuse counters. Rotating it ends every session and outstanding link. |
+| `AGENT_LOCAL_SESSION_SECRET` | Required: at least 32 random bytes, different from `AGENT_SESSION_SECRET`; the `keys` service generates it on a new installation. Keys the hashes of session cookies, emailed tokens and abuse counters. Rotating it ends every session and outstanding link. |
 | `AGENT_LOCAL_SIGNUP_ENABLED` | Defaults to on. `false` closes public sign-up, by email and by phone; existing accounts still sign in. Signing up never grants Agent use. |
 | `AGENT_LOCAL_SIGNUP_REQUIRE_EMAIL_VERIFICATION` | NEW. Defaults to `true`. `false` treats a new email account as verified at sign-up and sends it no link, so sign-up works without SMTP. Such an address is accepted, not proven: it matches neither the signup domain list nor `AGENT_LOCAL_ADMIN_EMAILS` until a link sent to it is followed. Accounts created while it was on still verify. |
 | `AGENT_LOCAL_SIGNUP_APPROVAL` | NEW. `manual` (default): every account waits for an administrator. `domains`: a verified account whose proven email domain is on the signup domain list (Admin → Users → Sign-up policy) is approved at once; with an empty list, every verified account is. |
@@ -350,7 +289,7 @@ encrypted and never shown again. See [accounts](docs/developer/local-accounts.md
 | `AGENT_LOCAL_SESSION_TTL_DAYS` | NEW. Lifetime of a new sign-in, default 30 days, never extended by use. |
 | `AGENT_LOCAL_LOGIN_RATE_LIMIT_PER_15MIN` / `AGENT_LOCAL_LOGIN_ACCOUNT_RATE_LIMIT_PER_15MIN` / `AGENT_LOCAL_LOGIN_RATE_LIMIT_PER_HOUR_PER_IP` | NEW. Sign-in windows: per account per address (5, also a recognized browser's own window), per account from every address (50, counting only attempts the per-address windows let through) and per address (20 an hour). |
 | `AGENT_LOCAL_SIGNUP_RATE_LIMIT_PER_HOUR` / `AGENT_LOCAL_SIGNUP_RATE_LIMIT_PER_DAY` | NEW. Sign-ups per client address, 5 an hour and 10 a day. |
-| `AGENT_LOCAL_SIGNUP_REQUIRE_RESOLVED_CLIENT_IP` / `AGENT_LOCAL_UNRESOLVED_SIGNUP_RATE_LIMIT_PER_HOUR` / `AGENT_LOCAL_UNRESOLVED_SIGNUP_RATE_LIMIT_PER_DAY` | NEW. A sign-up whose client address cannot be told shares one budget (5 an hour, 10 a day) with every other such sign-up, or with the first set to `true` is refused (503). |
+| `AGENT_LOCAL_SIGNUP_REQUIRE_RESOLVED_CLIENT_IP` / `AGENT_LOCAL_UNRESOLVED_SIGNUP_RATE_LIMIT_PER_HOUR` / `AGENT_LOCAL_UNRESOLVED_SIGNUP_RATE_LIMIT_PER_DAY` | NEW. Sign-ups whose client address is unknown share one budget, 5 an hour and 10 a day. With the first set to `true` they are refused (503) instead. |
 | `AGENT_LOCAL_EMAIL_PROVIDER` | NEW. `smtp` (default), `tencent_ses`, or a registered transport. No fallback between them. |
 | `AGENT_TENCENT_SES_REGION` / `AGENT_TENCENT_SES_FROM_EMAIL` / `AGENT_TENCENT_SES_FROM_NAME` | NEW. Tencent SES region (`ap-guangzhou` or `ap-hongkong`), approved sender address and display name, with the `AGENT_TENCENT_CLOUD_*` credentials. |
 | `AGENT_TENCENT_SES_TEMPLATE_VERIFICATION` / `AGENT_TENCENT_SES_TEMPLATE_PASSWORD_RESET` / `AGENT_TENCENT_SES_TEMPLATE_APPROVAL` / `AGENT_TENCENT_SES_TEMPLATE_REJECTION` / `AGENT_TENCENT_SES_TEMPLATE_ADMIN_SIGNUP` / `AGENT_TENCENT_SES_TEMPLATE_NOTICE` | NEW. Approved SES template ids (0: none). Verification and password reset are required; any other mail without its own template goes through the notice template. |
@@ -359,87 +298,100 @@ encrypted and never shown again. See [accounts](docs/developer/local-accounts.md
 | `AGENT_SMTP_USERNAME` / `AGENT_SMTP_PASSWORD` | Optional relay credentials. Never logged. |
 | `AGENT_SMTP_FROM` | Sender address of account mail, e.g. `Cloud Agent <no-reply@example.org>`. Links in it are built from `AGENT_WEB_BASE_URL` only. |
 
-### Sandbox deletion archives
+### Sandbox archives
+
+Automatic lifecycle archives and **Archive to S3 and delete** share one policy,
+set only in **Admin → Settings → Sandbox**; no environment variable sets it or
+its destination. Archives go to `s3://<bucket>/cloud-agent/sandbox`, and the
+bucket defaults to `freeinference`. The policy holds the bucket, region, upload
+size limits, and either an AWS access key, whose secret is encrypted with the
+settings key and never returned by the admin API, or workload identity fields
+(a customer-managed KMS key ARN and the expected bucket owner). Without an
+access key, sandbox managers use the standard AWS SDK credential chain. Each
+Sandbox Manager keeps the local state of both, restorable checkpoints included,
+in `AGENT_SANDBOX_ARCHIVE_STATE_DIR`. See
+[Sandbox archives](docs/developer/operations.md#sandbox-archives) for IAM,
+bucket versioning and rollout.
 
 | Variable | Value / who provisions |
 |---|---|
-| `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` | *Optional deployment path.* Absolute path to an operator-owned private Compose override. `deploy.sh` requires a readable regular file and appends it after release-owned overlays in both source and artifact modes. Keep the file outside the checkout and restrict it to the main `control-plane` service. |
-| Standard AWS SDK credentials | *Deployment infrastructure, only without a saved access key.* When the Sandbox archives policy has no access key, the main control plane signs and verifies deletion archives through the standard SDK chain, preferably an IAM workload role. For environment or shared-profile credentials, set `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` to a private override for the main `control-plane` service; the base Compose does not forward AWS credential variables. A policy with a saved access key needs neither. No AWS credential is sent to a sandbox, web application or MCP listener. |
+| `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE` | *Optional.* Absolute path to a private Compose override, kept outside the checkout and limited to the main `control-plane` service. `deploy.sh` requires a readable regular file and applies it after the release's own overlays. |
+| Standard AWS SDK credentials | Needed only when the policy has no saved access key: the main control plane then signs and verifies deletion archives through the SDK chain, preferably with an IAM workload role. The base Compose file forwards no AWS variables, so put environment or shared-profile credentials in `AGENT_CONTROL_PLANE_COMPOSE_OVERRIDE_FILE`. No AWS credential reaches a sandbox, the web app or the MCP listener. |
 
-See [sandbox archive storage](docs/developer/operations.md#sandbox-archive-storage) for
-permissions, retention and verification requirements.
+[Sandbox archive storage](docs/developer/operations.md#sandbox-archive-storage)
+lists the permissions, retention and verification requirements.
 
 ### Behaviour switches read by the control plane
 
 | Variable | Value / who provisions |
 |---|---|
-| `COMPOSE_PROFILES` (`edge`, `pgadmin`) | Compose-level, read by `docker compose` not by this service. `edge` starts the nginx edge for a deployment that owns its own hostname: `/api/*` to the control plane with the prefix stripped, everything else to the web app. `pgadmin` starts the private PostgreSQL administration UI. Combine profiles with commas, for example `edge,pgadmin`. |
+| `COMPOSE_PROFILES` (`edge`, `pgadmin`, `github-relay`) | Read by `docker compose`, not by the service. `edge` starts the nginx edge for a deployment with its own hostname: `/api/*` goes to the control plane with the prefix stripped, everything else to the web app. `pgadmin` starts the private database UI. `github-relay` starts the GitHub relay (see `AGENT_SANDBOX_GITHUB_RELAY_CA_FILE`). Combine them with commas, for example `edge,pgadmin`. |
 | `AGENT_EDGE_BIND` / `AGENT_EDGE_PORT` | Where the edge listens; defaults `127.0.0.1` / `3003`. Only meaningful with the `edge` profile. |
 | `AGENT_CONTROL_PLANE_BIND` / `AGENT_CONTROL_PLANE_PORT` | Compose main-API binding, defaults `127.0.0.1` / `8000`. Put a TLS reverse proxy in front of public access. |
 | `AGENT_MCP_RELAY_BIND` / `AGENT_MCP_RELAY_PORT` | Compose MCP-only listener binding, defaults `127.0.0.1` / `8001`. Keep sandbox tools on this listener. |
-| `AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT` | NEW. Compose model relay binding, defaults `127.0.0.1` / `8002`. The `model-relay` service always runs; with no provided connection it refuses every request. Only the hosts' `model-tunnel` should reach it: it adds the deployment's provider key to requests that carry a running turn's placeholder. Keep it off the public edge. See [Provided models](docs/developer/operations.md#provided-models). |
+| `AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT` | NEW. Compose model relay binding, defaults `127.0.0.1` / `8002`. The `model-relay` service always runs and refuses every request while no provided connection exists. It adds the deployment's provider key to requests that carry a running turn's placeholder, so only the hosts' `model-tunnel` should reach it; keep it off the public edge. See [Provided models](docs/developer/operations.md#provided-models). |
 | `AGENT_WEB_BIND` / `AGENT_WEB_PORT` | Compose web-server binding, defaults `127.0.0.1` / `3002`. |
 | `AGENT_EDGE_CONFIG_FILE` | Host-side nginx configuration mounted read-only by the edge service. Default `./edge.nginx.conf`, relative to the Compose file. |
 | `AGENT_SITE_CONTENT_DIR` | Host-side directory of [site content files](#site-content-files) mounted read-only by the control plane at `/etc/cloud-agent/site`. Default `./site-content`, relative to the Compose file: the recipe's empty directory, which configures none of them. |
 | `AGENT_NETWORK_NAME` | Control-plane Compose network name, default `cloud-agent`. Use distinct names for independent stacks. |
-| `AGENT_SESSION_COOKIE_SECURE` | Defaults to on. Set to `false` **only** for a developer running the whole stack on plain `http://localhost`; a session cookie without `Secure` is one anyone on the path can take. On, the session cookie is `__Host-cloud_agent_session` and a sign-in in progress is parked in `__Host-cloud_agent_login`, names another host on the same site cannot set. Cookies under the plain names are not read: a browser that still holds only a `cloud_agent_session` cookie from before that rename signs in once more, and sign-in and sign-out remove it. Off, both keep the plain names, because browsers refuse the prefix without `Secure`. |
-| `AGENT_API_DOCS` | *Initial import.* Saved as **Serve API documentation** in Admin → Settings → Operations and read on every request, so turning it on or off needs no restart. Defaults to off; turn it on only on a development stack. On, the main API serves `/docs`, `/redoc` and `/openapi.json`; off, none of the three is served: the schema is unauthenticated, and the two pages load scripts from a CDN at a floating version. The MCP-only listener never serves them. An unusable value imports as off. |
-| `AGENT_MAX_STREAMS_PER_USER` | *Initial import.* Saved as **Live streams per account** in Admin → Settings → Operations (default `24`) and read each time a stream opens. How many live-update streams (the change stream and job event streams) one account may hold open on one control-plane process; one more answers 429 with `Retry-After`, which the web app backs off on. A browser tab holds one change stream and one stream per conversation it is watching. A missing, non-numeric or non-positive value imports the default. |
-| `AGENT_TRUST_PROXY_HEADERS` | Defaults to off. Set to `true` only when a proxy this deployment controls sits directly in front of the control plane and writes `X-Forwarded-For`; both shipped nginx configurations overwrite it with the peer address. Only the rightmost entry, the one that proxy wrote, is recorded in the admin audit trail, so a proxy that appends instead works too; entries to its left are the caller's own and are ignored. Behind a further proxy, such as a tunnel or load balancer in front of the edge, the recorded address is that hop's unless the edge uses nginx's realip module as its configuration describes. |
-| `AGENT_RUNTIME_REGISTRY_URL` | *Initial import.* Saved as **Agent package registry** in Admin → Settings → Agent versions; empty is the public registry `https://registry.npmjs.org`. The Settings page lists versions from the saved value, and every heartbeat answer tells each host to download from it; each host reports the registry its next download uses. Until every online host reports the saved registry, the Agent versions tab names the hosts still missing it and an update is refused. On a host, this variable is only the registry used before its first heartbeat answer. An unreachable registry shows on the page and blocks updating; nothing else depends on it. |
-| `AGENT_DEPLOYMENT_SHA` | Exact commit this API serves. Required by the production control-plane Compose stack and exported by `deploy/control-plane/deploy.sh`; do not hand-edit it during a rollout. New retained-group claims require the polling replica to advertise the matching completed host marker, so a pending or failed host deployment cannot claim through a cold-start API. The local stack generates its own stack-scoped marker. |
+| `AGENT_SESSION_COOKIE_SECURE` | *Initial import*, default on. Set `false` **only** for a whole stack on plain `http://localhost`: a cookie without `Secure` can be taken by anyone on the network path. On, the session and device cookies are `__Host-cloud_agent_local_session` and `__Host-cloud_agent_device`, names another host on the same site cannot set. Off, they use the plain names `cloud_agent_local_session` and `cloud_agent_device`, which are never read while it is on. |
+| `AGENT_API_DOCS` | *Initial import.* Saved as **Serve API documentation** in Admin → Settings → Operations, under Advanced; default off, checked on every request. On, the main API serves `/docs`, `/redoc` and `/openapi.json`; turn it on only on a development stack, because the schema is unauthenticated and the two pages load scripts from a CDN at a floating version. The MCP-only listener never serves them. |
+| `AGENT_MAX_STREAMS_PER_USER` | *Initial import.* Saved as **Live streams per account** in Admin → Settings → Operations, under Advanced (default `24`), checked when a stream opens: how many live-update streams (the change stream and job event streams) one account may hold open on one control-plane process. One more answers 429 with `Retry-After`, which the web app backs off on. A browser tab holds one change stream plus one per conversation it watches. |
+| `AGENT_TRUST_PROXY_HEADERS` | *Initial import*, default off. Set `true` only when a proxy you control sits directly in front of the control plane and writes `X-Forwarded-For`; both shipped nginx configurations overwrite it with the peer address. The audit trail records only the rightmost entry, the one that proxy wrote. Behind a further hop, such as a tunnel or load balancer in front of the edge, the recorded address is that hop's unless the edge uses nginx's realip module as its configuration describes. |
+| `AGENT_RUNTIME_REGISTRY_URL` | *Initial import.* Saved as **Agent package registry** in Admin → Settings → Agent versions; empty is `https://registry.npmjs.org`. Version lists come from it, and each heartbeat answer tells hosts to download from it. Until every online host reports the saved registry, the Agent versions tab names the hosts still missing it and updates are refused. On a host, this variable is only the registry before its first heartbeat answer. An unreachable registry blocks updating and nothing else. |
+| `AGENT_DEPLOYMENT_SHA` | The exact commit this API serves. The production Compose stack requires it and `deploy/control-plane/deploy.sh` exports it; do not edit it by hand during a rollout. A host replica claims new retained groups only while it advertises the completed marker for this commit, so a pending or failed host deployment cannot claim through a freshly started API. The local stack generates its own marker. |
 
 ### Source control
 
+Every variable here except `AGENT_GITHUB_APP_PRIVATE_KEY_PATH` and
+`AGENT_GITHUB_APP_PRIVATE_KEY_FILE` is an *initial import* into Admin → Settings
+→ Source control (`AGENT_GITHUB_API` under Advanced).
+
 | Variable | Value / who provisions |
 |---|---|
-| `AGENT_GITHUB_APP_ID` | Identifies the GitHub App used for repository access. Setting it enables key loading; an unreadable key makes GitHub temporarily unavailable and is retried every 30 seconds. Without it, key settings are ignored. Configure the App's callback/setup URLs for this deployment. See [credentials](docs/developer/operations.md#2-credentials). |
+| `AGENT_GITHUB_APP_ID` | The GitHub App used for repository access. Setting it turns on key loading; an unreadable key makes GitHub unavailable and is retried every 30 seconds. Configure the App's callback and setup URLs for this deployment ([credentials](docs/developer/operations.md#2-credentials)). |
 | `AGENT_GITHUB_APP_CLIENT_ID` | GitHub App OAuth client ID for users connecting their own GitHub account. |
 | `AGENT_GITHUB_APP_CLIENT_SECRET` | GitHub App OAuth client secret. Store outside Git; rotate when changing the App's audience. |
-| `AGENT_GITHUB_APP_PRIVATE_KEY_PATH` | *Bootstrap.* Path inside the container to a read-only PEM key. Supported Compose mounts it at `/etc/cloud-agent/github-app.pem`. An encrypted inline key saved in Admin Settings takes precedence over this mount. Keep private keys out of environment variables, Docker inspection output and log pipelines. |
+| `AGENT_GITHUB_APP_PRIVATE_KEY_PATH` | *Bootstrap.* Path inside the container to a read-only PEM key; the supported Compose file mounts it at `/etc/cloud-agent/github-app.pem`. A key saved in Admin Settings takes precedence. Keep private keys out of environment variables, `docker inspect` output and logs. |
 | `AGENT_GITHUB_APP_PRIVATE_KEY_FILE` | Host-side key file mounted read-only by control-plane Compose at `/etc/cloud-agent/github-app.pem`. Default `/dev/null` supplies no key. This differs from the in-container `_PATH` setting. |
-| `AGENT_GITHUB_APP_PRIVATE_KEY` | *Initial import.* Inline PEM for a one-time import in deployments that already supply it. Compose does not forward this variable. Set or replace an inline key in Admin Settings, where it is encrypted and never returned to the browser. The mounted `_PATH` form remains available for deployment-managed keys. |
+| `AGENT_GITHUB_APP_PRIVATE_KEY` | Inline PEM, imported once where a deployment already supplies it. Compose does not forward it. Set or replace an inline key in Admin Settings, where it is encrypted and never returned to the browser. |
 | `AGENT_GITHUB_APP_INSTALL_URL` | `https://github.com` authorization/installation URL used by the Connect GitHub flow; any other host, scheme or port is refused when saved or imported. The App, OAuth credentials and this URL must all be configured for user connections. |
-| `AGENT_GITHUB_COAUTHOR` | NEW. The co-author agents name in their commits, as `Name <email>`. Use the GitHub App bot's noreply address, `<bot-user-id>+<app-slug>[bot]@users.noreply.github.com`, so GitHub shows its avatar beside the owner's. Empty: commits name the owner only. Agents author commits as the conversation's owner (their GitHub noreply address) either way. |
-| `AGENT_GITHUB_API` | Defaults to `https://api.github.com`. Where the control plane sends GitHub App, installation-token and user-token requests and its repository reads. GitHub Enterprise Server is not supported: the Connect GitHub flow's OAuth and installation URLs are GitHub.com's, and the GitHub relay serves only `github.com` and `api.github.com`. |
+| `AGENT_GITHUB_COAUTHOR` | NEW. The co-author agents name in their commits, as `Name <email>`. Use the App bot's noreply address, `<bot-user-id>+<app-slug>[bot]@users.noreply.github.com`, so GitHub shows its avatar beside the owner's. Empty: commits name the owner only. Agents always author commits as the conversation's owner. |
+| `AGENT_GITHUB_API` | Default `https://api.github.com`: where the control plane sends GitHub App, token and repository requests. GitHub Enterprise Server is not supported: Connect GitHub uses GitHub.com's OAuth and installation URLs, and the GitHub relay serves only `github.com` and `api.github.com`. |
 | `AGENT_GITLAB_OAUTH_CLIENT_ID` | GitLab.com OAuth application client ID for user connections. |
 | `AGENT_GITLAB_OAUTH_CLIENT_SECRET` | GitLab.com OAuth client secret; store outside Git. |
 | `AGENT_GITLAB_OAUTH_REDIRECT_URI` | Public OAuth callback URI registered with GitLab. Must use HTTPS, except for localhost development, and anything else is refused when saved or imported; update the registration when the deployment URL changes. |
-| `AGENT_REPO_ALLOWLIST` | Comma-separated `owner/name` entries or `owner/*` rules for deployment-owned repository access. It is not per user: every user admitted to Cloud Agent may have the platform clone the listed repositories with this deployment's GitHub App, without connecting GitHub, so list only repositories all of them may work on. It grants no push: agents push and open pull requests only with their owner's own GitHub connection, through the GitHub relay. Matching is case-insensitive. Empty grants no allowlist access; users may still use repositories authorized through their own GitHub connection. |
+| `AGENT_REPO_ALLOWLIST` | Comma-separated `owner/name` entries or `owner/*` rules, matched case-insensitively. Not per user: every user admitted to Cloud Agent may have the platform clone the listed repositories with this deployment's GitHub App, without connecting GitHub, so list only repositories all of them may work on. It grants no push: agents push and open pull requests only with their owner's own GitHub connection, through the GitHub relay. Empty grants no allowlist access. |
 
 ### MCP
 
 Cloud Agent owns MCP discovery, per-user credentials, authorization and attempt
-fencing.
-
-Users add remote URLs, imported `mcpServers` snippets or stdio launch specs.
-Templates only prefill the connection form; environment variables neither add
+fencing. Users add remote URLs, imported `mcpServers` snippets or stdio launch
+specs; templates only prefill the form, and environment variables neither add
 servers nor grant access to them. Credentials live per user in
 `agent_mcp_connections`, encrypted with
-[`AGENT_SOURCE_CONTROL_ENCRYPTION_KEY`](#own-secrets). The settings below control
-relay reachability and connection target policy.
+[`AGENT_SOURCE_CONTROL_ENCRYPTION_KEY`](#own-secrets). The public base URL,
+GitHub sign-in and both `ALLOW` switches below are *initial imports* into
+Admin → Settings → MCP, all but GitHub sign-in under Advanced; the switches apply to new MCP transports after the MCP
+listener restarts. The MCP tunnel is a host setting
+([Tunnels and relays](#tunnels-and-relays)).
 
 | Variable | Value / who provisions |
 |---|---|
-| ~~`AGENT_MCP_CONFIG`~~ | *Removed.* There is no deployment-wide MCP registry. It named a file of remote servers with their credentials, and every user who could create a job could use them under that one identity — the team-MCP shape this product does not offer. Per-user connections replace it; the relay, the proxy and the sandbox boundary stay. Listed here rather than deleted because an existing deployment has this set, and a variable that silently stops meaning anything is worse than one recorded as gone. |
-| `AGENT_SANDBOX_MCP_URL` | *Host only.* The MCP relay **as this host's sandboxes reach it**. The host compose derives it from the host's own MCP tunnel (`http://<AGENT_MCP_HOSTNAME>:<LISTEN_PORT>`) and gives it to the runner and the sandbox manager, which hand it to every member CLI that has tools; it is also the relay the host rules admit. The control plane no longer reads it: the copy it handed over at claim time had to match every host's alias, and left unset it failed every turn whose owner had connected a tool. A host without one fails such a turn before any container work, telling the owner the site is misconfigured and to ask an admin to finish setting it up. |
-| `AGENT_MCP_TUNNEL_*` | MCP-only SSH tunnel. Required suffixes: `SSH_DESTINATION`, `SSH_KEY`, `SSH_KNOWN_HOSTS`. Defaults for `SSH_PORT` / `REMOTE_HOST` / `REMOTE_PORT` / `LISTEN_PORT`: `22` / `127.0.0.1` / `8001` / `8000`. Its remote destination must be the MCP-only listener; main API port 8000 serves no tools. Give it a distinct, narrowly restricted key. |
-| `AGENT_SANDBOX_GITHUB_RELAY_CA_FILE` | NEW. *Host only.* The GitHub relay CA's certificate on this host (`deploy/control-plane/github-relay-certs.sh` makes it). Set, with the `github-relay` Compose profile on this host and the control plane, every group bridge resolves `github.com` and `api.github.com` to the host's `github-tunnel`, and each member trusts the CA for its own processes; git and `gh` then reach GitHub as the conversation's owner through the control plane's GitHub relay. Unset, sandboxes reach GitHub directly and anonymously. See the [design](docs/agents/specs/2026-11-04-agent-native-pull-requests.zh-CN.md). |
-| `AGENT_GITHUB_TUNNEL_*` | NEW. The GitHub relay's SSH tunnel, started by the `github-relay` profile. Required with it: `SSH_DESTINATION`, `SSH_KEY`, `SSH_KNOWN_HOSTS`. Defaults for `SSH_PORT` / `REMOTE_HOST` / `REMOTE_PORT`: `22` / `127.0.0.1` / `8443`; it listens on 443 under the names `github.com` and `api.github.com`. Its remote destination must be the GitHub relay's listener (`AGENT_GITHUB_RELAY_BIND` / `AGENT_GITHUB_RELAY_PORT` on the control plane, with its certificate and key in `AGENT_GITHUB_RELAY_TLS_DIR`). Give it a key of its own. |
-| `AGENT_MCP_HOSTNAME` | The relay's alias on both container networks. Defaults to `agent-mcp`. |
-| `AGENT_CONTROL_PLANE_TUNNEL_*` | Runner-only SSH tunnel to the main API. Required suffixes: `SSH_DESTINATION`, `SSH_KEY`, `SSH_KNOWN_HOSTS`. Defaults for `SSH_PORT` / `REMOTE_HOST` / `REMOTE_PORT` / `LISTEN_PORT`: `22` / `127.0.0.1` / `8000` / `8000`. It joins only the runner network and is unreachable from sandboxes. Use a key distinct from the MCP and inference keys. |
-| `AGENT_CONTROL_PLANE_HOSTNAME` | That tunnel's alias, on the runner network only. Defaults to `agent-control-plane`. |
-| `AGENT_MCP_PUBLIC_BASE_URL` | *Optional override.* The public API base URL used to register and receive MCP OAuth callbacks, including the API prefix — for example `https://example.com/agents/api`. The callback is `<base>/v1/agent/mcp/oauth/callback/<connection-id>`. After processing it, the service returns the browser to `<AGENT_WEB_BASE_URL>/integrations`; the web and API bases may differ. When unset, `AGENT_PUBLIC_API_URL` is used; set the override only if MCP callbacks have a separate public address. Never derived from request headers. If neither setting supplies a callback address, browser authorization is unavailable; static credentials still work. |
-| `AGENT_MCP_GITHUB_CLIENT_ID` / `AGENT_MCP_GITHUB_CLIENT_SECRET` | *Optional legacy import.* Configure GitHub MCP browser sign-in in Admin Settings → MCP. Register a service-owned GitHub OAuth App or GitHub App with callback `<public API base>/v1/agent/mcp/oauth/callback/github` (including the API proxy prefix). Both client values and a public callback base are required. The preset then defaults to browser sign-in; each user authorizes their own account without registering an app or pasting a token. The client secret stays in encrypted settings and pending OAuth flows, while user tokens remain in separate MCP connections. Prefer a GitHub App limited to the required repositories and permissions, including Contents and Pull requests read and write access when agents publish changes; OAuth Apps request `repo` and `read:org` scopes (GitHub's `repo` scope permits writes). A personal access token remains available for narrower repository access. |
-| `AGENT_MCP_ALLOW_PRIVATE_TARGETS` | Whether a user-added MCP connection may dial private and loopback addresses. Off by default: a remote connection that reaches loopback reaches **this** service. Turn it on only for MCP servers on a private network the operator trusts. Turning it on still refuses the ranges this platform never dials, so it cannot be used to reach the cloud metadata service. |
-| `AGENT_MCP_ALLOW_PLAIN_HTTP` | Whether a user-added MCP connection may use `http://` as well as `https://`. Off by default because the credential would travel in the clear. A deployment whose MCP servers genuinely speak HTTP inside a private network turns it on deliberately; it is a separate variable from the private-target one because it is a separate risk. |
-| `AGENT_SANDBOX_MODEL_RELAY_URL` | NEW. *Host only; written by Admin → Servers → Add server.* Where this host's sandboxes reach the model relay: `http://` and the `model-tunnel`'s alias and port (`http://agent-models:8000` with the defaults), a name and never an address. Set, `sandbox_host.sh` requires the model tunnel's destination, key and known_hosts, every group bridge carries that relay, the host advertises `model-relay-v1`, and it is handed turns that run on a model connection the deployment provides. Unset, the host advertises nothing and is handed none; turns on owners' own connections are unaffected. See [Provided models](docs/developer/operations.md#provided-models). |
-| `AGENT_MODEL_TUNNEL_*` | NEW. *Written by Add server.* The model relay's SSH tunnel. Its `model-tunnel` service runs on every host and waits idle without `SSH_DESTINATION`. Required with `AGENT_SANDBOX_MODEL_RELAY_URL`: `SSH_DESTINATION`, `SSH_KEY`, `SSH_KNOWN_HOSTS`. Defaults for `SSH_PORT` / `REMOTE_HOST` / `REMOTE_PORT` / `LISTEN_PORT`: `22` / `127.0.0.1` / `8002` / `8000`; `AGENT_MODEL_RELAY_HOSTNAME` (default `agent-models`) is the name it answers to on a group bridge. Its remote destination must be the model relay's listener (`AGENT_MODEL_RELAY_BIND` / `AGENT_MODEL_RELAY_PORT` on the control plane, loopback and `8002` by default). Give it a key of its own, with a `permitopen` for that port only; Add server does, on an account of its own on the control-plane machine. Set these by hand only on a host that Add server did not set up. |
-| `AGENT_MODEL_CONNECTIONS_ENABLED` | Whether owners may add their own model connections (OpenAI Chat Completions or Responses, Anthropic Messages) and start turns on them, and whether turns start on a connection the deployment provides. On unless set to `0`, `false` or `no`; unset or empty is on, as the shipped Compose file passes it. Connections are the only inference, so with it off no new turn starts anywhere. Set it to `false` for maintenance, or before the cutover while some host or control-plane replica still runs an earlier release if you want new turns held until all run this one; then unset it. Turning it off stops new connections and new turns on them; turns already admitted still run on their connection or fail. |
+| ~~`AGENT_MCP_CONFIG`~~ | *Removed*; nothing reads it. It named one file of shared MCP servers and credentials that every user used under one identity. Connections are per user; delete it from `.env`. |
+| `AGENT_MCP_PUBLIC_BASE_URL` | *Optional override* of the public API base for MCP OAuth callbacks, including the API prefix, for example `https://example.com/agents/api`. The callback is `<base>/v1/agent/mcp/oauth/callback/<connection-id>`, after which the browser returns to `<AGENT_WEB_BASE_URL>/integrations`. Unset, `AGENT_PUBLIC_API_URL` is used; never derived from request headers. With neither, browser authorization is unavailable and static credentials still work. |
+| `AGENT_MCP_GITHUB_CLIENT_ID` / `AGENT_MCP_GITHUB_CLIENT_SECRET` | *Optional legacy import* for GitHub MCP browser sign-in. Register a service-owned GitHub OAuth App or GitHub App with callback `<public API base>/v1/agent/mcp/oauth/callback/github`. With both values and a public callback base, the preset defaults to browser sign-in and each user authorizes their own account. The client secret stays in encrypted settings; user tokens stay in their MCP connections. Prefer a GitHub App limited to the needed repositories and permissions (Contents and Pull requests read and write when agents publish changes); an OAuth App requests `repo` and `read:org`, and `repo` permits writes. A personal access token remains an option for narrower access. |
+| `AGENT_MCP_ALLOW_PRIVATE_TARGETS` | Whether a user-added MCP connection may dial private and loopback addresses. Off by default: a connection that reaches loopback reaches **this** service. Turn it on only for MCP servers on a private network you trust. The ranges the platform never dials, such as the cloud metadata service, stay refused. |
+| `AGENT_MCP_ALLOW_PLAIN_HTTP` | Whether a user-added MCP connection may use `http://`. Off by default, because the credential would travel in the clear; it is separate from the private-target switch because it is a separate risk. |
+| `AGENT_MCP_SERVERS` | **Not operator-set.** The runner publishes the relay endpoints under this name, as one JSON object of `{alias: url}`, for the image's CLI wrappers to merge into their CLI's MCP configuration. A hand-set value would point a sandbox at servers nobody connected. |
+| `AGENT_MCP_TOKEN` | **Not operator-set.** The generated sandbox runtime config references `${AGENT_MCP_TOKEN}` for the relay credential the runner injects at launch, the chat process's residency credential. A hand-set value would be a static tool credential shared by every job. |
+
+### Model connections
+
+| Variable | Value / who provisions |
+|---|---|
+| `AGENT_MODEL_CONNECTIONS_ENABLED` | Whether owners may add model connections (OpenAI Chat Completions or Responses, Anthropic Messages) and start turns on them, and whether turns start on connections the deployment provides. On unless set to `0`, `false` or `no`. Connections are the only inference, so off stops every new turn; turns already admitted still run or fail. Set it to `false` to hold new turns during maintenance or while some host or control-plane replica still runs an earlier release, then unset it. |
 | ~~`AGENT_DEFAULT_MODEL`~~ | **removed**. A new task starts on the model and connection of its owner's newest turn, or the owner picks one; nothing reads this. |
-| `AGENT_MCP_SERVERS` | **Not operator-set — listed so nobody provisions it.** The name the runner publishes the relay endpoints under for the image-shipped wrappers, as one JSON object of `{alias: url}`. The wrappers merge it into the CLI config they already write, under whichever key their CLI spells MCP with, and add the token reference in that CLI's own syntax — which is not portable between them. A value put here by hand would point a sandbox at servers nobody connected. |
-| `AGENT_MCP_TOKEN` | **Not operator-set — listed so nobody provisions it.** The name the generated sandbox runtime config *references* (`${AGENT_MCP_TOKEN}`) for the relay credential the runner injects at launch: the chat process's residency credential. A value put here by hand would be a static tool credential shared by every job, which is the thing these scoped credentials exist to avoid. |
-| `AGENT_COMPAT_CLIENT` / `AGENT_COMPAT_UPSTREAM_URL` / `AGENT_COMPAT_UPSTREAM_KEY` / `AGENT_COMPAT_MODEL` / `AGENT_COMPAT_TOKEN` / `AGENT_COMPAT_REASONING_EFFORT` / `AGENT_COMPAT_UPSTREAM_RELAY` | **Not operator-set — listed so nobody provisions it.** NEW. What a host hands the model protocol compatibility launcher when Codex or Claude Code runs on an owner's Chat Completions connection: the CLI's protocol, the connection's URL and key, the model it is locked to, the member's loopback token, which the control plane issues with the claim, and the turn's reasoning level (absent at Auto), which the helper sends upstream as `reasoning_effort`. `AGENT_COMPAT_UPSTREAM_RELAY=1` says the upstream is the host's own model relay, for a member on a model the deployment provides: only then does the launcher accept a plain `http` upstream, and what it is handed as a key is that member's placeholder. The launcher reads and removes all of them before it becomes the CLI, so the CLI never holds the provider key. Set by hand they would start nothing: the launcher only runs in front of a translated member. |
 
 ### Web search
 
@@ -450,54 +402,51 @@ relay reachability and connection target policy.
 
 ### Sandbox settings from the admin pages
 
-Host settings can be set from the admin pages instead of in each host's
-`.env`, including `AGENT_TIMEOUT_S`, `AGENT_CHAT_IDLE_TIMEOUT_S`,
+These host settings are set from the admin pages, not in each host's `.env`:
+`AGENT_TIMEOUT_S`, `AGENT_LEASE_TTL`, `AGENT_CHAT_IDLE_TIMEOUT_S`,
 `AGENT_SOURCE_IMPORT_MAX_MIB`, `AGENT_SHARED_RESIDENT_CAPACITY`,
-`AGENT_STORAGE_MIN_AVAILABLE_MIB`,
-`AGENT_SANDBOX_CPU_MILLICORES`, `AGENT_SANDBOX_MEMORY_MIB`, `AGENT_SANDBOX_DISK_MIB`,
-`AGENT_TERMINAL_IDLE_TTL_SECONDS`, `AGENT_TERMINAL_HARD_TTL_SECONDS` and
-`AGENT_TERMINAL_MAX_SESSIONS`. The **Settings** page sets a value for every
-server (`PUT /admin/agent/host-settings`), and a server's details on the
-**Servers** page set one for that server alone
-(`PUT /admin/agent/runner-hosts/<host>/settings`). For each setting the host
-applies, highest first:
+`AGENT_STORAGE_MIN_AVAILABLE_MIB`, `AGENT_SANDBOX_CPU_MILLICORES`,
+`AGENT_SANDBOX_MEMORY_MIB`, `AGENT_SANDBOX_DISK_MIB`,
+`AGENT_TERMINAL_IDLE_TTL_SECONDS`, `AGENT_TERMINAL_HARD_TTL_SECONDS`,
+`AGENT_TERMINAL_MAX_SESSIONS` and the limits in the table below. **Admin →
+Settings → Sandbox** sets a value for every server (`PUT /admin/agent/host-settings`),
+with the terminal, workspace and storage limits and **Turn lease** under
+Advanced, and a server's details on **Servers** set one for that server alone
+(`PUT /admin/agent/runner-hosts/<host>/settings`). A host uses, highest first:
 
 1. the value set for that server;
 2. the value set for every server;
 3. the built-in default.
 
-The control plane sends complete effective values, including defaults, on each
-heartbeat. Host environment values apply only before the first settings answer
-and remain visible as diagnostic local values. Clearing a per-server value
-uses the global value or built-in default; clearing a global value uses the
-built-in default. The bounds an admin may set are in
-`cloud_agent_shared/host_settings.py` and are typo guards, not capacity statements.
+Each heartbeat answer carries the complete effective values, so a host applies a
+change within about 30 seconds, without a redeploy; clearing a value falls back
+to the next level. A host's environment values apply only until its first
+settings answer. Its first complete heartbeat also imports its non-default values
+once as that server's values, unless an administrator has already set or reset
+them. The registry, units and bounds are in
+[`cloud_agent_shared/host_settings.py`](apps/backend/cloud_agent_shared/host_settings.py);
+the bounds are typo guards, not capacity statements.
 
-Container CPU, memory, and disk settings apply to new sandbox groups. Resuming a
-chat or forking it preserves the group's original limits; all members share
-those resources. CPU is entered as vCPU in the admin pages and stored in
-millicores (1 vCPU = 1000 millicores). Memory and disk accept MiB or GiB.
-Defaults are 2 vCPU, 4096 MiB memory, and no per-container disk quota. Initial
-environment values are `AGENT_SANDBOX_CPU_MILLICORES=2000`,
-`AGENT_SANDBOX_MEMORY_MIB=4096`, and `AGENT_SANDBOX_DISK_MIB=0`.
+Nothing running is interrupted. A turn keeps the time limit it started with, and
+a sandbox keeps the session capacity and CPU, memory and disk limits it was
+created with; Fork members share them. The sandbox manager applies terminal
+limits from its next sweep. The page shows a value as *applying* until the host
+confirms it. A runner that does not advertise `host-settings-v1` keeps its
+`.env` values until it is redeployed, and the page says so.
+
+CPU is entered in vCPU and stored in millicores (1 vCPU = 1000); memory and disk
+take MiB or GiB. The defaults are `AGENT_SANDBOX_CPU_MILLICORES=2000`,
+`AGENT_SANDBOX_MEMORY_MIB=4096` and `AGENT_SANDBOX_DISK_MIB=0` (no disk quota).
 
 A positive disk limit sets Docker's `--storage-opt size=<MiB>M` on the writable
-layer, including the workspace, caches, and installed files. It excludes the
-read-only image and memory-backed temporary files. This requires Docker
-`overlay2` on an XFS backing filesystem mounted with project quotas (`pquota`
-or `prjquota`). Docker refuses container creation when the storage backend does
-not support the requested quota. Set the disk value to 0 to create groups with
-no disk quota; resetting an override inherits the global value or default.
-A positive disk limit is recommended on every server that runs the untrusted
-profile (`untrusted-kata-v1`), whose sandboxes otherwise share one unbounded
-disk. It is not required: a server at 0 still takes untrusted work, and the
-control plane and runner log a warning and the Servers page shows **No
-container disk quota** for it.
-The runner's existing storage attestation continues to measure the host
-filesystem rather than each sandbox's quota.
-
-The same cards also manage workspace and terminal resource limits. These
-additional environment names supply initial local values only:
+layer: the workspace, caches and installed files, not the image or memory-backed
+temporary files. It needs Docker `overlay2` on XFS mounted with project quotas
+(`pquota` or `prjquota`); otherwise Docker refuses to create the container. A
+positive limit is recommended on every server that runs `untrusted-kata-v1`,
+whose sandboxes otherwise share one unbounded disk. A server at 0 still takes
+untrusted work; it logs a warning, and the Servers page shows **No container
+disk quota**. Apart from this limit, disk is guarded only at admission, by
+`AGENT_STORAGE_MIN_AVAILABLE_MIB`.
 
 | Variable | Initial default / purpose |
 |---|---|
@@ -513,181 +462,158 @@ additional environment names supply initial local values only:
 | `AGENT_TERMINAL_INPUT_MAX_KIB` | 64 KiB of input per terminal request. |
 | `AGENT_TERMINAL_MAX_STREAMS_PER_SESSION` | 4 concurrent viewers per terminal. |
 
-Workspace commands and Git inspection are also bounded in number, by the
-Sandbox Manager rather than by a setting: at most 16 run at once on one host and 4 for
-one chat, on a thread pool of their own, and one more is refused with 429
-rather than queued behind them.
-
-The values ride the heartbeat answer, so a host applies a change within one
-heartbeat (about 30 seconds) with no redeploy. Nothing running is interrupted:
-a turn keeps the time limit it started with, an existing sandbox keeps the
-session capacity and CPU, memory, and disk limits it was created with, and the sandbox manager's terminal limits apply from its
-next sweep. Each host reports what it applies and what its own `.env` gives,
-and the page shows a value as *applying* until the host confirms it. A runner
-that predates this (it does not advertise `host-settings-v1`) keeps its `.env`
-values until it is redeployed, and the page says so.
+The Sandbox Manager runs at most 16 workspace commands and Git inspections at
+once per host and 4 per workspace; one more is refused with 429. A command that
+times out or overflows its output limit is stopped with its own process group,
+so other sessions and terminals in the shared container keep running. A native
+CLI record over 8 MiB stops its member process. Events are capped at 256 KiB,
+and text Postgres cannot store (a NUL or an unpaired surrogate) becomes U+FFFD.
 
 ### Optional compute-resource management
 
 These values belong only to the stable main control plane, not its MCP-only
-listener, any Host, or any sandbox. See [the compute runbook](docs/developer/operations-compute.md)
-for deployment profiles, verified SSH access and CloudLab endpoint setup.
+listener, any Host or any sandbox. See
+[the compute runbook](docs/developer/operations-compute.md) for deployment
+profiles, verified SSH access and CloudLab setup. Without them, manual Host
+management still works.
 
 | Variable | Meaning |
 | --- | --- |
-| `AGENT_COMPUTE_SANDBOX_IMAGE_REPOSITORY` | Where automatic Server setup looks for the sandbox image this release published, as `<repository>:sandbox-<commit>`. Default `ghcr.io/harvardmadsys/cloud-agent-sandbox`; empty disables the lookup. When the image exists (checked anonymously), the generated Host configuration pulls `<repository>:sandbox-{deployment_sha}` with `AGENT_SANDBOX_IMAGE_PULL=true`, so its chats record a registry digest and can be restored on another Host. Otherwise the Host builds its own image, as before, and its chats stay on it. |
-| `AGENT_COMPUTE_SECRET_KEY` | Independent encryption key, at least 32 bytes, for stored compute connections and Admin-managed deployment profiles. A setting: imported once when the settings row is created, or generated there when unset, and stored encrypted under the settings root key. Later values in `.env` are ignored, so an upgraded deployment can delete the line. Back up the settings root key with the database. |
+| `AGENT_COMPUTE_SANDBOX_IMAGE_REPOSITORY` | Where automatic Server setup looks for this release's sandbox image, `<repository>:sandbox-<commit>`. Default `ghcr.io/harvardmadsys/cloud-agent-sandbox`; empty turns the lookup off. When the image exists (checked anonymously), the generated Host configuration pulls `<repository>:sandbox-{deployment_sha}` with `AGENT_SANDBOX_IMAGE_PULL=true`, so its chats record a registry digest and can be restored on another Host. Otherwise the Host builds its own image and its chats stay on it. |
+| `AGENT_COMPUTE_SECRET_KEY` | *Initial import*, generated when unset: the key, at least 32 bytes, for stored compute connections and Admin-managed deployment profiles, itself stored encrypted under the settings root key. Later `.env` values are ignored, so you can delete the line; back up the settings root key with the database. |
 | `AGENT_COMPUTE_CONFIG` | Absolute path inside the control-plane process to the operator-owned JSON deployment configuration. |
 | `AGENT_COMPUTE_DIRECTORY` | Absolute host directory mounted read-only at `/run/compute` by the optional Compose overlay; `deploy.sh` includes the overlay when this is set. |
-| `AGENT_CONTROL_PLANE_SSH_HOST` | Editable first-time Server setup address for the service node. The supported deployer defaults to the node's FQDN, falling back to its hostname; set an SSH address explicitly when using another deployment system or a different SSH alias. Saved setups take precedence. |
-| `AGENT_CLOUDLAB_API_URL` | Operator-verified HTTPS Portal API base: `https://boss.emulab.net:43794` for CloudLab, not the portal's web address `www.cloudlab.us`. Leave unset to disable the CloudLab adapter. |
-| `AGENT_COMPUTE_REGISTRATION_URL` | Optional. The HTTPS address new CloudLab nodes post their SSH host keys to, ending in `/v1/compute/node-registrations`. When unset it is `AGENT_PUBLIC_API_URL` followed by `/v1/compute/node-registrations`, like MCP callbacks, and only when that URL is HTTPS. Only HTTPS is used: a node checks the control plane's certificate before sending its one-time token. Without either, nodes set to register their keys cannot be created. |
-
-Without this configuration the existing Host management remains available;
-resource creation requires configured credentials and deployment profiles.
+| `AGENT_CONTROL_PLANE_SSH_HOST` | First-time Server setup address of the service node. The supported deployer defaults it to the node's FQDN, else its hostname; set it for another deployment system or SSH alias. Saved setups take precedence. |
+| `AGENT_CLOUDLAB_API_URL` | *Initial import.* CloudLab's HTTPS Portal API, `https://boss.emulab.net:43794`, not the portal's web address `www.cloudlab.us`. Unset disables CloudLab. |
+| `AGENT_COMPUTE_REGISTRATION_URL` | *Initial import.* Optional HTTPS address new CloudLab nodes post their SSH host keys to, ending in `/v1/compute/node-registrations`. Unset, it is `AGENT_PUBLIC_API_URL` plus that path, when that URL is HTTPS. A node checks the control plane's certificate before sending its one-time token. Without either, nodes that register their keys cannot be created. |
 
 ### Repository environments
 
-Reusable repository environments are available by default. There is no feature switch or initial environment-variable import. A legacy `repository_environments_enabled=false` setting or `AGENT_REPOSITORY_ENVIRONMENTS_ENABLED=false` value is ignored. Settings, task selection and the workspace Environment tab are always offered. `/config` always reports environment limits.
-
-A task with no configured variables or scripts uses the base environment without environment preparation. Configured workspaces still require an environment-capable runner and sandbox manager; owner authorization, encryption and execution isolation remain enforced.
+Reusable repository environments are always on; nothing configures them, and a
+leftover `repository_environments_enabled=false` setting or
+`AGENT_REPOSITORY_ENVIRONMENTS_ENABLED=false` is ignored. A task with no
+variables or scripts uses the base environment without preparation; a configured
+workspace needs an environment-capable runner and sandbox manager.
 
 ## Host agent (`cloud_agent_host`)
 
 ### The stack's own identity
 
-Read by `deploy/host/deploy.sh` and `deploy/host/sandbox_host.sh` rather than by
-compose, because they name the stack rather than configure it.
+`deploy/host/deploy.sh` and `deploy/host/sandbox_host.sh` read these, not
+Compose: they name the stack rather than configure it.
 
 | Variable | Value / who provisions |
 |---|---|
-| `COMPOSE_PROJECT` | Required host-stack project name, with no host default. It prefixes containers, images and networks; reusing a name lets a second deployment recreate the first stack. Give sibling environments distinct names, such as `cloud-agent-sandbox-staging` and `cloud-agent-sandbox-prod`. The control-plane deploy script separately defaults its project to `cloudagent`. |
-| `AGENT_HOST_STATE_ROOT` | Host path for persisted enrollment state and readiness markers. Supported host Compose default: `/var/lib/hybridinference/agent-host`. Set a unique path per execution environment; it is required explicitly when `SIBLING_COMPOSE_PROJECTS` is set. Back it up with retained host state. |
+| `COMPOSE_PROJECT` | Required host-stack project name, with no host default. It prefixes containers, images and networks, and reusing a name lets a second deployment recreate the first stack, so give sibling environments distinct names such as `cloud-agent-sandbox-staging` and `cloud-agent-sandbox-prod`. The control-plane deploy script defaults its own project to `cloudagent`. |
+| `AGENT_HOST_STATE_ROOT` | Host path for enrollment state and readiness markers; host Compose default `/var/lib/hybridinference/agent-host`. Use a unique path per execution environment (required when `SIBLING_COMPOSE_PROJECTS` is set) and back it up with retained host state. |
 | `AGENT_RUNNER_STOP_GRACE` / `AGENT_SANDBOX_MANAGER_STOP_GRACE` | Compose shutdown windows, defaults `5m` / `30s`. The runner drains active children; sandbox manager cleanup follows the runner drain. |
-| `SIBLING_COMPOSE_PROJECTS` | Comma-separated projects on this machine that are the *other* environment rather than a stray copy of this one. Setting it makes `AGENT_HOST_STATE_ROOT` required: sharing that host path means sharing an enrolment credential. Chat workspaces are Docker writable layers and have no host directory. The deploy's guard reports containers of this stack's shape under any project it does not know; a legitimate sibling must be named or it trips that guard forever. |
-| `SHARED_READY_TIMEOUT` | Deployment-script wait for the two parallel rollout halves, default 900 seconds. The host uses the same bound while waiting for cold-start inference/MCP/control endpoints; the control deploy uses it while waiting for a fresh exact-SHA heartbeat and reverse sandbox manager probes. This is a rollout watchdog, not a chat/session timeout. |
+| `SIBLING_COMPOSE_PROJECTS` | Comma-separated projects on this machine that belong to the other environment. The deploy guard reports containers shaped like this stack under any project it does not know, so name each legitimate sibling here. Setting it makes `AGENT_HOST_STATE_ROOT` required: sharing that path would share an enrollment credential. |
+| `SHARED_READY_TIMEOUT` | Seconds the deploy scripts wait for the two parallel rollout halves, default 900: the host for cold-start MCP and control endpoints, the control deploy for a fresh exact-SHA heartbeat and reverse sandbox manager probes. A rollout watchdog, not a chat timeout. |
 
 ### Scheduling
 
 | Variable | Notes |
 |---|---|
-| `AGENT_HOST_CREDENTIAL` | What `/v1/agent/host/register` hands back. Authenticates this machine's heartbeats and claims and names it; there is no shared claim credential or request-body host fallback. Revoked by removing the host. The runner normally reads the persisted file instead of setting this variable. |
-| `AGENT_LEASE_TTL` | Attempt lease horizon, default 120 seconds. *Host bootstrap.* Set as **Turn lease** for all servers or one server from the admin pages (41–900 seconds), which win over this value from the next heartbeat; each claim asks for the value in effect and the turn renews with the lease it was claimed with. A host imports this value once into its own server setting on the first heartbeat that reports it. Inference grant TTL is independent: `grants.GRANT_TTL_S = RENEWAL_INTERVAL_S × RENEWAL_HEADROOM_PASSES = 30 × 4 = 120 seconds`. Changing the lease horizon does not change grant lifetime. See [lease troubleshooting](docs/developer/runner-lease-troubleshooting.md). |
-| `AGENT_TIMEOUT_S` | Hard watchdog for one actively executing Agent CLI turn (default 3600 seconds). Hitting it fails/fences that turn; it does not mean the chat was idle and is not an alternate sandbox lifecycle timeout. Can be set from the admin pages, which win over this value; see *Sandbox settings from the admin pages*. |
-| `AGENT_RUNNER_HOST` | Execution environment name redeemed by `AGENT_ENROLL_TOKEN` on first registration and shared by every turn the machine runs. After enrollment, the credential is authoritative; changing this value does not rename the environment. Use `AGENT_PHYSICAL_HOST` to group environments for display without changing existing identities. |
+| `AGENT_HOST_CREDENTIAL` | What `/v1/agent/host/register` returns. It authenticates and names this machine's heartbeats and claims; there is no shared claim credential. Removing the host revokes it. The runner normally reads the persisted file (`AGENT_HOST_CREDENTIAL_FILE`) instead. |
+| `AGENT_LEASE_TTL` | Attempt lease length, default 120 seconds. *Host bootstrap*: the admin **Turn lease** setting (41 to 900 seconds, for all servers or one) replaces it from the next heartbeat, and a host imports this value once as its own server setting. A turn renews with the lease it was claimed with. See [Runner lease failures](docs/developer/runner-lease-troubleshooting.md). |
+| `AGENT_TIMEOUT_S` | Hard limit on one running Agent CLI turn, default 3600 seconds. Reaching it fails and fences the turn; it has nothing to do with chat idleness or the sandbox lifecycle. The admin pages override it. |
+| `AGENT_RUNNER_HOST` | Execution environment name redeemed by `AGENT_ENROLL_TOKEN` at first registration. After enrollment the credential decides the identity, and changing this value renames nothing; use `AGENT_PHYSICAL_HOST` to group environments for display. |
 
 ### Sandbox Manager, runtime and reporting
 
 | Variable | Notes |
 |---|---|
-| `AGENT_SANDBOX_MANAGER_URL` | How a runner dials its sandbox manager — normally the Compose service URL. The runner advertises `AGENT_SANDBOX_MANAGER_ADVERTISE_URL` (or this value only when the control plane truly shares that network) at enrollment. The control plane always resolves sandbox managers through the attempt's enrolled host row and never treats this as a global fallback. |
-| `AGENT_SANDBOX_MANAGER_ADVERTISE_URL` | What the runner *reports* at enrolment when that differs from what it *dials*. It may be omitted in the integrated local stack, where the control plane and sandbox manager share a network. It is required by `deploy/host/docker-compose.sandbox.yml`, including when its project happens to be on the same physical machine as the control-plane project: separate Compose networks cannot resolve the sandbox manager service name. Set it to the far end of the reverse forward (`AGENT_SANDBOX_MANAGER_REVERSE_BIND`/`_PORT`) and never without that tunnel; otherwise every terminal, file listing and Git status answers 503. |
-| `AGENT_SANDBOX_MANAGER_TOKEN` | Pool-wide sandbox manager credential: provision the same value in the control plane and every host. Host records contain sandbox manager URLs, not separate credentials. A compromised host's token therefore authenticates to other sandbox managers. Compare SHA-256 fingerprints during provisioning without displaying the secret; a mismatch causes sandbox manager 401 responses. Per-host sandbox manager credentials require a separate distribution design. |
-| `AGENT_SANDBOX_MANAGER_REVERSE_BIND` / `AGENT_SANDBOX_MANAGER_REVERSE_PORT` | Required reverse listener for standalone host deployments. Bind the actual stable control-plane Docker bridge gateway address, never loopback or `0.0.0.0`; use a distinct port per simultaneously deployed Host. The advertised sandbox manager URL must match it. |
+| `AGENT_SANDBOX_MANAGER_URL` | How a runner reaches its sandbox manager, normally the Compose service URL. The control plane always finds a sandbox manager through the attempt's enrolled host row, never through this. |
+| `AGENT_SANDBOX_MANAGER_ADVERTISE_URL` | The sandbox manager URL the runner reports at enrollment, when it differs from the one it dials. `deploy/host/docker-compose.sandbox.yml` requires it, even on the control plane's machine, because separate Compose networks cannot resolve the service name; only the integrated local stack can omit it. Set it to the far end of the reverse forward (`AGENT_SANDBOX_MANAGER_REVERSE_BIND`/`_PORT`) and never without that tunnel, or every terminal, file listing and Git status answers 503. |
+| `AGENT_SANDBOX_MANAGER_TOKEN` | The pool-wide sandbox manager credential: the control plane and every host hold the same value. The control plane generates it into its first settings row (or imports it), and server setup writes it into each host. Host records hold URLs, not separate credentials, so a compromised host's token authenticates to every other sandbox manager. When provisioning by hand, compare SHA-256 fingerprints rather than display the secret; a mismatch shows as 401 answers. |
+| `AGENT_SANDBOX_MANAGER_REVERSE_BIND` / `AGENT_SANDBOX_MANAGER_REVERSE_PORT` | Required reverse listener for a standalone host. Bind the control plane's stable Docker bridge gateway address, never loopback or `0.0.0.0`, and give each simultaneously deployed Host its own port. The advertised URL must match. |
 | `AGENT_SANDBOX_MANAGER_REVERSE_TARGET_HOST` / `AGENT_SANDBOX_MANAGER_REVERSE_TARGET_PORT` | Host-side target of that reverse forward, defaults `sandbox-manager` / `8092`. |
 | ~~`AGENT_TUNNEL_*`~~ (~~`AGENT_TUNNEL_SSH_DESTINATION`~~) (~~`AGENT_TUNNEL_SSH_PORT`~~) (~~`AGENT_TUNNEL_SSH_KEY`~~) (~~`AGENT_TUNNEL_SSH_KNOWN_HOSTS`~~) (~~`AGENT_TUNNEL_REMOTE_HOST`~~) (~~`AGENT_TUNNEL_REMOTE_PORT`~~) (~~`AGENT_TUNNEL_LISTEN_PORT`~~) | **removed**, refused by the host: the inference tunnel is gone. |
 | ~~`AGENT_GATEWAY_HOSTNAME`~~ | **removed**, refused by the host. |
-| `AGENT_SANDBOX_MANAGER_URL_ALLOWED_HOSTS` | Control-plane allowlist for sandbox manager addresses, comma-separated. A bare hostname admits that host on any scheme and port; a `scheme://host:port` origin admits exactly that origin, which is what separates sandbox managers sharing one reverse-tunnel address. Hosts propose their sandbox manager URL at enrollment; restrict it to prevent a mistaken or compromised registration receiving the pool credential at an arbitrary address. Unset permits any hostname for upgrade compatibility. Sandbox manager URLs are always origins: a path, query, fragment or userinfo is refused. Automatic CloudLab setup checks for the bridge address as a bare hostname entry. Link-local addresses, where cloud metadata services answer, are refused whatever this is set to, including for sandbox manager URLs already stored. |
+| `AGENT_SANDBOX_MANAGER_URL_ALLOWED_HOSTS` | *Initial import.* Comma-separated allowlist of the addresses hosts may register as their sandbox manager, which then receive the pool credential. A bare hostname admits that host on any scheme and port; a `scheme://host:port` origin admits only that origin, which separates sandbox managers behind one reverse-tunnel address. Unset accepts any hostname; a multi-host pool should name its machines. URLs must be bare origins, and link-local addresses, where cloud metadata answers, are always refused. Automatic CloudLab setup expects the bridge address as a bare hostname entry. |
 | `AGENT_CONTROL_PLANE_URL` | Runner URL for registration, claims and heartbeats. Standalone Compose derives it from the main-API tunnel alias `AGENT_CONTROL_PLANE_HOSTNAME`, not the MCP alias. Pointing it at the MCP-only listener returns 404 for control requests. |
 | `AGENT_WORKER_ID` | Worker-name prefix, default `runner`. The runner appends process identity so concurrent turn children have distinct worker names. |
-| `AGENT_REPO_CLONE_BASE_URL` | Operator-selected base used by the trusted runner for source clone URLs; defaults to `https://github.com`. The complete local stack points it at its private `git://local-repo` fixture so no external GitHub checkout is needed. This is deployment configuration, never a value supplied by a job. `http`, `https`, and `git` schemes are accepted for trusted local mirrors, but a repository clone token is refused unless the scheme is HTTPS so credentials cannot cross plaintext transport. |
-| `AGENT_SOURCE_IMPORT_MAX_MIB` | Largest repository checkout a first turn may import into its sandbox, in MiB; default 1024, accepted 1–65536. Read by the runner, never supplied by a job. It counts the working tree **and** the fetched commit's Git objects, and the single-commit pack stores most content a second time (incompressible files almost byte for byte), so a repository whose files total 600 MB can already exceed 1024. Past it the turn fails before the agent starts with `source checkout … exceeds this host's … retained import size limit`. The clone is measured while git writes it and stopped once it passes the limit, so a first turn never fills the runner's disk with a repository it is about to refuse. Sending a follow-up retries the same import and fails the same way, so raise this or shrink the repository. The archive is spooled to an unnamed file on the runner container's disk and streamed to `docker cp`, so raising it costs that much temporary disk per concurrent first turn, not memory; the `docker cp` timeout grows with the archive (two minutes per GiB). Only a chat's first turn moves the whole repository: after a pull request is published, the commit sent back to the workspace carries just what that turn changed. Can be set from the admin pages, which win over this value; see *Sandbox settings from the admin pages*. |
-| `AGENT_TERMINAL_IDLE_TTL_SECONDS` | Reaps one stale interactive PTY after no input/output activity (default 1800 seconds). A retained PTY uses the earlier terminal/chat limit and hands its last activity time to the supervisor, so cleanup does not start a second inactivity window. This setting never stops the chat container directly. Can be set from the admin pages, which win over this value; see *Sandbox settings from the admin pages*. |
-| `AGENT_TERMINAL_HARD_TTL_SECONDS` | Absolute lifetime guard for one PTY (default 8 hours), even if it remains active. This bounds a resource and credential exposure window; it is not a chat lifecycle state. Can be set from the admin pages, which win over this value; see *Sandbox settings from the admin pages*. |
-| `AGENT_TERMINAL_MAX_SESSIONS` | How many interactive terminals the sandbox manager holds open at once across all chats (default 64, accepted 1–4096). Can be set from the admin pages, which win over this value; see *Sandbox settings from the admin pages*. |
-| `AGENT_RETAINED_DOCKER_DATA_ROOT` | Expected daemon-side `DockerRootDir`. Supported host/local Compose default: `/var/lib/docker`; direct sandbox manager execution only checks it when configured. A mismatch at sandbox manager startup fails retained mode closed. For same-host disk durability, bind `<disk>/docker` onto `/var/lib/docker` and `<disk>/containerd` onto `/var/lib/containerd`, and leave this value at `/var/lib/docker`. A non-default daemon `data-root` or containerd `root` is rejected. Bootstrap verifies the mount with `findmnt` and persists the binds in `/etc/fstab` plus systemd `RequiresMountsFor` drop-ins. See [Retained Docker storage](docs/developer/operations.md#retained-docker-storage-on-a-host). The path is never mounted into sandbox managers or sandboxes; Docker alone manages container layers. This supports stop/start and host reboots. Automatic CloudLab replacement uses a separate stopped-daemon transfer protocol; this setting is not a checkpoint or off-node backup. |
-| `AGENT_CONTAINERD_CONTENT_DIR` | Sandbox Manager path of containerd's content store (`<root>/io.containerd.content.v1.content`), mounted read-only. Code and host Compose default `/var/lib/hybridinference/containerd-content`; host Compose binds `AGENT_HOST_CONTAINERD_CONTENT_DIR` (default `/var/lib/containerd/io.containerd.content.v1.content`, the system containerd that Docker uses with its containerd image store) there. A restorable checkpoint then copies only the commit's new layers. When the mount is absent, empty or from another daemon, the checkpoint falls back to streaming the whole image through `docker image save`, which is slower but equivalent. Docker's own managed containerd keeps the store under `/var/lib/docker/containerd/daemon/io.containerd.content.v1.content`. |
-| `AGENT_UPLOAD_RECEIPT_DIR` | Host-private attachment-import receipt directory shared read-write by the runner and sandbox manager. Supported host Compose sets `/var/lib/hybridinference/upload-receipts` in both containers and binds only `${AGENT_HOST_STATE_ROOT}/upload-receipts` into the sandbox manager, not the parent containing the host credential. Keep it durable so retained-container imports remain incremental across service replacement and so deletion can retire their receipts. When unset, direct/legacy execution keeps the prior `AGENT_HOST_CREDENTIAL_FILE` parent plus `upload-receipts` default. |
-| `AGENT_SANDBOX_ARCHIVE_STATE_DIR` | Sandbox Manager-only directory for temporary stopped-container exports and immutable per-request deletion receipts. Code default `/var/lib/hybridinference/broker-archives`; host Compose binds `${AGENT_HOST_STATE_ROOT}/sandbox-archives` there. Keep this directory on durable storage so a sandbox manager replacement can finish a verified deletion after a lost response. It must never be mounted into a sandbox. Exports use mode 0600 within mode 0700 request directories; the full archive contains repository files and native session state, while credential tmpfs and secret-bearing Docker configuration fields are omitted. Archives over 5 GiB are refused and the original retained; at most four requests retain pending archives per sandbox manager. Temporary files are removed after abort or successful deletion, and phase receipts remain. Restorable checkpoints keep their latest receipt per sandbox in `checkpoints/` and spool their exports in `checkpoint-spool/` here. |
-| `AGENT_SHARED_RESIDENT_CAPACITY` | Number of credential-isolated member UID/private-tmpfs slots built into each new shared container. Default 8; accepted range 2–128. Fork reserves a free slot before any native mutation. This bounds resident chats in one group, while `AGENT_HOST_SLOTS` separately bounds simultaneously claimed turns on the machine. Can be set from the admin pages, which win over this value; see *Sandbox settings from the admin pages*. |
-| `AGENT_CHAT_IDLE_TIMEOUT_S` | The single product-level inactivity clock for a retained chat group. Defaults to 1800 seconds (30 minutes). Turn/file/Git completion and terminal activity advance the same group deadline; activity tokens prevent a mid-operation stop without stacking another full timeout. When the settled clock expires, the host issues `docker stop`, releases that group's bridge, and retains the same container/writable layer. It never authorizes `docker rm`. Wake rebuilds the group's bridge, host rules first, before `docker start`. `AGENT_TIMEOUT_S` and terminal TTLs are resource watchdogs, not alternate chat lifecycle clocks. Can be set from the admin pages, which win over this value; see *Sandbox settings from the admin pages*. |
-| `AGENT_ENROLL_TOKEN` | One-time host enrollment token. Minted at `POST /admin/agent/runner-hosts/enroll-token`, redeemed once at `POST /v1/agent/host/register`, then replaced by the returned host credential. 15-minute TTL, hashed at rest, and shown exactly once — losing it means issuing another, not looking it up. **The token names the host it may register**: the admin minting it supplies `host`, and registration under any other name is refused without spending the token, so a typo cannot revoke a live machine's credential. The runner-side enrollment client is implemented: it serializes first registration across restarts, writes the host credential mode 0600 at `AGENT_HOST_CREDENTIAL_FILE`, and uses authenticated heartbeats thereafter. |
-| `AGENT_HOST_CREDENTIAL_FILE` | Where the host credential is kept between restarts, written mode 0600 before any byte reaches it — this machine runs untrusted repository code next door. The code default is `/var/lib/hybridinference/agent-host-credential`, but the supported host Compose overrides it to `${AGENT_HOST_STATE_ROOT:-/var/lib/hybridinference/agent-host}/credential`, so **on a deployed host the file lives under `AGENT_HOST_STATE_ROOT`** and that is the path the rebuild runbook and any re-enrolment step must name. `AGENT_HOST_CREDENTIAL` in the environment wins over the file, for deployments that inject it another way. |
-| `AGENT_DEPLOYMENT_SHA` / `AGENT_SHARED_LIVE_READY_FILE` | Deployment-script-managed rolling fence, not operator-selected topology. The control plane requires the same exact SHA described above. `deploy/host/deploy.sh` supplies it and `sandbox_host.sh` keeps the marker under `AGENT_HOST_STATE_ROOT`. A valid runner keeps advertising the base shared-sandbox/native-fork protocol while the marker is pending so host readiness can inspect it, but it does not poll for work until the exact `shared-sandbox-deployment:<sha>` marker is complete. This runner-side pause also protects the previous API, which does not know the new exact-SHA claim field during a parallel rollout. Do not set either to choose behavior: retained/shared-live is unconditional. |
-| `AGENT_HOST_SLOTS` | How many turns this host runs at once until an admin sets a number on the Servers page (`PUT /admin/agent/runner-hosts/<host>/slots`). The runner container runs one service that enrolls, heartbeats and claims; it starts a process per turn as it claims one, and claims only while it is under the limit. A number from the admin page arrives on the heartbeat answer and becomes the limit from then on — nothing is started or stopped to apply it, and turns already running are never interrupted. The heartbeat reports the limit back as `slots_total` and the claim admits against the lower of that and the saved number, so lowering applies immediately and raising applies once the host confirms. Defaults to 3; at least 2, because a fork's sibling runs beside its parent; at most 128, a typo guard rather than a statement about the machine. |
-| `AGENT_RUNNER_REPLICAS` | *Removed.* No longer read. Concurrency is the limit in `AGENT_HOST_SLOTS` and on the admin page, the Compose stack runs one runner container per host, and `sandbox_host.sh` warns when the variable is still set. |
-| `AGENT_RUNNER_VERSION` | Free-text version for the pool listing. Operator-facing only — never a compatibility gate, and a missing value must not stop a host enrolling. |
-| `AGENT_HOST_CAPACITY_ENABLED` | Whether a runner samples its Docker host's CPU, memory and retained-container count for the admin Servers page. Defaults to enabled; `0`/`false`/`no`/`off` turns it off, and the server is then shown as not measured rather than as idle. The host Compose stack bind-mounts the host's `/proc/stat`, `/proc/meminfo` and `/proc/sys/kernel/random/boot_id` read-only under `/run/host-metrics` for it — three named files, never all of `/proc` and never `pid: host`, because a container's own `/proc/stat` describes the container and a shared pid namespace would show untrusted sandbox neighbours every process on the machine. Sampling is best effort in both directions: a missing file yields a missing measurement, never a fallback read of an unscoped `/proc`, and an unscoped or malformed report is dropped by the control plane without refusing the heartbeat that carried it. |
-| `AGENT_HOST_STORAGE_PROBE` | Which probe measures the filesystem holding the sandbox writable layers, shown as the Servers page's Storage column. `overlay_root` (the default, and what the host Compose stack interpolates) reads the runner's own root filesystem: the runner is an ordinary container under the same daemon and storage driver, so OverlayFS's `statfs` makes `os.statvfs("/")` describe the upper layer's filesystem — the disk the sandboxes write to. `off` stops measuring storage on that host and is the rollback; it needs an `up` to reach replicas that are already running, since a container's environment is fixed when it is created, and the `check` before it clears the verdict so those replicas stop publishing a figure in the meantime. No other spelling is accepted: the host script refuses anything but these two at configuration time, because its vocabulary and the runner's used to differ and a value only one side recognised produced a rollout log reading "storage verified" beside a page reading "switched off". A reading is published only when the deployment has attested the topology in `.storage-probe/verdict.json`: `sandbox_host.sh` compares the container's own numbers against `df` of the **mount root** of the filesystem containing the upper directory, because `df <upperdir>` returns a project quota when `overlay2.size` is configured and would agree with a container reading that quota. Verification failures never block a deployment — the runner reports `unverified` and every other metric keeps working. |
-| `AGENT_STORAGE_MIN_AVAILABLE_MIB` | Storage reserve for new sandboxes, in MiB; default 1024, accepted 1–1048576. Before a turn allocates a sandbox, the runner reads fresh available space through the attested storage probe above and declines the untouched turn when less than this remains; existing sandboxes can still resume. Unknown or unverified capacity is never treated as pressure, and the reserve is an admission guard, not a disk quota. Can be set from the admin pages, which win over this value; see *Sandbox settings from the admin pages* and [host runtime settings](docs/developer/runtime-settings.md). |
-| `AGENT_LOG_LEVEL` | Process log level, default `INFO`. The control-plane listeners use it during bootstrap and import it once into Admin → Settings; subsequent changes apply to their own logging handler without restarting. Runner and sandbox manager process logs remain host deployment configuration and read this value at startup. |
-| `AGENT_LOG_FORMAT` | Process log format, default `text`. The control plane imports it once into Admin → Settings and applies saved text/JSON changes without restarting. Host processes still read it at startup. `json` emits one JSON object per record and includes structured `extra` fields; the same handler also formats uvicorn logs. Text emits the message without those fields. An unknown initial environment value warns and uses text. Existing embedding or test logging handlers retain their configuration. To inspect JSON logs, pipe `docker logs …` to `jq`. |
-| `AGENT_OPERATION_PROFILING_ENABLED` | Legacy static-experiment switch. With no explicit MODE, `true` preserves environment-driven collection and still requires a valid RUN. Unset or `false` now defaults to **Admin control with collection Disabled until an administrator enables a run**. Under explicit `MODE=admin` this variable is ignored. No profiling variables are required to use the Admin button. In environment mode each producer (CP, runner, sandbox manager) needs the same static experiment. Read once per process. |
-| `AGENT_OPERATION_PROFILING_RUN` | JSON descriptor for the current profiling run: `run_id`, a non-empty `operations` list (this slice implements `attempt.startup`), an absolute UTC `expires_at`, a positive `max_operations`, and an optional `target` naming `host`, `job_id`, `thread_id` or `sandbox_id` — any other target field rejects the whole descriptor, because a filter that can never match would silently measure nothing. A descriptor missing any other required part leaves profiling off and logs one warning instead of refusing to start. `expires_at` becomes a monotonic deadline when first read, so a service restart or a wall-clock jump cannot extend a run, and it is enforced while collecting: past it nothing more is recorded, the record ends at the deadline rather than when someone noticed, and it is emitted as partial (`measurement_complete: false`, `profiling_stopped: "expired"`). `max_operations` is a per-process budget in this slice, not a fleet-wide admission: two replicas can each spend it. A slot is only spent on an operation that was actually selected — targets are matched with every configured field present and equal, so an unknown value is a mismatch, and a rejected candidate returns its slot. `operations` may also name `files.list`, `files.open` and `terminal.open`, which the **control plane** roots; a control plane that is not enabled neither selects nor reports them. |
-| `AGENT_OPERATION_PROFILING_SINK` | Optional JSONL path for the finished measurements, which are logged as well. An external benchmark reads this file to aggregate a baseline. It is **not** an outbox and is not required for Postgres/Admin delivery: root producers send the same cached frozen record directly through their bounded delivery path. Log and JSONL publication still use one bounded background exporter, so a slow file or log handler never runs on the measured thread. The runner sends selected context to the sandbox manager in `X-Agent-Operation-Profiling`; file/terminal response metadata returns in JSON or `x-agent-profiling-*` headers. Browser continuation uses `X-Agent-Interaction-Id` (the older measurement header is compatibility-only). |
-| `AGENT_OPERATION_PROFILING_MODE` | Optional control-source override: `admin`, `environment`, or `disabled`. **Unset or blank defaults to Admin control**, except that legacy `ENABLED=true` retains environment mode. Admin reads persisted experiment state; no active experiment means no collection. Explicit `admin` ignores old ENABLED/RUN values. `environment` uses only the static experiment; `disabled` forbids collection, including continuation of inherited selections, and makes the Admin switch unavailable. Invalid values also disable collection and warn. Overrides are read once per process; ordinary Enable/Disable does not change them or require a restart. CP and runner sync in the background (about 30 s idle, 5 s active); runner uses the authenticated profiling-policy endpoint and forwards to the sandbox manager. Disable stops new selection, while in-flight work retains its original deadline. Disconnected nodes are bounded by the experiment expiry. See the [default-control design](docs/agents/specs/2026-09-22-measurement-admin-default.zh-CN.md). |
-| `AGENT_OPERATION_PROFILING_DEPLOYMENT` | Which deployment's control row this control-plane process commands; defaults to `default`. The singleton control row is keyed by this name, and the name comes from trusted configuration and never from a request: a browser that could name its namespace could see — and stop — another deployment's experiment, because a Stop only has to name a run id. Set it when two deployments share one database (staging and production, or two preview stacks). Read by the control-plane process only; the host agent and the sandbox manager never read it, because they cannot act on a name they do not hold. A missing or malformed value falls back to `default` rather than refusing to boot; a malformed one is logged as a warning naming the refused value, since the fallback shares `default`'s namespace. |
+| `AGENT_REPO_CLONE_BASE_URL` | Base the trusted runner builds source clone URLs from, default `https://github.com`; deployment configuration, never job input. The complete local stack points it at its private `git://local-repo` fixture. `http`, `https` and `git` work for trusted mirrors, but a clone token is sent only over HTTPS. |
+| `AGENT_SOURCE_IMPORT_MAX_MIB` | Largest repository a new chat's first turn may import, in MiB; default 1024, accepted 1 to 65536. It counts the working tree **and** the fetched commit's Git objects, which store most content a second time, so 600 MB of files can already exceed 1024. Past it the turn fails before the agent starts with `source checkout … exceeds this host's … retained import size limit`, and a follow-up fails the same way: raise the limit or shrink the repository. The clone stops at the limit, so it never fills the disk. Each concurrent first turn spools the archive to the runner container's disk, not memory, and the `docker cp` timeout grows by two minutes per GiB. The admin pages override it. |
+| `AGENT_TERMINAL_IDLE_TTL_SECONDS` | Closes an interactive terminal after this long with no input or output, default 1800 seconds. It never stops the chat container. The admin pages override it. |
+| `AGENT_TERMINAL_HARD_TTL_SECONDS` | Longest lifetime of one terminal, even while in use, default 8 hours; it bounds how long a terminal's credentials stay exposed. The admin pages override it. |
+| `AGENT_TERMINAL_MAX_SESSIONS` | Interactive terminals the sandbox manager holds open at once across all chats, default 64, accepted 1 to 4096. The admin pages override it. |
+| `AGENT_RETAINED_DOCKER_DATA_ROOT` | Expected daemon `DockerRootDir`; host and local Compose default `/var/lib/docker`. A mismatch at sandbox manager startup fails retained mode closed. To keep sandboxes on a data disk, bind `<disk>/docker` onto `/var/lib/docker` and `<disk>/containerd` onto `/var/lib/containerd` and leave this at `/var/lib/docker`; a non-default daemon `data-root` or containerd `root` is rejected ([Retained Docker storage](docs/developer/operations.md#retained-docker-storage-on-a-host)). The path is never mounted into sandbox managers or sandboxes. It is not a checkpoint or an off-node backup. |
+| `AGENT_CONTAINERD_CONTENT_DIR` | Where the Sandbox Manager sees containerd's content store, read-only. Code and host Compose default `/var/lib/hybridinference/containerd-content`, bound from `AGENT_HOST_CONTAINERD_CONTENT_DIR` (default `/var/lib/containerd/io.containerd.content.v1.content`, the system containerd Docker uses for its image store). A restorable checkpoint then copies only the commit's new layers; without the store it streams the whole image through `docker image save`, slower but equivalent. Docker's own managed containerd keeps the store under `/var/lib/docker/containerd/daemon/io.containerd.content.v1.content`. |
+| `AGENT_UPLOAD_RECEIPT_DIR` | Attachment-import receipts, shared read-write by the runner and sandbox manager. Host Compose sets `/var/lib/hybridinference/upload-receipts` and binds only `${AGENT_HOST_STATE_ROOT}/upload-receipts` into the sandbox manager, not the directory holding the host credential. Keep it durable so imports stay incremental across service replacement. Unset, direct execution uses `upload-receipts` beside `AGENT_HOST_CREDENTIAL_FILE`. |
+| `AGENT_SANDBOX_ARCHIVE_STATE_DIR` | Sandbox Manager-only directory for stopped-container exports, deletion receipts and checkpoint state (`checkpoints/`, `checkpoint-spool/`). Code default `/var/lib/hybridinference/broker-archives`; host Compose binds `${AGENT_HOST_STATE_ROOT}/sandbox-archives` there. Keep it durable so a replacement sandbox manager can finish a verified deletion, and never mount it into a sandbox. Exports are mode 0600 and hold repository files and native session state, without credential tmpfs. Archives over 5 GiB are refused and the original kept; at most four requests hold pending archives per sandbox manager. |
+| `AGENT_SHARED_RESIDENT_CAPACITY` | Member slots (separate UIDs and private tmpfs) built into each new shared container, default 8, accepted 2 to 128. Fork reserves a free slot first. It bounds the chats in one group; `AGENT_HOST_SLOTS` bounds the turns a machine runs at once. The admin pages override it. |
+| `AGENT_CHAT_IDLE_TIMEOUT_S` | The one inactivity clock for a retained chat group, default 1800 seconds. Turns, file and Git operations and terminal activity all advance it. When it expires, the host runs `docker stop`, releases the group's bridge and keeps the container and its writable layer; it never removes them. Waking rebuilds the bridge and host rules before `docker start`. The admin pages override it. |
+| `AGENT_ENROLL_TOKEN` | One-time enrollment token, minted at `POST /admin/agent/runner-hosts/enroll-token` for a named `host` and redeemed once at `POST /v1/agent/host/register` for the host credential. It lasts 15 minutes, is hashed at rest and is shown once: if you lose it, issue another. Registration under any other host name is refused without spending it, so a typo cannot revoke a live machine's credential. |
+| `AGENT_HOST_CREDENTIAL_FILE` | Where the host credential persists, written mode 0600. The code default is `/var/lib/hybridinference/agent-host-credential`, but host Compose sets `${AGENT_HOST_STATE_ROOT:-/var/lib/hybridinference/agent-host}/credential`, so **on a deployed host it lives under `AGENT_HOST_STATE_ROOT`**; name that path when rebuilding or re-enrolling. `AGENT_HOST_CREDENTIAL` in the environment wins over the file. |
+| `AGENT_DEPLOYMENT_SHA` / `AGENT_SHARED_LIVE_READY_FILE` | The rolling-deployment fence, managed by the deploy scripts; never set them to choose behavior. `deploy/host/deploy.sh` supplies the SHA and `sandbox_host.sh` keeps the marker under `AGENT_HOST_STATE_ROOT`. A runner does not poll for work until the `shared-sandbox-deployment:<sha>` marker for its commit is complete, which also protects the previous API during a parallel rollout. |
+| `AGENT_HOST_SLOTS` | How many turns this host runs at once until an admin sets a number on the Servers page (`PUT /admin/agent/runner-hosts/<host>/slots`); default 3, accepted 2 to 128 (a fork runs beside its parent). The runner claims only while under the limit and starts one process per turn. A new number arrives on the heartbeat answer and applies without restarting anything; running turns are never interrupted. Lowering applies at once, raising once the host confirms. |
+| `AGENT_RUNNER_REPLICAS` | *Removed*, not read. Concurrency is `AGENT_HOST_SLOTS` and the admin page; `sandbox_host.sh` warns while it is set. |
+| `AGENT_RUNNER_VERSION` | Free-text version for the pool listing; never a compatibility gate. |
+| `AGENT_HOST_CAPACITY_ENABLED` | Whether the runner samples its Docker host's CPU, memory and retained-container count for the Servers page; default on, `0`/`false`/`no`/`off` turns it off (shown as not measured). Host Compose mounts only `/proc/stat`, `/proc/meminfo` and `/proc/sys/kernel/random/boot_id` read-only under `/run/host-metrics`, never all of `/proc` or `pid: host`, because a shared pid namespace would show sandbox neighbours every process on the machine. Sampling is best effort: a missing file is a missing figure. |
+| `AGENT_HOST_STORAGE_PROBE` | How the Servers page's Storage column measures the filesystem under the sandbox writable layers. `overlay_root` (default) reads the runner's own root filesystem, which under OverlayFS describes that disk; `off` stops measuring and reaches running replicas only after `up`. The host script refuses any other value. A figure is published only after `sandbox_host.sh` has attested the topology in `.storage-probe/verdict.json`, comparing the container's numbers with `df` of the mount root holding the upper directory. A failed check never blocks a deployment: the runner reports `unverified`. |
+| `AGENT_STORAGE_MIN_AVAILABLE_MIB` | Free space a host keeps for new sandboxes, in MiB; default 1024, accepted 1 to 1048576. Before a turn creates a sandbox, the runner reads available space through the attested storage probe and declines the turn when less remains; its launch error suggests freeing storage or changing this setting. Existing sandboxes still resume. Unknown or unverified capacity never counts as pressure. An admission guard, not a quota ([storage measurement](docs/developer/operations.md#how-full-is-the-sandbox-storage)). The admin pages override it. |
+| `AGENT_LOG_LEVEL` | Log level, default `INFO`. The control plane imports it once into Admin → Settings and applies changes without restarting; host processes read it at startup. |
+| `AGENT_LOG_FORMAT` | `text` (default) or `json`, one object per record with the structured `extra` fields, uvicorn's included. The control plane imports it once into Admin → Settings and applies changes without restarting; host processes read it at startup. An unknown value warns and uses text. Pipe `docker logs …` to `jq` to read JSON. |
+| `AGENT_OPERATION_PROFILING_ENABLED` | Legacy static switch. With no `MODE`, `true` selects environment mode, which needs a valid `RUN`; unset or `false` leaves control to Admin, with collection off until an administrator starts a run. Ignored under `MODE=admin`. In environment mode every producer (control plane, runner, sandbox manager) needs the same descriptor. Read once per process. |
+| `AGENT_OPERATION_PROFILING_RUN` | JSON descriptor of a static run: `run_id`, a non-empty `operations` list, an absolute UTC `expires_at`, a positive `max_operations` and an optional `target` naming `host`, `job_id`, `thread_id` or `sandbox_id`. The operations are `attempt.startup`, which the runner roots, and `files.list`, `files.open` and `terminal.open`, which the control plane roots. An invalid descriptor leaves profiling off with one warning. A run cannot outlast `expires_at`, even across restarts; at expiry its record is emitted as partial (`profiling_stopped: "expired"`). `max_operations` is a per-process budget, not a fleet-wide one. |
+| `AGENT_OPERATION_PROFILING_SINK` | Optional JSONL path for finished measurements, which are logged as well; an external benchmark reads it. Delivery to Postgres and Admin does not need it. |
+| `AGENT_OPERATION_PROFILING_MODE` | Optional override of who controls collection: `admin`, `environment` or `disabled`. Unset or blank means Admin, except that legacy `ENABLED=true` keeps environment mode. `disabled`, or an invalid value, forbids collection and makes the Admin switch unavailable. Read once per process; ordinary Enable and Disable need no restart. The control plane and runner sync in the background (about 30 seconds idle, 5 seconds active), and Disable stops new selection while in-flight work keeps its deadline. See the [default-control design](docs/agents/specs/2026-09-22-measurement-admin-default.zh-CN.md). |
+| `AGENT_OPERATION_PROFILING_DEPLOYMENT` | Which deployment's control row this control plane commands, default `default`. Set it when deployments share a database (staging and production), so neither can see or stop the other's experiment. It comes from configuration, never from a request; a malformed value falls back to `default` with a warning. |
 
-The control-plane, host and local Compose files pass optional profiling overrides
-through to their respective producers. An empty MODE reaches the shared parser
-and uses the same default as an unset variable: Admin control is available
-without setup. Normal schema migrations still apply. The deployment namespace
-is only needed when independent deployments share a database.
+The Compose files pass these through to each producer. Collection starts
+disabled on a fresh database. The Admin Enable/Disable button controls the
+persisted run without a restart, and a restart resumes an unexpired run. While
+collection is disabled no operation reads the database, though the background
+policy sync still runs. The Admin API reports `max_operations` with
+`budget_scope=producer_instance`.
 
-Collection starts Disabled on a fresh database. The Admin Enable/Disable button
-controls the persisted run without editing configuration or restarting services.
-There is no per-operation DB read when Disabled, but the existing background
-policy sync still runs; this is not zero background I/O. A restart restores any
-unexpired active experiment rather than creating one. `config_version` names the
-immutable experiment and `revision` orders control changes. There is no renewal
-lease. Disable does not rewrite the manifest expiry or discard in-flight records.
-`max_operations` stays a per-producer-instance allowance — the Admin API reports
-`budget_scope=producer_instance` and does not present it as a deployment-wide
-cap. Different runtimes and execution profiles remain separate in Admin
-distributions. A 2026-09-18 local rerun measured roughly 30 microseconds
-of collector work per synthetic startup; this does not include a real
-container, sandbox manager, network, or database.
-
-Two benchmarks answer two different questions, and neither substitutes for the
-other. `scripts/bench_startup_profiling_overhead.py` measures the collector's
-own cost on a synthetic attempt sequence — no claim, container, supervisor,
-agent CLI or network — and its own output says so.
-`scripts/bench_operation_overhead.py` drives the real control-plane routes over
-a real socket against a real database and, with a container runtime available,
-the real supervisor activation that produces each of the four startup paths. It
-reports per-operation p50/p95, the delta against the uninstrumented cohort,
-queue drop counts, the background cost, and the agreed
+Two benchmarks answer different questions.
+`scripts/bench_startup_profiling_overhead.py` measures the collector's own cost
+on a synthetic attempt, with no container or network.
+`scripts/bench_operation_overhead.py` drives the real control-plane routes and
+database and, where a container runtime is available, the real supervisor; it
+reports per-operation p50/p95 against an uninstrumented cohort and the
 `max(10 ms, baseline p95 × 1%)` budget verdict. Read each script's
 `what`/`not_what` block before quoting either.
 
+### Tunnels and relays
+
+A host reaches the control plane only through SSH tunnels, each with its own
+narrowly restricted key.
+
+| Variable | Notes |
+|---|---|
+| `AGENT_MCP_TUNNEL_*` | MCP-only SSH tunnel. Required suffixes: `SSH_DESTINATION`, `SSH_KEY`, `SSH_KNOWN_HOSTS`. Defaults for `SSH_PORT` / `REMOTE_HOST` / `REMOTE_PORT` / `LISTEN_PORT`: `22` / `127.0.0.1` / `8001` / `8000`. Its remote destination must be the MCP-only listener; main API port 8000 serves no tools. |
+| `AGENT_MCP_HOSTNAME` | The relay's alias on both container networks. Defaults to `agent-mcp`. |
+| `AGENT_SANDBOX_MCP_URL` | *Host only.* The MCP relay as this host's sandboxes reach it. Host Compose derives it from the MCP tunnel (`http://<AGENT_MCP_HOSTNAME>:<LISTEN_PORT>`) for the runner and sandbox manager, which hand it to every member CLI with tools; the host rules admit it. The control plane does not read it. Without it, a turn whose owner connected a tool fails before any container work, telling the owner to ask an admin to finish setting up the site. |
+| `AGENT_CONTROL_PLANE_TUNNEL_*` | Runner-only SSH tunnel to the main API. Required suffixes: `SSH_DESTINATION`, `SSH_KEY`, `SSH_KNOWN_HOSTS`. Defaults for `SSH_PORT` / `REMOTE_HOST` / `REMOTE_PORT` / `LISTEN_PORT`: `22` / `127.0.0.1` / `8000` / `8000`. It joins only the runner network and is unreachable from sandboxes. |
+| `AGENT_CONTROL_PLANE_HOSTNAME` | That tunnel's alias, on the runner network only. Defaults to `agent-control-plane`. |
+| `AGENT_SANDBOX_GITHUB_RELAY_CA_FILE` | NEW. *Host only.* The GitHub relay CA's certificate on this host, made by `deploy/control-plane/github-relay-certs.sh`. With it and the `github-relay` Compose profile on this host and the control plane, group bridges resolve `github.com` and `api.github.com` to the host's `github-tunnel` and members trust the CA, so git and `gh` reach GitHub as the conversation's owner through the control plane's GitHub relay. Unset, sandboxes reach GitHub directly and anonymously. See the [design](docs/agents/specs/2026-11-04-agent-native-pull-requests.zh-CN.md). |
+| `AGENT_GITHUB_TUNNEL_*` | NEW. The GitHub relay's SSH tunnel, started by the `github-relay` profile. Required with it: `SSH_DESTINATION`, `SSH_KEY`, `SSH_KNOWN_HOSTS`. Defaults for `SSH_PORT` / `REMOTE_HOST` / `REMOTE_PORT`: `22` / `127.0.0.1` / `8443`; it listens on 443 under the names `github.com` and `api.github.com`. Its remote destination must be the GitHub relay's listener (`AGENT_GITHUB_RELAY_BIND` / `AGENT_GITHUB_RELAY_PORT` on the control plane, with its certificate and key in `AGENT_GITHUB_RELAY_TLS_DIR`). |
+| `AGENT_SANDBOX_MODEL_RELAY_URL` | NEW. *Host only; written by Admin → Servers → Add server.* Where this host's sandboxes reach the model relay: `http://` plus the `model-tunnel` alias and port (`http://agent-models:8000` by default), a name, never an address. Set, `sandbox_host.sh` requires the model tunnel's destination, key and known_hosts, every group bridge carries the relay, and the host advertises `model-relay-v1` and receives turns on connections the deployment provides. Unset, it receives none; turns on owners' own connections are unaffected. See [Provided models](docs/developer/operations.md#provided-models). |
+| `AGENT_MODEL_TUNNEL_*` | NEW. *Written by Add server.* The model relay's SSH tunnel. Its `model-tunnel` service runs on every host and waits idle without `SSH_DESTINATION`. Required with `AGENT_SANDBOX_MODEL_RELAY_URL`: `SSH_DESTINATION`, `SSH_KEY`, `SSH_KNOWN_HOSTS`. Defaults for `SSH_PORT` / `REMOTE_HOST` / `REMOTE_PORT` / `LISTEN_PORT`: `22` / `127.0.0.1` / `8002` / `8000`; `AGENT_MODEL_RELAY_HOSTNAME` (default `agent-models`) is its name on a group bridge. Its remote destination must be the model relay's listener. Add server gives it its own key, with a `permitopen` for that port only, on its own account on the control-plane machine; set these by hand only on a host Add server did not set up. |
+
 ### Physical servers and execution environments
 
-`AGENT_RUNNER_HOST` identifies one enrolled execution environment. When two
-stacks on the same physical server talk to one control plane, they need distinct
-names, credentials, state roots and sandbox manager URLs. Do not rename or re-enroll an
-existing environment to combine its retained chats with another one.
+`AGENT_RUNNER_HOST` identifies one enrolled execution environment. Two stacks on
+one physical server that talk to one control plane need distinct names,
+credentials, state roots and sandbox manager URLs. Do not rename or re-enroll an
+existing environment to merge its retained chats with another.
 
-`AGENT_PHYSICAL_HOST` names the physical server for the admin inventory. Give
-all environments on that server the same name, unique within the control plane.
-`deploy/host/sandbox_host.sh` defaults it to the host's short hostname; direct
-Compose deployments must set it explicitly. Runners send it at registration and
-on each heartbeat, stored as `labels.physical_host`. Older runners can omit it
-without erasing existing metadata. No database migration is required.
+`AGENT_PHYSICAL_HOST` names the physical server in the admin inventory: give
+every environment on it the same name, unique within the control plane.
+`deploy/host/sandbox_host.sh` defaults it to the short hostname; direct Compose
+deployments must set it. Runners send it at registration and on each heartbeat
+(`labels.physical_host`). Set it before host activation and follow the
+[rolling deployment order](docs/developer/operations.md#rolling-deployment-order).
 
-The Servers table shows the executor matching the new-chat execution policy
-on each physical server. Production Compose defaults to `untrusted-kata-v1`;
-the local Compose overlay explicitly keeps `trusted-v1`. Legacy executors remain
-in the API for retained-session ownership but are not offered for new chats.
-Keep one placement executor per physical server; extra old deployments must be
-retired after their retained conversations are no longer needed.
-
-The global sandbox location selector is always visible, including with one
-server. It shows Automatic or the exact selected Host identity; grouping by a
-physical server never silently chooses a different executor. It applies to all
-new, unassigned sandbox groups. Retained groups keep their original Host, and
-the page shows their actual distribution. An unavailable saved selection stays
-visible with a recovery action and never silently falls back to another Host.
-Disabled servers are listed in a collapsed Unavailable servers section, not
-counted as choices. Slots are the displayed environment's concurrency limit, not
-GPU counts or a sum of old and current deployments. Grouping never changes
-credentials, sandbox manager routing, or retained sandbox ownership. Server names are
-reported metadata; runtime suffixes are never guessed.
-
-Set `AGENT_PHYSICAL_HOST` before host activation and use the coordinated release
-phases in [the rolling-update runbook](docs/developer/operations.md#rolling-deployment-order).
-Allow active turns to settle, complete the target host generation, and pass the
-control-plane exact-SHA readiness fence before activating the API/web release.
-Existing host credentials and retained sandboxes stay in place.
+The Servers table shows, for each physical server, the executor that matches the
+new-chat execution policy. Keep one placement executor per physical server, and
+retire extra old deployments once their retained conversations are no longer
+needed. Slots are an environment's concurrency limit, not GPU counts. The global
+sandbox location is described in
+[Compute resources](docs/developer/operations-compute.md).
 
 ## Sandbox isolation (host agent reads, sandbox inherits)
 
@@ -696,19 +622,20 @@ Existing host credentials and retained sandboxes stay in place.
 | `AGENT_SANDBOX_BACKEND` | Defaults to `kata`. `container` is the explicit trusted-repository downgrade. `process` is a non-claimable test seam and cannot serve retained chats. |
 | `AGENT_SANDBOX_RUNTIME` | Unset selects `io.containerd.kata.v2` with backend `kata`, or Docker's default runtime with backend `container`. Set `runc` only for the trusted execution profile. The untrusted profile requires exactly `io.containerd.kata.v2`; gVisor needs a separate execution profile. |
 | `AGENT_SANDBOX_IMAGE` | Required sandbox image, with no application default. Use distinct tags for sibling environments, such as `cloud-agent-job:staging` / `:prod`, so one rebuild cannot replace the other's image. This is the job image, distinct from the runner image. |
-| `AGENT_SANDBOX_IMAGE_PULL` | `true` makes a source deployment (`sandbox_host.sh`) pull `AGENT_SANDBOX_IMAGE` instead of building it; default `false`. Use it with the image published for the deployed commit, for example `ghcr.io/harvardmadsys/cloud-agent-sandbox:sandbox-<sha>` (an autoscaling deployment template can write `{deployment_sha}`). A pulled image is recorded by its registry digest, which is what lets another host restore this host's chats from their checkpoints; a locally built image is recorded by a local name no other host can fetch, so its groups stay on this host. Artifact deployments always pull. |
-| `AGENT_SANDBOX_NAMESPACE` | *Required.* Stable deployment namespace stamped onto retained containers and group bridges so sibling Compose stacks on one Docker daemon cannot discover, stop, or prune each other's chats. It also names this deployment's host nftables table and bridge-interface prefix, so a runner or sandbox manager without one refuses to start rather than sharing a default. The host stack uses its unique Compose project; the complete local stack derives it from `LOCAL_PROJECT_NAME`. |
-| `AGENT_SANDBOX_DOCKER` | Docker executable used by the host backend, default `docker`. With the default, the runner and sandbox manager read container and network state from that daemon's Engine API, on the unix socket that `DOCKER_HOST` or the default context names, instead of starting the executable for every read. Any other executable keeps every Docker call on it. |
+| `AGENT_SANDBOX_IMAGE_PULL` | `true` makes a source deployment (`sandbox_host.sh`) pull `AGENT_SANDBOX_IMAGE` instead of building it; default `false`. Use the image published for the deployed commit, for example `ghcr.io/harvardmadsys/cloud-agent-sandbox:sandbox-<sha>` (an autoscaling template can write `{deployment_sha}`). A pulled image is recorded by its registry digest, so another host can restore this host's chats from their checkpoints; a locally built image cannot be fetched elsewhere, so its groups stay on this host. Artifact deployments always pull. |
+| `AGENT_SANDBOX_NAMESPACE` | *Required.* Stable deployment namespace stamped onto retained containers and group bridges, so sibling stacks on one Docker daemon cannot discover, stop or prune each other's chats. It also names this deployment's nftables table and bridge-interface prefix; a runner or sandbox manager without one refuses to start. The host stack uses its Compose project; the complete local stack derives it from `LOCAL_PROJECT_NAME`. |
+| `AGENT_SANDBOX_DOCKER` | Docker executable used by the host backend, default `docker`. With the default, the runner and sandbox manager read container and network state from the daemon's Engine API, on the socket `DOCKER_HOST` or the default context names, instead of starting the executable for every read. Any other executable keeps every Docker call on it. |
 | `AGENT_SANDBOX_HOME` | Sandbox user home, default `/home/agent`. |
 | `AGENT_SANDBOX_UID` / `AGENT_SANDBOX_GID` | Sandbox non-root identity, defaults `10001` / `10001`. |
 | `AGENT_SANDBOX_EXTRA_ARGS` | Additional Docker arguments parsed with `shlex.split`. Retained chats reject unsafe options; this is trusted deployment configuration, never job input. |
-| `AGENT_MEMBER_PROCESS_REAPER_SOURCE` | *Internal.* Trusted runner-side path to the root-owned `member-process-reaper` helper copied into a retained container created by an older compatible image. The runner image supplies `/usr/local/libexec/member-process-reaper`; operators normally never set this. It is infrastructure compatibility material, not chat data or a host workspace mount. |
-| `AGENT_SANDBOX_ALLOW_UNISOLATED` | ⚠️ Isolation escape hatch, and narrower than the row above: it only opens the `process` backend, which is a non-claimable test seam and can never serve a retained chat. Must be unset in any environment reachable by untrusted repositories. |
-| `AGENT_EGRESS_CHAT_NETWORK_POOL` | *Required.* This deployment's RFC1918 IPv4 pool; Docker allocates one `/29` from it per active sandbox group bridge (a `/16` holds 8192). No default: it must not overlap another deployment on the same machine — of two whose pools overlap, the host rules refuse the one installed later — nor any network the host already routes (LAN, VPN, private services): preflight reads the host's routes and refuses a pool that shares addresses with one, because Docker takes an explicit subnet as given and a bridge there would draw the host's own traffic. Idle and lost stops remove a group's bridge immediately; sandbox manager reconciliation removes stale interrupted-create bridges after a five-minute grace period so it cannot delete one between creation and sandbox attachment. |
+| `AGENT_MEMBER_PROCESS_REAPER_SOURCE` | *Internal.* Runner-side path to the root-owned `member-process-reaper` helper, copied into a retained container created by an older compatible image. The runner image supplies `/usr/local/libexec/member-process-reaper`; operators normally never set it. |
+| `AGENT_SANDBOX_ALLOW_UNISOLATED` | **Isolation escape hatch.** It only opens the `process` backend, a non-claimable test seam that can never serve a retained chat. It must be unset in any environment untrusted repositories can reach. |
+| `AGENT_EGRESS_CHAT_NETWORK_POOL` | *Required.* This deployment's RFC1918 IPv4 pool; Docker allocates one `/29` per active group bridge (a `/16` holds 8192). No default. It must not overlap another deployment on the machine (the host rules refuse the later of two overlapping pools) or any network the host already routes (LAN, VPN, private services): preflight refuses such a pool, because a bridge there would draw the host's own traffic. Idle and lost stops remove a group's bridge at once; reconciliation removes stale bridges from interrupted creates after five minutes. |
 | `AGENT_EGRESS_DNS_SERVER` | *Required.* The one IPv4 resolver sandboxes may use, on TCP and UDP 53. It is the only exception to the protected ranges, so a site resolver on a private address, or on this host, works. Under runc Docker's embedded resolver forwards to it; a Kata guest is given it in `/etc/resolv.conf` by the trusted guest helper. Not loopback: a sandbox cannot reach the host's `127.0.0.53`. |
-| `AGENT_EGRESS_PROTECTED_CIDRS` | Comma-separated IPv4 blocks sandboxes must not reach, on top of the built-in host, private, link-local/metadata, CGNAT, multicast and reserved ranges — an institution's services on public addresses, for example. It can only add protection. The control plane reads the same variable when it checks an owner's SSH server, so set it there to the hosts' value. |
+| `AGENT_EGRESS_PROTECTED_CIDRS` | Comma-separated IPv4 blocks sandboxes must not reach, on top of the built-in host, private, link-local/metadata, CGNAT, multicast and reserved ranges, for example an institution's services on public addresses. It can only add protection. The control plane reads the same variable when it checks an owner's SSH server, so set it there to the hosts' value. |
 | `AGENT_RELAY_NETWORK` | The route-less network the MCP relay is discovered on; no sandbox joins it. Group lifecycle attaches the relay found here, under its alias, to each group's bridge. The host stack derives `<COMPOSE_PROJECT>-agent-relays`, so sibling stacks never find each other's relays; set it only to name an existing network. |
-| ~~`AGENT_EGRESS_SETUP_TIER`, `AGENT_EGRESS_AGENT_TIER`, `AGENT_EGRESS_ALLOWLIST`, `AGENT_EGRESS_NETWORK_*`, `AGENT_EGRESS_PROXY_*`, `AGENT_EGRESS_STOP_GRACE`, `AGENT_SANDBOX_NETWORK`, `AGENT_SANDBOX_ALLOW_OPEN_NETWORK`~~ | *Removed.* Retired with the network tiers and the Squid proxy when sandboxes moved to one network ([design](docs/agents/specs/2026-09-23-agent-public-egress-design.zh-CN.md)). Nothing reads them: there is no tier to select, no proxy to point at and no open-network switch. Delete them from `.env`; setting one changes nothing. |
+| ~~`AGENT_EGRESS_SETUP_TIER`, `AGENT_EGRESS_AGENT_TIER`, `AGENT_EGRESS_ALLOWLIST`, `AGENT_EGRESS_NETWORK_*`, `AGENT_EGRESS_PROXY_*`, `AGENT_EGRESS_STOP_GRACE`, `AGENT_SANDBOX_NETWORK`, `AGENT_SANDBOX_ALLOW_OPEN_NETWORK`~~ | *Removed* with the network tiers and the Squid proxy: sandboxes have one network ([design](docs/agents/specs/2026-09-23-agent-public-egress-design.zh-CN.md)). Nothing reads them; delete them from `.env`. |
+| `AGENT_COMPAT_CLIENT` / `AGENT_COMPAT_UPSTREAM_URL` / `AGENT_COMPAT_UPSTREAM_KEY` / `AGENT_COMPAT_MODEL` / `AGENT_COMPAT_TOKEN` / `AGENT_COMPAT_REASONING_EFFORT` / `AGENT_COMPAT_UPSTREAM_RELAY` | **Not operator-set.** What a host hands the protocol compatibility launcher when Codex or Claude Code runs on a Chat Completions connection: the CLI's protocol, the upstream URL and key, the model, the member's loopback token from the claim, and the turn's reasoning level (sent upstream as `reasoning_effort`, absent at Auto). `AGENT_COMPAT_UPSTREAM_RELAY=1` marks the host's own model relay as the upstream, for a provided model; only then is a plain `http` upstream accepted, and the key is the member's placeholder. The launcher removes all of them before it becomes the CLI, so the CLI never holds the provider key. |
 | `AGENT_LIVE_SESSION_ID` / `AGENT_LIVE_WORKDIR` | *Internal.* Generated by the runtime adapter for the private OpenCode/Kilo stdio bridge. Operators must not set these. They select the already-authorized native session and fixed `/workspace` path inside one member process; neither is a credential or host path. |
 | `AGENT_PLUGIN_PATHS` | *Internal.* Generated by the host plugin installer for pi, OpenCode, and Kilo. A JSON array of absolute paths to the selected plugins installed in the member's private home; defaults to `[]`. CLI wrappers load these paths explicitly while retaining disabled project plugin discovery. Operators must not set this; each chat's saved selections determine it. |
 | `AGENT_ACTION_UID` | *Internal.* Set by the sandbox manager on a repository environment action it starts in a member's terminal: the scoped UID (31000–31063) the action runs as. Operators must not set it. |
@@ -717,94 +644,79 @@ Existing host credentials and retained sandboxes stay in place.
 ### Kata runtime qualification generation
 
 The supported host deployment mounts `/var/lib/freeinference/kata-runtime`
-read-only at `/run/agent-kata-runtime` in the runner. Its root-owned `epoch.json`
-contains `{ "version": 1, "state": "ready", "generation": "<UUID>" }` after a
-verified install. `setup_kata_runtime.sh` holds a host-wide installation lock,
-publishes `updating` before changing the runtime, links or configuration, and
-publishes a new ready generation only after installation and verification
-succeed. A failed update remains `updating`; rerun the installer to repair it.
-All deployments on that host observe the same generation, including atomic
-replacement of the marker. `--check` remains verification-only.
+read-only at `/run/agent-kata-runtime` in the runner. After a verified install,
+its root-owned `epoch.json` holds
+`{ "version": 1, "state": "ready", "generation": "<UUID>" }`.
+`setup_kata_runtime.sh` takes a host-wide lock, publishes `updating` before it
+changes the runtime, links or configuration, and publishes a new ready
+generation only after installation and verification succeed. A failed update
+stays `updating`; rerun the installer to repair it. `--check` only verifies.
+Every deployment on the host sees the same generation.
 
-For an existing host, deployment verifies Kata and initializes only a missing
-marker through a short-lived, networkless runc container with access to this
-directory alone. It takes the same installation lock and never replaces an
-existing generation or clears an incomplete update. Missing epoch evidence
-requires full probes; malformed or updating evidence fails closed. In-place
-runtime/configuration updates must use the supported installer so every runner
-invalidates qualification before the first changed file.
+On an existing host, deployment verifies Kata and creates only a missing marker;
+it never replaces a generation or clears an incomplete update. A missing epoch
+means full probes, and a malformed or `updating` one fails closed. Change the
+runtime or its configuration only through the supported installer, so every
+runner invalidates qualification before the first changed file.
 
 ### Complete local stack database recovery
 
-`deploy/local/dev.sh` stores the local Postgres password and matching
-`AGENT_DATABASE_URL` in the gitignored `deploy/local/.env.local`. Back up that
-file with any retained local Docker volume. If the file is missing while the
-selected Compose project still owns `agent-postgres`, the script refuses to
-generate a replacement password: PostgreSQL applies `POSTGRES_PASSWORD` only
-when initializing an empty data directory, so a new value cannot unlock the
-old volume.
+`deploy/local/dev.sh` keeps the local Postgres password and matching
+`AGENT_DATABASE_URL` in the gitignored `deploy/local/.env.local`; back it up with
+any retained local Docker volume. If the file is missing while the Compose
+project still owns `agent-postgres`, the script refuses to generate a new
+password: PostgreSQL applies `POSTGRES_PASSWORD` only when it initializes an
+empty data directory, so a new value cannot unlock the old volume. Restore the
+original `AGENT_POSTGRES_PASSWORD` and `AGENT_DATABASE_URL`; the script never
+deletes the volume or resets its password.
 
-`up` builds the required images first. It and `start` then bring up only
-Postgres, wait for readiness, authenticate from the control-plane image using
-the configured DSN, and run Alembic before starting the rest of the stack. On a
-mismatch, restore the original
-`AGENT_POSTGRES_PASSWORD` and `AGENT_DATABASE_URL`. The script never deletes the
-volume or resets its password automatically.
+`up` builds the images first. `up` and `start` then start Postgres alone, wait
+for it, check the DSN from the control-plane image and run Alembic before
+starting the rest.
 
 ### Claude inference retry policy
 
-The runtime adapter sets `CLAUDE_CODE_MAX_RETRIES=15` and
-`CLAUDE_CODE_RETRY_WATCHDOG=0` for each resident Claude Code process.
-These are fixed launch settings, supplied by the runner rather than host
-`.env` options. The pinned CLI retries transient inference requests with
-exponential backoff and jitter within the current native turn. Disabling the
-watchdog keeps the request retry count bounded; `AGENT_TIMEOUT_S` remains the
-overall execution limit. Retry progress appears in chat, and exhaustion fails
-the turn while preserving its native context. See
-[Runtime boundaries](docs/developer/operations.md#runtime-boundaries) for delay limits
-and rollout behavior.
+For each resident Claude Code process the runtime adapter sets
+`CLAUDE_CODE_MAX_RETRIES=15` and `CLAUDE_CODE_RETRY_WATCHDOG=0`. These are fixed
+launch settings, not host `.env` options. The CLI retries transient inference
+errors with exponential backoff and jitter within the native turn;
+`AGENT_TIMEOUT_S` still bounds the whole turn, and exhaustion fails the turn
+but keeps its native context. See
+[Runtime boundaries](docs/developer/operations.md#runtime-boundaries).
 
 ### Agent CLI version pins (image build)
 
-The five default versions live in both
+The five default versions are pinned in both
 `deploy/sandbox/Dockerfile.agent-sandbox` and
-`apps/backend/cloud_agent_shared/shared_protocol.py`. They are one reviewed protocol unit:
-the image installs and labels them, while every runner and the control plane
-use the matching constants to decide whether `shared-sandbox-v1` may be
-advertised or claimed. They are therefore source pins, not per-host `.env`
-settings. Change both locations together and re-run the agent-loop conformance
-suite when intentionally changing a default.
+`apps/backend/cloud_agent_shared/shared_protocol.py`. The image installs and
+labels them, and runners and the control plane use the matching constants to
+decide whether `shared-sandbox-v1` may be advertised or claimed, so they are
+source pins, not `.env` settings. Change both together and rerun the agent-loop
+conformance suite. The Dockerfile checks each exact version against the
+installed binary; a dist-tag (`latest`) or range (`^2.1`) fails the build.
 
-The Dockerfile still verifies every exact version against the installed binary
-at build time. A dist-tag (`latest`) or range (`^2.1`) fails the build, so its
-labels cannot claim a different binary than the image actually contains.
-
-**Updating an agent without a rebuild.** Claude Code, Codex, OpenCode and pi
-can also be updated from the admin Settings page (_Agent versions_ → _Update
-to …_). Every host then downloads that exact npm release into a local image
-beside the sandbox image, checks it with one real turn through this release's
-driver against a model on loopback, and reports progress on its heartbeat;
-once every online host holds it, new chats use it and existing chats keep
-their version. _Roll back_ returns new chats to the version they used before.
-Kilo is not offered: it runs a source build carrying a reviewed isolation
-patch. The defaults above stay what a host without a selection runs. See the
+**Updating an agent without a rebuild.** Claude Code, Codex, OpenCode and pi can
+be updated from the admin Settings page (_Agent versions_ → _Update to …_).
+Every host downloads that exact npm release into a local image beside the
+sandbox image, checks it with one real turn against a model on loopback, and
+reports progress on its heartbeat. Once every online host holds it, new chats
+use it and existing chats keep their version; _Roll back_ returns new chats to
+the previous one. Kilo runs only its pin, a source build carrying a reviewed
+isolation patch. See the
 [design](docs/agents/specs/2026-10-15-agent-cli-updates-design.zh-CN.md).
 
 | Variable | Notes |
 |---|---|
-| `AGENT_RUNTIME_REGISTRY_URL` | Host side of the control-plane row above. A host downloads updated agents from the registry its heartbeat answer names; this value is only the registry it uses before its first answer. Default `https://registry.npmjs.org`. |
+| `AGENT_RUNTIME_REGISTRY_URL` | Host side of the control-plane row above: the registry a host uses before its first heartbeat answer. Default `https://registry.npmjs.org`. |
 | `AGENT_RUNTIME_DOWNLOAD_NETWORK` | The Docker network the download step runs on. Default `bridge`. Only npm runs there, with install scripts disabled; the packages' own scripts and the check run later with no network. Name another network only when the host's default bridge cannot reach the registry. |
 
-The image carries exactly these pins: there is no build-time menu of extra
-versions (the `*_EXTRA_VERSIONS` build arguments were removed). Another version
-of Claude Code, Codex, OpenCode or pi is installed from _Agent versions_ as
-above; Kilo runs only its pin.
-
-Changing a pin is a claim that the new version's event stream is compatible
-with its adapter in `cloud_agent_host/runtimes/`.
-`tests/external/test_runtime_stream_conformance.py` is the gate for that claim,
-and the way to point it at a candidate is to **put the version on the
-Dockerfile's `ARG` line**:
+Changing a pin claims that the new version's event stream still fits its adapter
+in `cloud_agent_host/runtimes/`. `tests/external/test_runtime_stream_conformance.py`
+tests that claim for `claude-code` only; the other four runtimes have contract
+fixtures and adapter unit tests, so their pin changes need careful review. The
+suite reads the candidate from the Dockerfile's `ARG` line and runs that exact
+version with `npx` against a fake model provider, so **put the version on the
+`ARG` line** first:
 
 ```bash
 # deploy/sandbox/Dockerfile.agent-sandbox
@@ -814,47 +726,28 @@ ARG CLAUDE_CODE_VERSION=2.2.0
 uv run pytest -m external tests/external/test_runtime_stream_conformance.py
 ```
 
-The suite derives its parametrization from that `ARG` line
-(`test_runtime_stream_conformance.py::_menu`, `_DOCKERFILE`), not from an
-environment variable or a built image. It fetches the version with `npx` at
-exactly that version and drives it against a fake model provider, so the
-measurement is of the real binary — but it is a measurement of the
-**repository's** Dockerfile, so the candidate must be on that `ARG` line first.
-
-Interpret a passing conformance run within these limits:
-
-- **`claude-code` only.** This is the one runtime with a stream-conformance
-  suite; the other four have contract fixtures and their adapters' unit tests,
-  and no equivalent gate. Changing their pins is currently a review
-  obligation rather than a test.
-- **It proves the parser, not the option.** A pass means the version's event
-  shape is intelligible to our normalizer. It does not exercise the deployed
-  image, the sandbox, or the dropdown.
+A pass shows that the normalizer understands the version's events. It does not
+exercise the deployed image, the sandbox or the dropdown.
 
 ## Web (`apps/frontend/`)
 
-Frontend configuration is public. Build-time routing settings enter the
-downloaded bundle and require a rebuild. Appearance settings are saved through
-Admin → Settings and read by the web server for each request. Deployment
-timestamps and release identity remain runtime environment metadata. These
-public values may not contain secrets.
+Frontend configuration is public and may not contain secrets. Build-time routing
+settings are baked into the bundle and need a rebuild. Appearance is saved in
+Admin → Settings and read by the web server per request. Deployment time and
+release identity are runtime metadata.
 
 ### Build-time: the image variant
 
-A `NEXT_PUBLIC_*` variable is substituted into the bundle during `next build`.
-Each one must therefore be an `ARG` in `deploy/control-plane/Dockerfile.web`
-*and* a key under the `web` service's `build.args`: a row here without both is a
-variable an operator can set everywhere and change nothing. Every row names its
-compose argument, and `test_web_build_arguments_are_wired` fails on a row that
-has none. Changing one is a rebuild.
+A `NEXT_PUBLIC_*` variable is substituted into the bundle at `next build`, so it
+must be an `ARG` in `deploy/control-plane/Dockerfile.web` *and* a key under the
+`web` service's `build.args`; `test_web_build_arguments_are_wired` fails
+otherwise. Changing one means a rebuild.
 
-The web app is served at the root of its own hostname, and the browser calls
-the control plane at `/api` on the same origin, where the edge routes it.
-Mounting the app under a path prefix inside another site was removed;
-`deploy.sh` and the release deployer refuse a leftover `AGENT_WEB_BASE_PATH`.
-The build rejects a relative API value other than `/api`; an absolute URL is
-accepted for operator-defined cross-origin routing. The tests run the actual
-Next.js configuration.
+The web app is served at the root of its own hostname and calls the control
+plane at `/api` on the same origin, which the edge routes. Path-prefix mounting
+is not supported: `deploy.sh` and the release deployer refuse a leftover
+`AGENT_WEB_BASE_PATH`. The build rejects a relative API value other than `/api`;
+an absolute URL is accepted for cross-origin routing.
 
 | Variable | Compose build argument | Notes |
 |---|---|---|
@@ -864,32 +757,27 @@ Next.js configuration.
 
 ### Runtime: the deployment's identity
 
-The main control plane imports the first eight appearance variables below when
-it initializes the settings document. Set them in its deployment environment
-before the first start, then change them through Admin → Settings. The web
-server reads the saved public appearance fields on every request through
-`GET /v1/agent/site-config`; the same built image serves any deployment. A web
-server without `AGENT_CONTROL_PLANE_URL` uses its environment for standalone
-development. Deployment time remains web runtime metadata.
+The main control plane imports the first six variables below into Admin →
+Settings when it first initializes its settings: set them before the first
+start, then change them in Admin. The web server reads the saved values on every
+request through `GET /v1/agent/site-config`, so one image serves any deployment.
+A web server without `AGENT_CONTROL_PLANE_URL` reads them from its own
+environment, for standalone development.
 
 | Variable | Notes |
 |---|---|
 | `AGENT_WEB_APP_NAME` | Product name in the header and the document title. Empty shows `Cloud Agent`. |
 | `AGENT_WEB_ORG_NAME` | Optional organisation name beside the product name. Empty hides it. |
 | `AGENT_WEB_ORG_URL` | Link target for `AGENT_WEB_ORG_NAME`. |
-| `AGENT_WEB_STATUS_URL` | Status page, opened in a new tab from the header. Empty hides the link — an empty `href` resolves to the current page, so a Status link that is rendered anyway reopens the page the user is standing on. |
-| `AGENT_WEB_DOCS_URL` | User documentation for this deployment, opened in a new tab from Help in the account menu and from the My Settings page. Empty hides the link. Point it at the distribution's own user guide; this repository's developer documentation is for operators and contributors. |
+| `AGENT_WEB_STATUS_URL` | Status page, opened in a new tab from the header. Empty hides the link. |
+| `AGENT_WEB_DOCS_URL` | The deployment's user documentation, opened in a new tab from Help in the account menu and from the My Settings page. Empty hides the link. |
 | `AGENT_WEB_CONTACT_URL` | Where users reach the deployment's operators: an http(s) support page, or `mailto:` and a single address (no `?subject=` or other fields). Shown as Contact us under Help in the account menu. Empty hides the link. |
-| `AGENT_WEB_DEPLOYED_AT` | ISO timestamp with a timezone for the deployment footer. The control-plane deploy script sets the activation time in UTC and records it in `.deployed-at` after successful health checks; deploying the same release again preserves it. When starting Compose manually, supply the actual deployment time. Empty shows `Not available`. |
+| `AGENT_WEB_DEPLOYED_AT` | ISO timestamp with a timezone for the deployment footer. The control-plane deploy script sets the activation time in UTC and records it in `.deployed-at` after successful health checks; redeploying the same release keeps it. When starting Compose by hand, supply the real deployment time. Empty shows `Not available`. |
 
-The web service also receives the existing `AGENT_DEPLOYMENT_SHA` for the footer's
-version: the first seven commit characters are visible, with the full commit in
-the tooltip. Both values are resolved per request, independently of the image's
-build date.
-
-Saved URLs and booleans are validated before an admin update is committed.
-The standalone environment fallback validates them when rendering.
-Public saved appearance comes from this service's own endpoint.
+The web service also receives `AGENT_DEPLOYMENT_SHA` for the footer, which shows
+the first seven characters with the full commit in a tooltip. Saved URLs and
+booleans are validated before an admin update is committed; the standalone
+fallback validates them when rendering.
 
 ### Site content files
 
@@ -928,23 +816,26 @@ the files before deploying them.
 
 ## Infrastructure (not environment variables)
 
-Recorded here as *what has to be decided*, not as anyone's actual answer.
+Decide these per deployment; record the answers in the private overlay.
 
 - **Domains**: one host for the web app and the control-plane API, the API
-  under `/api` — e.g. `agents.example.org` and a staging sibling. The exact names
-  go in the overlay and in `AGENT_WEB_BASE_URL` and `AGENT_PUBLIC_API_URL`.
+  under `/api`, for example `agents.example.org` and a staging sibling. The
+  names go in `AGENT_WEB_BASE_URL` and `AGENT_PUBLIC_API_URL`.
 - **What a sandbox reaches**: its MCP relay, the resolver in
-  `AGENT_EGRESS_DNS_SERVER` and public IPv4 on TCP 80/443 — the same during
-  setup and the agent run. Model calls go to each owner's provider over that
-  public HTTPS. Tool calls remain confined to the MCP-only listener. A
-  sandbox holds its owner's provider key for the turn it runs; that exposure
-  is [accepted](docs/agents/specs/2026-09-23-agent-public-egress-design.zh-CN.md)
+  `AGENT_EGRESS_DNS_SERVER` and public IPv4 on TCP 80/443, the same during setup
+  and the agent run. Model calls go to each owner's provider over that public
+  HTTPS; tool calls stay on the MCP-only listener. A sandbox holds its owner's
+  provider key for the turn it runs; that exposure is
+  [accepted](docs/agents/specs/2026-09-23-agent-public-egress-design.zh-CN.md)
   and limited to the owner's own key and quota.
-- **Sandbox image registry**: choose where hosts pull `AGENT_SANDBOX_IMAGE` before deploying them.
+- **Sandbox image registry**: where hosts pull `AGENT_SANDBOX_IMAGE` from.
 
 ## Adding a variable
 
-1. Add a row here, in the right section.
-2. Note who provisions it and whether it differs per environment.
-3. If it is a secret, say where it is stored — never the value itself.
-4. The PR checklist enforces this; a new variable without a row is a review stop.
+1. Add a row here, in the right section, marked NEW.
+2. Say who provisions it and whether it differs per environment.
+3. For a secret, say where it is stored, never the value.
+4. Classify it in `tests/support/env_inventory.py`.
+   `tests/unit/test_environment_inventory.py` and
+   `tests/unit/test_env_classification.py` fail on a variable the code reads
+   without a row here or an entry there.

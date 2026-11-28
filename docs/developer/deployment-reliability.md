@@ -1,66 +1,56 @@
 # Deployment failure checks and queue monitoring
 
-Deployment checks protect the serving generation and detect work that remains
-queued after a rollout. Every activation must pass the exact-SHA readiness
-fence. The control-plane wait has a 900-second budget for cold host builds;
-host-local checks retain a 120-second budget after the build.
-
-When an Actions deployment sets `DEPLOY_PEER_JOB`,
-[`deploy/watch_peer.py`](../../deploy/watch_peer.py) supervises only the read-only
-readiness wait. It reads the peer host job from the **current run attempt** with
-an Actions read token. A failed or cancelled job ends the wait and removes its
-named one-off container. If the Actions API is unavailable, the bounded
-readiness fence continues; activation still requires success. The watcher never
-interrupts migrations or service replacement. Deployments outside Actions use
-the bounded check directly.
+Every activation must pass the exact-SHA readiness fence. The control-plane
+wait allows 900 seconds (`SHARED_READY_TIMEOUT`) for cold host builds; host-local
+checks keep a 120-second budget after the build. When an Actions deployment sets
+`DEPLOY_PEER_JOB`, [`deploy/watch_peer.py`](../../deploy/watch_peer.py) watches
+the peer host job in the current run attempt during the read-only readiness
+wait. A failed or cancelled peer ends the wait and removes its one-off
+container; if the Actions API is unavailable, the bounded wait continues. The
+watcher never interrupts migrations or service replacement.
 
 ## Drain through both activations
 
-A single-host rollout that must not interrupt work uses one explicit host as a
-database-backed admission fence. The orchestrator runs on the control-plane
-machine, outside the pool it is draining. It first reads the host's current
-owner token and canonical `drain_fence_epoch`, then asks the API to replace that
-exact pair with a fresh opaque owner token. The database accepts the change only
-if both observations are still current and rotates the epoch as it commits.
+A single-host rollout that must not interrupt work drains one named host through
+a database-backed admission fence. The orchestrator runs on the control-plane
+machine, outside the pool:
 
-The orchestrator then waits until that exact host still reports `draining` and
-`slots_used=0`. A claim that committed just before Drain is allowed to finish;
-no later claim can commit while the status remains draining. The host is
-activated while the fence stays in place. Control-plane activation sets
-`AGENT_DEPLOY_DRAINING_HOST` to the exact enrollment name, which authorizes the
-deployment readiness check to accept only that named draining host. When
-new-chat placement is pinned to a different enrolled host, that host must be
-online at the same target commit; the name difference is not itself a failure.
-The check requires zero occupied slots on the draining host, the target
-deployment capability, a fresh heartbeat and a successful reverse sandbox manager probe,
-then rereads the same conditions after the network await. Ordinary readiness
-remains online-only.
+1. It reads the host's current owner token and `drain_fence_epoch` and asks the
+   API to replace that pair with a fresh opaque owner token. The database
+   accepts only if both are still current, and rotates the epoch on commit.
+2. It waits until the host reports `draining` and `slots_used=0`. A claim
+   committed just before the drain finishes; no later claim can commit while
+   the host is draining.
+3. It activates the host with the fence in place, then the control plane with
+   `AGENT_DEPLOY_DRAINING_HOST` set to the host's enrollment name. The readiness
+   check then accepts only that draining host, with zero occupied slots, the
+   target deployment capability, a fresh heartbeat and a successful reverse
+   sandbox manager probe, and rereads them after the network wait. If new-chat
+   placement is pinned to another host, that host must be online at the target
+   commit. Ordinary readiness accepts only online hosts.
+4. It releases the fence with the same owner token, which puts the host back
+   online.
 
-Only a normal fenced release holding the exact active owner token may put the host online.
-An identical acquire or release retry is idempotent, including after a lost
-success response. A successor may transfer ownership only from the exact token
-and epoch it observed; an operator action, lifecycle or credential change,
-placement change, or competing rollout rotates the epoch and makes the stale
-request fail. The database also refuses deletion of a host while its fence is
-active. Deployment remains serialized for the rest of the activation protocol,
-but drain safety no longer depends on that serialization or on operators
-leaving the row untouched.
+Acquire and release retries are idempotent, even after a lost response. A
+successor takes over only from the exact token and epoch it observed; an
+operator action, a lifecycle, credential or placement change, or a competing
+rollout rotates the epoch, and the stale request fails. The database refuses to
+delete a host while its fence is active, so drain safety does not depend on
+deployments being serialized or on operators leaving the row alone.
 
-On cancellation or an uncertain result, fail closed: leave the host draining
-and retry with the same verified owner. Queued work waits; an in-flight turn is
-never killed or replayed. Migration `0051_host_drain_fence_epoch` and the
-`AGENT_DEPLOY_DRAIN_FENCE_V2` recipe marker are the rollback floor after V2
-activation. The V1 marker remains only for an older orchestrator performing the
-bridge upgrade.
+On cancellation or an uncertain result, fail closed: leave the host draining and
+retry with the same owner. Queued work waits; a running turn is never killed or
+replayed. Migration `0051_host_drain_fence_epoch` and the
+`AGENT_DEPLOY_DRAIN_FENCE_V2` recipe marker are the rollback floor; `deploy.sh`
+still carries the V1 marker for older orchestrators.
 
 ### Reaching the fence without a credential
 
-The orchestrator can read the pool and acquire and release the fence through
-the admin API (`GET /admin/agent/runner-hosts`, `POST …/<host>/drain` and
-`…/undrain`), which needs `ADMIN_TOKEN`. On the control-plane machine it can
-instead run the same three operations in the control-plane container, which
-already holds the database credential, so the deployment needs no static
-administrator credential:
+The orchestrator can read the pool and hold the fence through the admin API
+(`GET /admin/agent/runner-hosts`, `POST …/<host>/drain` and `…/undrain`), which
+needs `ADMIN_TOKEN`. On the control-plane machine it can instead run the same
+operations in the control-plane container, which already holds the database
+credential, so the deployment needs no static administrator credential:
 
 ```bash
 docker exec <project>-control-plane-1 python -m cloud_agent.deployment.host_fence snapshot
@@ -69,140 +59,95 @@ docker exec -i <project>-control-plane-1 python -m cloud_agent.deployment.host_f
 ```
 
 `drain` and `undrain` read the API's request body on standard input, never as
-arguments, since any process on the machine can read those. Every command
-prints the document `GET /admin/agent/runner-hosts` returns. A refusal prints
-`{"status", "code", "detail"}` on standard error, with the status the API
-would answer, and exits 2. The audit trail records `agent.runner_host.drain`
-and `agent.runner_host.undrain` with the actor `service:deployment-drain`, as
-automation rather than break-glass access.
+arguments, which any process on the machine can read. Each command prints the
+`GET /admin/agent/runner-hosts` document. A refusal prints
+`{"status", "code", "detail"}` on standard error, with the status the API would
+answer, and exits 2. The audit trail records `agent.runner_host.drain` and
+`agent.runner_host.undrain` with the actor `service:deployment-drain`.
 
 ## Before stopping a serving runner
 
 Source and artifact deployments resolve the candidate runner image through
-Compose, then run `cloud_agent_host.candidate_check` before stopping the old
-runners. The candidate container has no network, enrollment state, sandbox manager token
-or live stack mounts other than the Docker socket. It creates and removes its
-own temporary guest on network `none`, verifies kernel isolation and the guest
-observer, and compares the **built image's** runtime/helper labels with the
-candidate's pins.
-
-The stop signal drains the host service itself: it stops claiming and waits for
-every tracked turn child to exit without forwarding SIGTERM to those children.
-Each child owns exactly one turn and exits naturally when that turn settles.
-Turn children also install their drain handler before preflight as protection
-against an out-of-band signal, but deployment does not rely on that fallback.
-
-If that check fails, the old readiness marker and runners remain in place. The
-replacement runners, relays and sandbox manager must still pass their live checks before
+Compose and run `cloud_agent_host.candidate_check` before stopping the old
+runners. The candidate has no network, enrollment state, sandbox manager token
+or live stack mounts besides the Docker socket. It creates and removes a
+temporary guest on network `none`, checks kernel isolation and the guest
+observer, and compares the **built image's** runtime and helper labels with its
+pins. If it fails, the old readiness marker and runners stay in place. The new
+runners, relays and sandbox manager must still pass their live checks before
 `mark-ready`; a later failure uses the recorded-generation recovery path.
+
+The stop signal drains the host service: it stops claiming and waits for each
+turn child to finish its turn, without forwarding the signal to the children.
 
 ### Host runtime qualification
 
-The host service performs the full Kata probe at startup, whenever the sandbox
-image or root-owned runtime epoch changes, and at least every 30 minutes. This
-last interval bounds detection of changes made outside the supported installer.
-A Docker restart also restarts the runner, which probes again.
+The host service runs the full Kata probe at startup, whenever the sandbox image
+or the runtime epoch changes, and at least every 30 minutes; a Docker restart
+also restarts the runner, which probes again. A failed qualification stops
+claims, logs once and retries after five seconds, backing off up to five
+minutes. Updating or malformed epoch evidence blocks acceptance (see
+[Kata runtime qualification generation](../../ENVIRONMENT.md#kata-runtime-qualification-generation)).
+Probe containers carry `org.freeinference.chat-probe-created`, so the sandbox
+manager never adopts them as chats, and each probe removes abandoned probe
+containers in its namespace that are over an hour old.
 
-The installer writes an `updating` epoch before changing runtime files and a new
-`ready` generation only after verification. Updating or malformed evidence
-blocks acceptance. Deployment initializes a missing epoch on existing hosts
-after the normal runtime check. A failed qualification stops claims, logs the
-failure once, and retries after five seconds with exponential backoff capped at
-five minutes. Probe containers carry `org.freeinference.chat-probe-created`, so
-the sandbox manager excludes them from orphan-chat adoption. Each probe removes abandoned
-probe containers in its namespace that are over an hour old.
-
-The host adds its qualification verdict to the child's stdin payload after
-stripping claim-supplied underscore keys. The child rereads the epoch, declines
-during an update, and probes for itself if the epoch changed. It verifies the
-host network before accepting the turn. A missing epoch requires the full
-per-turn probe; deployment canaries without a payload always run it. The probe
-reads the guest kernel from the same temporary container used for member
-isolation and observer delivery.
-
-See [Kata runtime qualification generation](../../ENVIRONMENT.md#kata-runtime-qualification-generation)
-for the marker format and installer requirements.
+The host passes its verdict to each turn child. The child rereads the epoch,
+declines during an update, probes for itself if the epoch changed, and checks
+the host network before accepting the turn. Without an epoch, every turn runs
+the full probe, as do deployment canaries.
 
 ### Network verification and startup work
 
-The sandbox manager verifies a group's bridge when acquiring a turn activation and
-returns `network_verified`. The runner may rely on that proof for up to one
-minute, matching the network guard's existing freshness window. Commands after
-that minute verify again, including after a long setup script or at turn end.
-Terminals and sandbox manager workspace operations always check, as does every command
-when the sandbox manager did not supply that proof.
+The host service keeps the network guard verification from its startup check
+fresh, renewing it between claims once it is 35 seconds old (or at a handover
+once it is 45 seconds old), and passes it to each turn child. The child declines
+the turn unless that verification is present and successful. A child that
+starts after the guard's one-minute window logs
+`network_guard_verification_aged_out` and installs and reads back the rules
+itself. The sandbox manager verifies a group's bridge when it starts a turn
+activation and returns `network_verified`, which the runner trusts for one
+minute; terminals and workspace operations always check. The sandbox manager
+also installs and reads back the rules before any group joins its bridge.
 
-The turn child normally does not install and read back the host rules itself.
-The host service keeps the network guard its startup preflight verified, and
-renews that verification between claims once it is 35 seconds old, so handing a
-turn over does not wait for it; a verification still 45 seconds old at a
-handover, after a failed renewal say, is renewed then. It
-adds the verification time and its own helper image to the child's stdin
-payload, after stripping claim-supplied underscore keys, as it does for the
-qualification verdict. The child declines the turn, before accepting it, unless
-that verification is present, well formed and successful. It still checks the
-Docker version and the relay network itself, but starts no helper container
-before it accepts its turn. A child that starts so slowly that the verification
-is already past the network guard's one-minute window uses nothing from it: it
-logs `network_guard_verification_aged_out`, installs and reads back the rules
-itself, as every child did before the host handed its verification over, and
-accepts the turn only if that check passes. The sandbox manager still installs
-and reads back the rules before any group joins its bridge.
-
-Network-rule reads share one helper request, which the runner's or the
-sandbox manager's long-lived helper takes when it is free; route reads use a
-separate disposable helper without capabilities. Reconciliation caches
-inspections only within one command, rereads after mutations, and verifies the
-final bridge identity, membership and relay addresses. It skips unchanged guest
-hosts/resolver writes while retaining ownership, mode and symlink checks. These
-optimizations preserve the network policy and freshness requirements.
-
-A new chat's repository is cloned, scrubbed and archived on the host while the
-container starts. Its `checkout` measurement includes the remaining clone wait
-(`source_wait`) and import (`source_import`). Clone failures still fail at that
-stage; an earlier stop discards prepared source. Startup measurements attribute
-qualification to `preflight` and cover claim request through prompt dispatch,
-excluding queue wait and model response time. Declined children do not publish a
-successful startup. A host at capacity claims again as soon as a turn's child
-exits or an environment test ends. Failing that, it checks again after a
-second, or after five seconds while an environment test holds one of its slots.
+A new chat's repository is cloned and archived on the host while its container
+starts; the `checkout` measurement includes the remaining clone wait
+(`source_wait`) and import (`source_import`). Startup measurements cover claim
+request through prompt dispatch, with qualification under `preflight`, and
+exclude queue wait and model time. A host at capacity claims again as soon as a
+turn's child exits or an environment test ends; failing that, it checks after a
+second, or five seconds while an environment test holds one of its slots.
 
 ### Empty-queue waits and CI evidence
 
-After an empty claim, the host calls `/v1/agent/worker/wait`. The control plane
-wakes waiting hosts when Postgres reports queued, requeued or ended work
-(migration `0029`), or after five seconds. The host then claims again; the wait
-endpoint never assigns work. Its dedicated database listener reconnects
-independently and wakes all waiters on connection or disconnection. Changes the
-triggers cannot observe, such as a moved placement pin or a finished Fork, are
-therefore still found within the normal five-second interval.
-
-If the endpoint returns 404, the host resumes polling and retries the endpoint
-after five minutes. Hosts can deploy before the control plane.
+After an empty claim, the host calls `/v1/agent/worker/wait`, which returns when
+Postgres reports queued, requeued or ended work, or after five seconds; the host
+then claims again. Changes the triggers cannot see, such as a moved placement
+pin or a finished Fork, are still found within five seconds. If the endpoint
+answers 404, the host polls and retries the endpoint after five minutes, so
+hosts can deploy before the control plane.
 
 CI runs the candidate check on the real Kata host for reviewed `dev` commits
-before `CI Gate` permits release. It uses uniquely tagged images and never runs
-Compose against the deployed stack. This job does not send PR code to that
-machine; static checks across artifacts also run on PRs. A local Docker test
-does not establish that the real Kata-host check passed: use the named CI job's
-result as evidence.
+before `CI Gate` permits a release, using uniquely tagged images and never the
+deployed stack; pull-request code does not run on that machine. A local Docker
+test is not evidence that the Kata-host check passed: use the named CI job's
+result.
 
 ## Old process, candidate schema
 
 The Postgres CI job finds the latest `agent-*` release tag reachable from the
-change's base and runs [`scripts/check_rolling_upgrade.py`](../../scripts/check_rolling_upgrade.py).
-It creates a random `rolling_test_*` database, migrates it with the previous
-release's Alembic graph, and warms that release's storage pool with conversation
-reads and writes and with the writes a runner's turn makes through the worker
-routes: a host heartbeat, the claim, a lease heartbeat, an event, the sandbox
-reservation, residency, admission and settlement, and the terminal transition,
-for a new chat and for a follow-up in a retained one. While the old process
-remains alive, it applies the candidate migration and repeats those operations
-on the same database backend. It also tests an idempotent migration retry, then
-removes the database and archived source.
+change's base and runs
+[`scripts/check_rolling_upgrade.py`](../../scripts/check_rolling_upgrade.py). It
+migrates a random `rolling_test_*` database with the previous release's Alembic
+graph and warms that release's storage pool with conversation reads and writes
+and with the writes a runner's turn makes: a host heartbeat, the claim, a lease
+heartbeat, an event, the sandbox reservation, residency, admission and
+settlement, and the terminal transition, for a new chat and a follow-up. With
+the old process still running, it applies the candidate migration and repeats
+those operations, tests an idempotent migration retry, and removes the database.
 
-Run it against disposable local Postgres. Replace the quoted placeholder with
-an existing prior `agent-*` release tag:
+Run it against disposable local Postgres, with an existing earlier `agent-*`
+tag:
 
 ```bash
 ROLLING_BASE_TAG='agent-<previous-sha>'
@@ -210,46 +155,33 @@ TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=5432 \
   uv run python scripts/check_rolling_upgrade.py --base "$ROLLING_BASE_TAG"
 ```
 
-This checks common storage paths against the previous release. Authenticated
-browser flows and compatibility with every historical release need separate
-evidence.
+It covers the common storage paths against the previous release only;
+authenticated browser flows and older releases need separate evidence.
 
 ## Host and control plane one release apart
 
-Hosts deploy before the control plane, and a managed compute host follows a
-new control plane later, so for a while each side talks to the other's
-previous release. When a change touches any backend package or the locked
-dependencies (the wire is built from models and payload code spread well
-beyond the clients, and pydantic decides what parses), the same Postgres job
-runs
+Hosts deploy before the control plane, and managed compute hosts follow a new
+control plane later, so each side talks to the other's previous release for a
+while. When a change touches a backend package or the locked dependencies, the
+same Postgres job runs
 [`scripts/check_mixed_protocol.py`](../../scripts/check_mixed_protocol.py)
-against the same previous release. It archives that release and gives it an
-environment from its own lock file, then runs four pairings, each on a
-random `mixed_protocol_test_*` database migrated by its control plane's own
-Alembic graph: this host against the previous control plane, the previous
-host against this control plane, and each release against itself as the
-baseline.
+against the previous release. It runs four pairings, each on a random
+`mixed_protocol_test_*` database migrated by its control plane: this host with
+the previous control plane, the previous host with this control plane, and each
+release with itself as the baseline.
 
-In each pairing the control plane's real application serves on loopback,
-and the host's own enrollment, claim and attempt client register and
-heartbeat, run a new chat's turn and two follow-ups, see a cancellation,
-settle, abandon and finish, and carry out a stop and a residency eviction
-the control plane orders. A scripted sandbox manager stands in for Docker. A
-pairing fails when a call is refused, when a receiver's own model rejects a
-message or would silently drop a field it carries, or when the database
-differs from the baseline's after any of those steps. It runs no image, no
-sandbox and no model, so it does not replace the release acceptance or the
-Kata check.
+In each pairing the real control plane serves on loopback, and the host's real
+enrollment, claim and attempt client run a new chat's turn and two follow-ups, a
+cancellation, settle, abandon and finish, and a stop and residency eviction the
+control plane orders, against a scripted sandbox manager. A pairing fails on a
+refused call, a message the receiver rejects or would silently drop a field of,
+or a database that differs from the baseline's. Four more pairings check the
+control plane's calls to a host's sandbox manager (inventory, member status,
+group registration, residency loss, SSH access push, terminal suspend and
+resume) against each release's fake supervisor. No image, sandbox or model runs,
+so this does not replace release acceptance or the Kata check.
 
-Four more pairings check the control plane's own calls to a host's sandbox
-manager: this release's client against the previous release's sandbox manager,
-the previous client against this one, and each against itself. Behind each
-sandbox manager is the fake supervisor from that release's tests. They cover
-the inventory, a member's status, group registration, a residency loss, an SSH
-access push and terminal suspend and resume, and fail on a refused call, a
-dropped field, or an answer missing a key the client's own release sends.
-
-Run it against disposable local Postgres with the same tag as above:
+Run it with the same tag as above:
 
 ```bash
 TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=5432 \
@@ -259,7 +191,7 @@ TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=5432 \
 ## Detection after deployment
 
 The main API runs one queue monitor; the MCP listener runs none. After two
-consecutive observations one minute apart, it reports queue heads at least ten
+consecutive observations a minute apart, it reports queue heads at least ten
 minutes old:
 
 | Event | Meaning |
@@ -269,57 +201,46 @@ minutes old:
 | `queue_health_unavailable` | Repeated database observations failed. |
 | `queue_recovered` | A reported problem cleared. |
 
-Follow-ups waiting behind an earlier turn are excluded. Occupied slots with
-running work are normal backpressure. The monitor reports state; it never claims
-jobs, restarts hosts, changes scheduling or relaxes isolation. Compute-managed
-hosts follow a new control-plane commit through the compute worker's upgrade
-operation, which uses the host recipe's drain. External process/HTTP monitoring
-remains necessary because a dead API cannot monitor itself.
+Follow-ups waiting behind an earlier turn are excluded, and occupied slots with
+running work are normal backpressure. The monitor only reports: it never claims
+jobs, restarts hosts, changes scheduling or relaxes isolation. A dead API cannot
+monitor itself, so keep external process and HTTP monitoring.
 
-Events are logged even without external delivery. To enable notifications, set
-`AGENT_ALERT_WEBHOOK_URL` in the control plane's environment or `.env` to an operator-owned
-receiver. Queue alerts send JSON with `text`, `event`, `deployment_sha` and
-aggregate `queue` counts. The receiver must accept that contract; chat providers
-may need an adapter. Deployment-workflow alerts belong to the downstream
-distribution.
-
-Queue notifications contain no prompts, repository names, job IDs, host
-credentials or log dumps. Redirects are refused. Delivery failures are logged
-without the webhook URL and do not affect requests or the reaper. Notifications
-follow state changes, repeat at most once every 30 minutes while unchanged, and
-retry failed delivery the next minute. External alerts are active only after the
-deployment owner configures the receiver and its credentials.
+Events are always logged. For notifications, set **Alert webhook URL** in
+Admin → Settings → Operations (initially `AGENT_ALERT_WEBHOOK_URL`) to a receiver
+you own; the alert timings are under Advanced there. Queue alerts send JSON with
+`text`, `event`, `deployment_sha` and aggregate `queue` counts, never prompts,
+repository names, job IDs, credentials or logs; chat providers may need an
+adapter. Redirects are refused, and a failed delivery is logged without the URL
+and does not affect requests. Notifications follow state changes, repeat at most
+every 30 minutes while unchanged, and retry a failed delivery the next minute.
+Deployment-workflow alerts belong to the downstream distribution.
 
 ## Recovery boundaries
 
-The [backup and recovery runbook](disaster-recovery.md) defines initial retention
-and recovery targets, coordinated database/host recovery sets, encryption-key
-preservation, restore-drill acceptance, and previous artifact-release recovery.
+The [backup and recovery runbook](disaster-recovery.md) covers retention and
+recovery targets, coordinated database and host recovery sets, encryption keys,
+restore drills and recovering a previous artifact release.
 
-Inspect both machines' deployment markers and the failure reason, then retry
-the same verified target. A failed host rollout remains a failed rollout even
-if it restored the recorded generation. Control-plane failure leaves compatible
-migrations in place; there is no automatic database downgrade.
-
-A hard-cancelled host activation may leave the readiness marker pending while
-Docker Engine continues the unbounded graceful runner stop. Running turns still
-finish naturally without a deployment signal reaching their child processes;
-after the runner exits, the host remains unavailable until activation is rerun
-for the same verified target. Do not publish readiness by hand.
-
-If the host succeeds before the control plane fails, the exact-SHA gate can keep
-new work queued until the retry succeeds. The queue monitor detects this state.
-These checks protect and expose interrupted deployments; activation still spans
-two machines and PostgreSQL without a single transaction.
+After a failed deployment, inspect both machines' deployment markers and the
+failure reason, then retry the same verified target. A failed host rollout is a
+failed rollout even if it restored the recorded generation. A control-plane
+failure leaves compatible migrations in place; there is no automatic database
+downgrade. A hard-cancelled host activation may leave the readiness marker
+pending while Docker finishes the graceful runner stop; running turns still
+finish, and the host stays unavailable until activation is rerun for the same
+target. Do not publish readiness by hand. If the host succeeded and the control
+plane failed, the exact-SHA gate can keep new work queued until the retry
+succeeds; the queue monitor reports it.
 
 ### Push and pull-request failures
 
-The platform does not publish workspaces, so there is no publication to retry
-or repair. A push or pull request the agent could not make is part of its
-turn: the transcript shows what git or `gh` printed, and the owner asks again
-once the cause is fixed. The GitHub relay logs each request it refuses itself
-as `agent_github_relay_refused`, or `agent_github_relay_push_refused` for a
-push, with the conversation and job, and each pull request it records as
+The platform does not publish workspaces, so there is no publication to retry.
+A push or pull request the agent could not make is part of its turn: the
+transcript shows what git or `gh` printed, and the owner asks again once the
+cause is fixed. The GitHub relay logs each request it refuses as
+`agent_github_relay_refused` (`agent_github_relay_push_refused` for a push) with
+the conversation and job, and each pull request it records as
 `agent_github_relay_pull_request_recorded`. A refusal from GitHub itself, such
-as branch protection, push protection or a missing App permission, appears
-only in the transcript. See [the GitHub relay](operations.md#the-github-relay).
+as branch protection, push protection or a missing App permission, appears only
+in the transcript. See [the GitHub relay](operations.md#the-github-relay).

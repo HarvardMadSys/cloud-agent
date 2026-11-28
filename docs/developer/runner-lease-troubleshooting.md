@@ -1,12 +1,10 @@
 # Runner lease failures
 
-A retained sandbox may still exist after the worker driving its turn loses its
-lease. Start with the attempt records and runner logs: container presence alone
-does not prove that the native session can safely continue.
+A retained sandbox can outlive the lease of the worker driving its turn. Start
+from the attempt records and runner logs: a container that still exists does not
+prove that its native session can safely continue.
 
 ## Lease timing and retries
-
-The lease and execution timeout govern different things:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -17,44 +15,33 @@ The lease and execution timeout govern different things:
 | Agent execution timeout | 3,600 seconds | Limits the turn itself. |
 | Ordinary control RPC timeout | 30 seconds | Default for other control requests. |
 
-A successful heartbeat restores the normal interval. HTTP 409 rejects the
-lease permanently: renewal and execution stop, and retries cannot restore the
-expired owner. Renewal does not depend on model output, tool activity or
-progress events, so a quiet call can span many lease periods.
+Renewal does not depend on model output, tool activity or progress events, so a
+quiet call can span many lease periods. The first heartbeat goes out as soon as
+the turn's process starts, because the lease runs from the claim. With repeated
+ten-second read timeouts, retries start at 0, 15, 30 … 105 seconds, which leaves
+chances to reconnect before a 120-second lease ends but guarantees nothing; an
+outage longer than the remaining lease loses it. A successful heartbeat restores
+the normal interval.
 
-The runner reaches the same verdict without a 409 when the lease cannot still
-be valid: once its last acknowledged renewal is a whole lease old, or when the
-control plane refuses the worker credential itself (HTTP 401, 403 or 404,
-which no retry changes). It then stops the agent as for a 409 instead of
-letting it write to the shared workspace after the reaper has superseded the
-attempt. A lease must therefore outlast one heartbeat interval plus one
-request timeout (40 seconds): a shorter `AGENT_LEASE_TTL` is ignored in favour
-of the default, and a shorter `--lease-ttl` is refused. A cancellation does not
-end renewal; the lease is kept while the runner releases or drains the turn.
+The runner stops the agent, so that it cannot write to the shared workspace
+after the reaper has superseded the attempt, when:
 
-The first heartbeat is sent as soon as the process running the turn starts: the
-lease runs from the claim, and that process's handover and preflight have
-already spent part of it. With repeated ten-second read timeouts, retry requests
-then start at 0, 15, 30, 45, 60, 75, 90 and 105 seconds after it starts. This
-illustrates opportunities to reconnect before the original 120-second lease
-ends; it is not a wall-clock guarantee. HTTP timeout limits apply separately to
-connection, pool, write and read operations. An outage longer than the remaining
-lease still loses the lease.
+- a heartbeat answers HTTP 409: the lease is gone for good;
+- the control plane refuses the worker credential (HTTP 401, 403 or 404, which
+  no retry changes);
+- its last acknowledged renewal is a whole lease old.
 
-The regression suite drives a silent six-minute turn through the real heartbeat
-thread, stream loop and HTTP client against a simulated lease endpoint. It
-covers healthy renewal and timed-out reads followed by recovery at 100 or 105
-seconds. The previous cadence loses the latter case. These tests reproduce a
-failure mechanism; they do not establish the cause of a historical incident.
+A lease must therefore outlast one heartbeat interval plus one request timeout
+(40 seconds): a shorter `AGENT_LEASE_TTL` is ignored in favour of the default,
+and a shorter `--lease-ttl` is refused. A cancellation does not stop renewal;
+the lease is kept while the runner releases or drains the turn.
 
 ## Diagnose from positive evidence
 
-Distinguish a renewal-request timeout from an execution timeout, explicit
-cancellation or agent exit. `lease_expired` proves only that the database did
-not persist a timely renewal. Missing error events do not prove the worker was
-healthy: the control outage that blocks renewal can also block error reporting.
-
-Use these ordinary process-log records:
+Tell a renewal timeout apart from an execution timeout, a cancellation or the
+agent exiting. `lease_expired` proves only that the database saw no timely
+renewal. Missing error events prove nothing: the outage that blocks renewal can
+block error reporting too. Use these log records:
 
 | Record | Evidence |
 | --- | --- |
@@ -63,121 +50,97 @@ Use these ordinary process-log records:
 | `agent_heartbeat_retry` | Consecutive failures, time since the last acknowledgement (or heartbeat start), and next retry delay. |
 | `agent_heartbeat_recovered` | Renewal succeeded after failures. |
 
-The failure diagnostics exclude request URLs, tokens, response bodies and
-exception messages. The heartbeat's exception class/status are logged once per
-outage; retry records carry the changing count and timing.
+They carry no request URLs, tokens, response bodies or exception messages, and
+the exception class and status are logged once per outage. Correlate them with
+the attempt's `lease_owner`, `lease_expires_at` and event timestamps. Collect
+runner and control-plane logs outside their containers: replacing a container
+can delete its Docker logs.
 
-Correlate logs with the attempt's persisted `lease_owner`, `lease_expires_at`
-and event timestamps. Collect runner and control-plane logs outside their
-containers: replacing a container can delete its Docker log history. The runner
-does not configure an external collector or recover deleted logs.
-
-An `attempt_superseded` event does not establish that another attempt ran.
-Retained sessions can become lost without a replacement, including when
-activation ownership is uncertain during preparation. The UI announces another
-attempt only when its events exist.
+An `attempt_superseded` event does not mean another attempt ran. A retained
+session can become lost without a replacement, for example when activation
+ownership was uncertain during preparation. The UI shows another attempt only
+when its events exist.
 
 ## Reporting and acknowledgement failures
 
-Error-event upload and the terminal `finish` request are independent. The
-runner attempts the terminal transition even if event upload fails. If both
-remain unavailable, the reaper is the final backstop.
+Event upload and the terminal `finish` request are independent: the runner
+attempts `finish` even if uploads fail, and the reaper is the last backstop.
 
-The turn loop does not wait for event uploads. It numbers, redacts and queues
-each event as it reads it, and one sender thread posts the queue in order to
-`POST /v1/agent/worker/jobs/<job>/events:batch`: up to 100 events or 256 KiB
-per request, stored by the control plane in one transaction. A batch is retried
-whole for up to 60 seconds on transport failures and HTTP
-408/429/500/502/503/504, with delays doubling from one second up to eight; the
-event numbers make the retry safe. The queue holds up to 1,000 events or 4 MiB,
-and past that the turn loop waits, so a CLI whose events cannot be recorded
-stops being read. An upload refused with 409 ends the turn as a refused
-heartbeat does. A turn's outcome waits for its events: if the sender gives up,
-the turn fails before it settles, and its error event and `finish` are still
-attempted. `finish`, the release and the terminal suspend and resume requests
-also wait for the events queued before them, which keeps the log in order. A
-control plane that answers the batch route with 404 or 405 predates it; the
-runner logs `agent_event_batches_unsupported` and posts the rest of that
-attempt's events one at a time to `/events`.
+The turn loop numbers, redacts and queues each event, and one sender thread
+posts the queue in order to `POST /v1/agent/worker/jobs/<job>/events:batch`, up
+to 100 events or 256 KiB per request. A batch is retried whole for up to 60
+seconds on transport failures and HTTP 408, 429, 500, 502, 503 and 504, with
+delays doubling from one second to eight; the event numbers make the retry safe.
+Past 1,000 queued events or 4 MiB the turn loop waits, so a CLI whose events
+cannot be recorded stops being read. A 409 ends the turn as a refused heartbeat
+does, and if the sender gives up, the turn fails before it settles. `finish`,
+the release and terminal suspend and resume wait for the events queued before
+them. A control plane that answers the batch route with 404 or 405 predates it:
+the runner logs `agent_event_batches_unsupported` and posts that attempt's
+remaining events one at a time to `/events`.
 
-Post-claim preparation outside the shared execution handler, such as image
-inspection or manifest validation, has an outer failure handler too. It attempts
-a terminal failure before stopping heartbeat renewal and logs the exception
-class even if reporting fails. An explicit lease rejection skips that write.
-This records early setup failures without repairing their cause.
-
-After supervisor and control-plane settlement both succeed, a failed upload of
-the final `shared_workspace_settled` notice does not fail the turn: the runner
-still submits its successful terminal state. Lease rejection prevents that
-write. Earlier settlement failures remain failures.
+A failure in post-claim preparation, such as image inspection or manifest
+validation, still attempts a terminal failure before heartbeat renewal stops,
+unless the lease was rejected. A failed upload of the final
+`shared_workspace_settled` notice does not fail a turn that the supervisor and
+control plane both settled.
 
 The control plane's admission and settlement receipts are retried **for as long
-as the lease holds**, using ten-second HTTP timeouts and delays that double from
-one second up to eight. That rides out a control-plane container being
-recreated: however an attempt ends, by a failed finish or the reaper, a turn the
-control plane admitted but never saw settle is marked LOST, even when the
-supervisor had settled it. Retries stop once the heartbeat has lost the lease,
-or after a whole lease of failures from a control plane that keeps renewing it,
-and a failed receipt never tears down a session the supervisor has settled.
-Supervisor settlement allows three attempts, five seconds apart. Only transport
-failures and HTTP 408/502/503/504 are retried; 409/410 are definitive. The
-prompt is sent exactly once, after its admission acknowledgement succeeds.
+as the lease holds**, with ten-second timeouts and delays doubling from one
+second to eight, which rides out a recreated control-plane container. A turn the
+control plane admitted but never saw settle is marked LOST, even if the
+supervisor settled it. Retries stop when the heartbeat loses the lease, or after
+a whole lease of failures from a control plane that keeps renewing it; a failed
+receipt never tears down a session the supervisor settled. Supervisor
+settlement gets three attempts, five seconds apart. Only transport failures and
+HTTP 408, 502, 503 and 504 are retried; 409 and 410 are final. The prompt is
+sent exactly once, after its admission acknowledgement.
 
-Supervisor settlement retains the last token's receipt until another activation
-takes ownership. Control-plane settlement returns the recorded boundary only
-for the same still-live attempt and activation. Repeating it does not increment
-the workspace epoch or change the native turn ordinal. A
-sandbox manager restart loses its in-memory receipt, so uncertain completion across a
-restart fails closed.
+Repeating a settlement returns the recorded boundary for the same live attempt
+and activation, without moving the workspace epoch or the native turn ordinal. A
+sandbox manager restart loses its in-memory receipt, so an uncertain completion
+across a restart fails closed.
 
 ## When a retained conversation can continue
 
-A reported preparation failure **before admission** can leave an existing
-conversation usable. The runner abandons the activation and reports a failed
-turn; the next message can resume the retained native session. This requires a
-known retained container. Failure before its identity was recorded does not
-provide that proof, and error-event availability must not gate the report.
+A reported preparation failure **before admission** leaves the conversation
+usable: the runner abandons the activation and reports a failed turn, and the
+next message resumes the retained native session. That needs a known retained
+container; a failure before its identity was recorded gives no such proof.
 
-An admission request with no received acknowledgement is different: the
-database may have committed it even though the runner has not sent the prompt.
-The membership then records the job as admitted. `abandon` only releases
-pre-admission turns (`admitted_job_id IS NULL`), so it cannot release this
-ambiguous turn; the terminal transition marks its context LOST. The runner never
-replays an unconfirmed admitted prompt.
+An admission request with no acknowledgement is different. The database may have
+committed it although the prompt was never sent, so the membership records the
+job as admitted. `abandon` only releases pre-admission turns
+(`admitted_job_id IS NULL`), so the terminal transition marks that context LOST.
+The runner never replays an unconfirmed admitted prompt.
 
-Recovery after an expired activation or killed runner requires a further
-protocol: durably quarantine the member, fence the old runner's preparation
-commands and sandbox manager token, verify the exact retained container and native turn
-boundary, then resume that session or report it unrecoverable. A sandbox manager
-`busy=false` observation is insufficient because workspace setup commands run
-outside its agent-turn transport. Never requeue a turn solely because its
-admission field is empty, clear a lost flag, or replay an admitted prompt to
-repair a display state.
+Recovering after an expired activation or a killed runner would need a further
+protocol: quarantine the member, fence the old runner's preparation commands and
+sandbox manager token, verify the exact container and native turn boundary, then
+resume the session or report it unrecoverable. A sandbox manager `busy=false` is
+not enough, because workspace setup commands run outside its agent-turn
+transport. Never requeue a turn just because its admission field is empty, clear
+a lost flag, or replay an admitted prompt to repair what the UI shows.
 
-Owner-facing wording describes interrupted responses and unavailable
-conversations in plain language. Infrastructure details stay in API records and
-operator logs; task errors and assistant messages remain intact. Historical
-LOST memberships remain disabled after wording changes.
+Owners see plain-language messages for interrupted responses and unavailable
+conversations; infrastructure details stay in API records and operator logs.
+LOST memberships stay disabled.
 
 ## The safe release case: a child never accepted its turn
 
-The host runs each turn in a child process. It can release a claim back to the
-queue only when it can prove that child never accepted the turn:
+The host runs each turn in a child process. It releases a claim back to the
+queue only when it can prove that the child never accepted the turn: the process
+could not be created, the payload could not be delivered, or the child closed
+its handover descriptor without accepting, for example after a failed read-only
+Docker or network preflight. A silent child that is still alive is never
+released. After acceptance, crashes, kills and lost acknowledgements belong to
+the lease protocol, and the conversation may become lost rather than repeat the
+turn.
 
-- Process creation failed.
-- Payload delivery failed.
-- The child closed its handover descriptor without accepting, including a
-  failed read-only Docker/network preflight before acceptance.
-
-A silent child that remains alive is not proof and is never released. After
-acceptance, crashes, kills and lost acknowledgements belong to the lease
-protocol; the conversation may become lost instead of repeating the turn.
-
-Release uses `POST /v1/agent/worker/jobs/<job>/release` with that turn's worker
-token. The control plane requires the same still-running attempt and lease
-generation **and** no membership that admitted the job. The database statement
-enforces the admission condition, so an incorrect host observation cannot
-requeue admitted work.
+The release is `POST /v1/agent/worker/jobs/<job>/release` with the turn's worker
+token. The control plane requires the same running attempt and lease generation
+**and** no membership that admitted the job. The database statement enforces
+that, so a wrong host observation cannot requeue admitted work.
 
 Consecutive launch failures stop claims on that host and back off. Heartbeats
 report `launch_error`, which appears beside the host on Admin → Servers.

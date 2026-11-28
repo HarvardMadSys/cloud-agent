@@ -72,8 +72,6 @@ operations-compute
 releases
 deployment-reliability
 disaster-recovery
-runtime-settings
-host-execution-limits
 runner-lease-troubleshooting
 smoke
 ```
