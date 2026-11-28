@@ -24,6 +24,7 @@ import {
   ApplicationSettingsHeader,
   categoryTabId,
   useApplicationSettings,
+  type ApplicationSettingsState,
 } from './ApplicationSettings';
 import CloudLabSettings from './CloudLabSettings';
 import { ProvidedModelsPanel } from './ProvidedModels';
@@ -42,9 +43,6 @@ import { AdminNavigation } from '../AdminNavigation';
 import { ADMIN_PAGE, AdminPageHeader } from '../AdminPageHeader';
 import { GlobalSettingsCard, type NamedHost } from '../hosts/HostSettings';
 import { runtimeMenu, serverInventory } from '../hosts/format';
-
-/** The application settings category shown on the Agent versions tab. */
-const AGENT_VERSIONS_CATEGORY = 'Agent versions';
 
 const OTHER_SETTINGS_TABS = [
   { id: 'versions', label: 'Agent versions' },
@@ -70,6 +68,46 @@ export default function AdminSettingsPage() {
 /** The saved agent package registry, which the version menus are read from. */
 function savedRegistry(settings: AgentAdminSettings | null): string {
   return String(settings?.values.runtime_registry_url ?? '');
+}
+
+/** The application settings a tab shows above its own, each in a card of its own. */
+function HostedApplicationSettings({
+  settings,
+  tab,
+  selected,
+}: {
+  settings: ApplicationSettingsState;
+  tab: string;
+  selected: boolean;
+}) {
+  const hosted = [...HOSTED_CATEGORIES].filter(
+    ([category, place]) => place.tab === tab && settings.groups.has(category),
+  );
+  return (
+    <>
+      {hosted.map(([category, { title }]) => (
+        <section key={category} className="ui-card mt-6 p-4 sm:p-6" aria-label={title}>
+          <ApplicationSettingsHeader settings={settings} title={title} />
+          <ApplicationSettingsFeedback settings={settings} />
+          <ApplicationSettingsCategory
+            settings={settings}
+            category={category}
+            active={selected}
+            showHeading={false}
+          />
+        </section>
+      ))}
+    </>
+  );
+}
+
+/** Opens every collapsed section around a search result, so it can take focus. */
+function openEnclosingDetails(target: HTMLElement) {
+  let details = target.closest('details');
+  while (details) {
+    details.open = true;
+    details = details.parentElement?.closest('details') ?? null;
+  }
 }
 
 function AccessDenied() {
@@ -344,6 +382,7 @@ function SettingsView() {
     const focusTarget = () => {
       const target = document.getElementById(searchTarget);
       if (!target || !root.contains(target) || target.closest('[hidden]')) return false;
+      openEnclosingDetails(target);
       let control = target.matches('input, select, textarea, button, [tabindex]')
         ? target
         : target.querySelector<HTMLElement>('input, select, textarea, button');
@@ -513,24 +552,11 @@ function SettingsView() {
             hidden={selectedTab !== 'versions'}
             tabIndex={0}
           >
-            {applicationSettings.groups.has(AGENT_VERSIONS_CATEGORY) && (
-              <section
-                className="ui-card mt-6 p-4 sm:p-6"
-                aria-label="Where agent versions come from"
-              >
-                <ApplicationSettingsHeader
-                  settings={applicationSettings}
-                  title="Where agent versions come from"
-                />
-                <ApplicationSettingsFeedback settings={applicationSettings} />
-                <ApplicationSettingsCategory
-                  settings={applicationSettings}
-                  category={AGENT_VERSIONS_CATEGORY}
-                  active={selectedTab === 'versions'}
-                  showHeading={false}
-                />
-              </section>
-            )}
+            <HostedApplicationSettings
+              settings={applicationSettings}
+              tab="versions"
+              selected={selectedTab === 'versions'}
+            />
             {pool && (
               <AgentVersions
                 menu={versionMenu}
@@ -576,6 +602,11 @@ function SettingsView() {
             hidden={selectedTab !== 'sandbox'}
             tabIndex={0}
           >
+            <HostedApplicationSettings
+              settings={applicationSettings}
+              tab="sandbox"
+              selected={selectedTab === 'sandbox'}
+            />
             {pool &&
               (definitions.length > 0 ? (
                 <GlobalSettingsCard
@@ -629,6 +660,11 @@ function SettingsView() {
             hidden={selectedTab !== 'cloudlab'}
             tabIndex={0}
           >
+            <HostedApplicationSettings
+              settings={applicationSettings}
+              tab="cloudlab"
+              selected={selectedTab === 'cloudlab'}
+            />
             {(cloudLabVisited || selectedTab === 'cloudlab') && (
               <CloudLabSettings onAccessDenied={fail} />
             )}
