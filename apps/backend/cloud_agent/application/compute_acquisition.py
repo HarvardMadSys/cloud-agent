@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import SecretStr
 
+from cloud_agent.application.cloudlab_inventory import CloudLabInventoryUnavailable
 from cloud_agent.application.compute_diagnostic_values import (
     cloudlab_observation_diagnostics,
+    provider_diagnostic_result,
     provider_receipt_diagnostic_result,
 )
 from cloud_agent.application.host_commands import HostCommands
@@ -101,6 +103,31 @@ def registers_host_keys(allocation: dict[str, Any]) -> bool:
     return (allocation.get("configuration") or {}).get("host_key_source") == "registration"
 
 
+def _tried_node_types(operation: dict[str, Any]) -> list[str]:
+    """The hardware types this acquisition has requested so far, oldest first."""
+    tried = (operation.get("result") or {}).get("node_types_tried") or []
+    return [node_type for node_type in tried if isinstance(node_type, str)]
+
+
+def _waiting_message(operation: dict[str, Any]) -> str:
+    """Say which node type the provider is setting up, and which ones came before it."""
+    tried = _tried_node_types(operation)
+    waiting = "Waiting for the provider to make the resource ready"
+    if len(tried) > 1:
+        return f"{', '.join(tried[:-1])} could not be allocated; trying {tried[-1]}. {waiting}."
+    if tried:
+        return f"{waiting} ({tried[0]})."
+    return f"{waiting}."
+
+
+def _released_after_failure(operation: dict[str, Any], allocation: dict[str, Any]) -> bool:
+    """Whether this acquisition already deleted the resource the provider failed to set up."""
+    return (
+        operation.get("step") == "failed_resource_released"
+        and allocation.get("observed_state") == "terminated"
+    )
+
+
 class ComputeAcquisition:
     """The acquire, import and preflight workflows, executed by the compute reconciler."""
 
@@ -164,6 +191,11 @@ class ComputeAcquisition:
         provider = self.commands.registry.get(allocation["provider_id"]).provider
         observation: ResourceObservation | None
         if allocation.get("external_id"):
+            if _released_after_failure(operation, allocation):
+                # Deleted by this acquisition, so CloudLab may no longer show
+                # it: decide what follows without reading it again.
+                await self.failed_resource(operation, allocation, None)
+                return
             observation = await provider.inspect(self.reconciler._ref(allocation))
         elif operation.get("result", {}).get("resource_ref"):
             observation = await provider.inspect(
@@ -195,25 +227,14 @@ class ComputeAcquisition:
         if observation.state == "terminated":
             raise ProviderError("resource_terminated", "The allocated resource has terminated")
         if observation.state == "failed":
-            await self.release_failed_acquisition(operation, allocation)
-            diagnostics = (
-                cloudlab_observation_diagnostics(
-                    observation, reason_code="experiment_failed_no_provider_reason"
-                )
-                if allocation.get("provider_id") == "cloudlab"
-                else {}
-            )
-            raise ProviderError(
-                "resource_failed",
-                "The provider could not set up this resource; it was released",
-                diagnostics=diagnostics,
-            )
+            await self.failed_resource(operation, allocation, observation)
+            return
         if observation.state != "ready":
             await self.reconciler._finish(
                 operation,
                 "waiting",
                 "waiting_for_resource",
-                "Waiting for the provider to make the resource ready.",
+                _waiting_message(operation),
                 result={"external_pending": True},
                 retry=30,
             )
@@ -274,19 +295,8 @@ class ComputeAcquisition:
         if latest.state == "terminated":
             raise ProviderError("resource_terminated", "The allocated resource has terminated")
         if latest.state == "failed":
-            await self.release_failed_acquisition(operation, allocation)
-            diagnostics = (
-                cloudlab_observation_diagnostics(
-                    latest, reason_code="experiment_failed_no_provider_reason"
-                )
-                if allocation.get("provider_id") == "cloudlab"
-                else {}
-            )
-            raise ProviderError(
-                "resource_failed",
-                "The provider could not set up this resource; it was released",
-                diagnostics=diagnostics,
-            )
+            await self.failed_resource(operation, allocation, latest)
+            return
         if latest.state != "ready" or not latest.scope_complete:
             await self.reconciler._finish(
                 operation,
@@ -536,13 +546,144 @@ class ComputeAcquisition:
             operation, "failed_resource_released", {"external_pending": False}
         )
 
+    async def failed_resource(
+        self,
+        operation: dict[str, Any],
+        allocation: dict[str, Any],
+        observation: ResourceObservation | None,
+    ) -> None:
+        """Release a resource the provider failed to set up, then try another node type or fail.
+
+        ``observation`` is None when this acquisition already released it.
+        """
+        if observation is not None:
+            await self.release_failed_acquisition(operation, allocation)
+        diagnostics = (
+            cloudlab_observation_diagnostics(
+                observation, reason_code="experiment_failed_no_provider_reason"
+            )
+            if observation is not None and allocation.get("provider_id") == "cloudlab"
+            else {}
+        )
+        if await self.try_next_node_type(operation, allocation, observation, diagnostics):
+            return
+        tried = _tried_node_types(operation)
+        untried = (operation.get("result") or {}).get("node_types_untried")
+        if tried and not untried and not (observation is not None and observation.nodes):
+            message = (
+                "No preferred node type could be set up; each failed resource was released. "
+                f"Node types tried: {', '.join(tried)}."
+            )
+        else:
+            message = "The provider could not set up this resource; it was released" + (
+                f". Node types tried: {', '.join(tried)}." if tried else ""
+            )
+        raise ProviderError("resource_failed", message, diagnostics=diagnostics)
+
+    async def try_next_node_type(
+        self,
+        operation: dict[str, Any],
+        allocation: dict[str, Any],
+        observation: ResourceObservation | None,
+        diagnostics: dict[str, str | int | bool],
+    ) -> bool:
+        """Submit the acquisition again with a preferred node type it has not tried.
+
+        The provider gives no reason for a failed experiment. One that never
+        got a node most likely found no free capacity, as node rotation also
+        assumes, so another type may succeed; one that got nodes failed
+        during setup, which another type would not fix. Only a resource this
+        acquisition created and confirmed deleted is forgotten; the store
+        checks that again, together with the step that makes the next run
+        submit a new one. A node move's replacement is left to the move,
+        which chooses and records each type it tries.
+        """
+        result = operation.get("result") or {}
+        untried = [
+            node_type
+            for node_type in result.get("node_types_untried") or []
+            if isinstance(node_type, str)
+        ]
+        configuration = result.get("acquisition_configuration")
+        if (
+            operation.get("step") != "failed_resource_released"
+            or (operation.get("parameters") or {}).get("rotation_operation_id")
+            or not untried
+            or not isinstance(configuration, dict)
+            or (observation is not None and observation.nodes)
+        ):
+            return False
+        allocation = await self.reconciler._allocation(allocation["id"])
+        if not allocation.get("external_id") or allocation.get("nodes"):
+            return False
+        tried = _tried_node_types(operation)
+        failed = tried[-1] if tried else "The requested node type"
+        reopened = {
+            "resource_ref": None,
+            "external_id": None,
+            "external_pending": False,
+            **provider_diagnostic_result(
+                ProviderError("resource_failed", "", diagnostics=diagnostics),
+                operation,
+                outcome="waiting",
+            ),
+        }
+        if not await self.repository.reopen_failed_acquisition(
+            allocation_id=allocation["id"],
+            external_id=allocation["external_id"],
+            configuration=configuration,
+            result=reopened,
+            **self.reconciler._fence(operation),
+        ):
+            return False
+        operation["step"] = "pending"
+        operation["result"] = {**result, **reopened}
+        await self.reconciler._finish(
+            operation,
+            "waiting",
+            "pending",
+            f"{failed} failed without nodes and was released; trying another preferred "
+            f"node type ({', '.join(untried)} remain).",
+            retry=5,
+        )
+        return True
+
+    async def unavailable_node_types(self, allocation: dict[str, Any]) -> tuple[str, ...]:
+        """Preferred CloudLab types the public inventory shows with none free.
+
+        Advisory only: the provider tries them after the others rather than
+        never. Unreadable inventory changes nothing. The inventory is cached
+        briefly and backs off after a failure, so this stays one bounded read.
+        """
+        inventory = getattr(self.commands, "cloudlab_inventory", None)
+        if (
+            inventory is None
+            or allocation.get("provider_id") != "cloudlab"
+            or not (allocation.get("configuration") or {}).get("node_types")
+        ):
+            return ()
+        try:
+            snapshot = await inventory.preferred_nodes()
+        except CloudLabInventoryUnavailable:
+            return ()
+        return tuple(
+            str(node["node_type"])
+            for node in snapshot.get("nodes") or []
+            if node.get("available") == 0 and isinstance(node.get("node_type"), str)
+        )
+
     async def submit_acquisition(
         self, operation: dict[str, Any], allocation: dict[str, Any]
     ) -> ProviderReceipt:
         """Submit the acquisition once; a definite refusal resets the step for a retry."""
         provider = self.commands.registry.get(allocation["provider_id"]).provider
         try:
-            request = self.reconciler._request(allocation)
+            request = self.reconciler._request(allocation).model_copy(
+                update={
+                    "tried_node_types": tuple(_tried_node_types(operation)),
+                    "unavailable_node_types": await self.unavailable_node_types(allocation),
+                }
+            )
             if registers_host_keys(allocation):
                 request = request.model_copy(
                     update={"registration": await self.open_registration(operation, allocation)}
@@ -576,6 +717,21 @@ class ComputeAcquisition:
     ) -> ResourceObservation | None:
         """Checkpoint the identity a receipt names, then return what the provider shows of it."""
         if receipt.resource is not None:
+            node_types: dict[str, Any] = {}
+            if receipt.node_types_tried:
+                # What a later submission needs to try another type: the
+                # configuration before any type was chosen, and what is left.
+                node_types = {
+                    "node_types_tried": [
+                        *_tried_node_types(operation),
+                        *receipt.node_types_tried,
+                    ],
+                    "node_types_untried": list(receipt.node_types_untried),
+                    "acquisition_configuration": (operation.get("result") or {}).get(
+                        "acquisition_configuration"
+                    )
+                    or allocation["configuration"],
+                }
             await self.reconciler._checkpoint(
                 operation,
                 "resource_identified",
@@ -583,6 +739,7 @@ class ComputeAcquisition:
                     "resource_ref": receipt.resource.model_dump(mode="json"),
                     "external_id": receipt.resource.external_id,
                     **provider_receipt_diagnostic_result(receipt, operation),
+                    **node_types,
                 },
             )
         if receipt.observation is not None:

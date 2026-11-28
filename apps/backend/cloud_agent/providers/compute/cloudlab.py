@@ -428,6 +428,48 @@ def _diagnostic_context(
     return context
 
 
+def _experiment_name(
+    config: CloudLabConfig, intent: OperationIntent, tried: tuple[str, ...]
+) -> str:
+    """Name the experiment; a later one of the same acquisition gets its own name.
+
+    An acquisition submits again only after CloudLab acknowledged deleting
+    its failed experiment, but deletion can finish after the next create
+    arrives. Each submission adds at least one tried type, so the count
+    keeps every name of one acquisition distinct.
+    """
+    name = config.name or "ca-" + intent.allocation_id.replace("-", "")[:13]
+    if not tried:
+        return name
+    suffix = f"-{len(tried)}"
+    return name[: 16 - len(suffix)] + suffix
+
+
+def _node_type_candidates(config: CloudLabConfig, request: AcquireRequest) -> list[str | None]:
+    """The hardware types this submission may request, in the order it tries them.
+
+    An explicit type in the bindings wins; otherwise the preferred list,
+    without the types this operation already tried, and with those the
+    inventory shows as fully used moved to the end (the inventory is
+    advisory, so they are still tried). ``None`` lets the profile choose.
+    """
+    explicit_type = config.bindings.get(config.node_type_binding)
+    pinned = explicit_type is not None and (
+        not isinstance(explicit_type, str) or bool(explicit_type.strip())
+    )
+    if pinned or not config.node_types:
+        return [None]
+    remaining: list[str | None] = [
+        node_type for node_type in config.node_types if node_type not in request.tried_node_types
+    ]
+    if not remaining:
+        raise ProviderError(
+            "capacity_unavailable", "Every preferred CloudLab node type has already been tried"
+        )
+    remaining.sort(key=lambda node_type: node_type in request.unavailable_node_types)
+    return remaining
+
+
 def _acquire_payload(
     config: CloudLabConfig, request: AcquireRequest, *, name: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -823,7 +865,7 @@ class CloudLabProvider(ComputeProvider):
             return self._receipt(observation)
         # No vendor idempotency key exists. The orchestrator must call this
         # only on an unsent persisted intent; recovery must never re-POST it.
-        name = config.name or "ca-" + intent.allocation_id.replace("-", "")[:13]
+        name = _experiment_name(config, intent, request.tried_node_types)
         bindings, payload = _acquire_payload(config, request, name=name)
         context = _diagnostic_context(
             config,
@@ -831,18 +873,14 @@ class CloudLabProvider(ComputeProvider):
             allocation_id=intent.allocation_id,
         )
         await self._require_profile(config, diagnostic_context=context)
-        explicit_type = config.bindings.get(config.node_type_binding)
-        pinned = explicit_type is not None and (
-            not isinstance(explicit_type, str) or bool(explicit_type.strip())
-        )
-        candidates: list[str | None] = list(config.node_types) if not pinned else []
-        if not candidates:
-            candidates = [None]
+        candidates = _node_type_candidates(config, request)
+        requested: list[str] = []
         for index, node_type in enumerate(candidates):
             selected_bindings = dict(config.bindings)
             response: httpx.Response | None = None
             receipt_diagnostics: dict[str, str | int | bool] = {}
             if node_type is not None:
+                requested.append(node_type)
                 selected_bindings[config.node_type_binding] = node_type
                 payload["bindings"] = _wire_bindings(
                     {**bindings, config.node_type_binding: node_type}
@@ -910,6 +948,10 @@ class CloudLabProvider(ComputeProvider):
                 outcome="pending",
                 resource=ref,
                 diagnostics=receipt_diagnostics,
+                node_types_tried=tuple(requested),
+                node_types_untried=tuple(
+                    candidate for candidate in candidates[index + 1 :] if candidate is not None
+                ),
             )
         raise AssertionError("CloudLab acquisition has no hardware candidates")
 

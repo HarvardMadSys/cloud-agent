@@ -293,6 +293,20 @@ class ComputeResourceRepository(Protocol):
         """Save a fenced observation, preserving a known deadline when renewal is unknown."""
         ...
 
+    async def reopen_failed_acquisition(
+        self,
+        *,
+        allocation_id: str,
+        external_id: str,
+        configuration: dict[str, Any],
+        result: dict[str, Any],
+        operation_id: str,
+        generation: int,
+        worker_id: str,
+    ) -> bool:
+        """Forget a deleted, never-noded resource and return its acquisition to submission."""
+        ...
+
     async def create_node_registration(
         self,
         *,

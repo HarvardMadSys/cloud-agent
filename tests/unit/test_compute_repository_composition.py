@@ -4,7 +4,8 @@
 them into ``PostgresComputeResourceRepository``. The split moved methods; it
 did not add, drop or shadow any. ``BEFORE_SPLIT`` is the method inventory of
 the single class in ``storage/repositories/compute_resources.py`` at
-``3e0400ef7``, the commit before the split.
+``3e0400ef7``, the commit before the split. ``ADDED_SINCE_SPLIT`` names each
+method added after it, so a new one is a deliberate entry, never a stray.
 """
 
 from __future__ import annotations
@@ -100,6 +101,10 @@ BEFORE_SPLIT = frozenset(
     }
 )
 
+#: A CloudLab acquisition whose experiment failed without nodes tries the
+#: next preferred node type (docs/developer/operations-compute.md).
+ADDED_SINCE_SPLIT = frozenset({"reopen_failed_acquisition"})
+
 
 def _defined_methods(klass: type) -> set[str]:
     """The functions ``klass`` defines itself, static methods included."""
@@ -116,9 +121,9 @@ def _own_classes() -> list[type]:
 
 
 def test_composed_repository_exposes_the_methods_it_had_before_the_split() -> None:
-    """Public and private alike: no method was added, dropped or renamed."""
+    """Public and private alike: none was dropped or renamed, and none added unlisted."""
     found = set().union(*(_defined_methods(klass) for klass in _own_classes()))
-    assert found == BEFORE_SPLIT
+    assert found == BEFORE_SPLIT | ADDED_SINCE_SPLIT
 
 
 def test_each_method_is_defined_by_exactly_one_class() -> None:

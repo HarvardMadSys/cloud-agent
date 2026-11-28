@@ -59,6 +59,11 @@ class AcquireRequest(ComputeValue):
     mode: Literal["attach", "provision"]
     config: dict[str, Any]
     registration: NodeRegistration | None = None
+    # A provider that chooses among preferred hardware types requests none
+    # this operation already tried, and tries the ones an advisory inventory
+    # shows with nothing free only after the others.
+    tried_node_types: tuple[str, ...] = ()
+    unavailable_node_types: tuple[str, ...] = ()
 
 
 class OperationIntent(ComputeValue):
@@ -137,6 +142,12 @@ class ProviderReceipt(ComputeValue):
     resource: ResourceRef | None = None
     observation: ResourceObservation | None = None
     diagnostics: dict[str, str | int | bool] = Field(default_factory=dict)
+    # Hardware types this submission requested, in order: the last is the
+    # resource's. Untried are the preferred types it did not reach, in the
+    # order it would have tried them. Both stay empty when the configuration
+    # or the provider chooses the hardware.
+    node_types_tried: tuple[str, ...] = ()
+    node_types_untried: tuple[str, ...] = ()
 
 
 class AcquisitionResolution(ComputeValue):

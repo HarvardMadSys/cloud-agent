@@ -81,10 +81,24 @@ and [public inventory](https://www.cloudlab.us/portal-hardware.php) on October 1
 
 Change the ordered list in **Admin → Settings → CloudLab**, or override it for
 a particular server or autoscaling policy. The list is saved with each new
-allocation. Currently free counts are shown separately and do not change the
-preference order. A confirmed capacity rejection advances to the next type;
+allocation. Currently free counts are shown separately. When an acquisition
+submits an experiment, it reads them from the same public inventory (cached
+for a minute) and tries a type with no free node only after the others; it
+still tries it, since the inventory is advisory. An unreadable inventory leaves
+the saved order. A confirmed capacity rejection advances to the next type;
 an uncertain response pauses acquisition for review. If all types lack
-capacity, the operation waits and retries from the top. An explicit nonempty
+capacity, the operation waits and retries from the top.
+
+CloudLab may also accept an experiment and mark it failed shortly after,
+without a reason. One that never got a node most likely found no free
+capacity: the acquisition deletes it, waits for CloudLab to acknowledge the
+deletion, and submits a new experiment, under a new name, with the next type
+it has not tried. Its message names the type that failed and the one being
+tried, and the operation result lists the types tried so far. One that failed
+after it got nodes failed during setup, which another type would not fix: it is
+deleted and the acquisition fails. So does one whose types are all tried; its
+message lists them. An experiment is never submitted twice: each new one
+follows the confirmed deletion of the last. An explicit nonempty
 `phystype` profile parameter selects only that type; clear it to resume ordered
 selection. Profiles with a different hardware parameter can use
 `node_type_binding`; an empty list uses the profile's own choice.
@@ -458,6 +472,7 @@ not confirmed gone, which can still hold the server until a retry or
 | CloudLab could not be reached | The message names the endpoint it tried and why. A host name that does not resolve, a refused connection, or no connection within 60 seconds points at the **CloudLab API URL** setting or a firewall between the control plane and CloudLab: the URL is `https://boss.emulab.net:43794`, and the control plane must reach that port. A reset connection usually means a proxy or firewall in between. A failed TLS handshake usually means the URL names a port that does not speak HTTPS. An expired certificate is CloudLab's to replace: the Portal API has intermittently served one, so report it to CloudLab. The operation retries every 30 seconds on its own; **Connections → Validate** checks the setting immediately. |
 | SSH key or identity refused | Verify the machine/key, update the selected connection and retry the same operation. Existing-SSH and registered CloudLab connections keep host-key checks enabled. |
 | Cloud create outcome unknown, no UUID saved | Identify the actual experiment in the exact account/project and resolve explicitly. The worker never repeats POST or adopts an experiment by name. If the portal has no experiment for the request, **Nothing was created** closes it: the operation is cancelled, never retried, and the server shows as not created and can be removed. That is the administrator's statement, made without asking the provider, so check the portal first. A node of the request that registered refuses it, and so does any saved UUID, node or Host, or a provider diagnostic that names an experiment or says the create was accepted. Autoscaled acquisitions keep their own cancellation. |
+| Experiment failed after CloudLab accepted it | The acquisition deletes it and, if it never got a node, tries the next preferred type ([Preferred CloudLab node types](#preferred-cloudlab-node-types)). It fails once every type is tried, or when the experiment failed after getting nodes. A retry of that failure does not read the deleted experiment again: it tries a type still untried, or fails again with the same message. |
 | UUID saved, later observation failed | Repair access and resume the same resource. Releasing the server instead deletes that experiment by its saved UUID. |
 | Installation or readiness failed | Inspect deployment checks, repair prerequisites/profile and retry the same resource. Failure does not destroy it. |
 | Extension pending or unknown | Check actual expiry. Retries retain the fixed absolute target; shorter extensions are not successful. The provider may reject or limit extensions. An expiry that has not moved ten minutes after the request blocks as `extension_unconfirmed`, so the server's other operations and a replacement can proceed; retry sends the same target again. |

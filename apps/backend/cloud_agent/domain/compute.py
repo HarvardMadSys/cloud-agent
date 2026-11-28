@@ -426,6 +426,8 @@ def public_operation(record: dict[str, Any], *, release_committed: bool = False)
             "target_expires_at",
             "actual_expires_at",
             "external_id",
+            # Acquisitions: the preferred node types requested so far, in order.
+            "node_types_tried",
             # Node moves: which replacement types failed and how, and how long
             # the copies took. Never node addresses, keys or remote output.
             "attempts",

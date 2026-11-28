@@ -578,6 +578,93 @@ class AllocationsMixin(ComputeRepositoryBase):
                 )
             return _row(row)
 
+    async def reopen_failed_acquisition(
+        self,
+        *,
+        allocation_id: str,
+        external_id: str,
+        configuration: dict[str, Any],
+        result: dict[str, Any],
+        operation_id: str,
+        generation: int,
+        worker_id: str,
+    ) -> bool:
+        """Forget a deleted experiment that never had a node, so the acquisition submits again.
+
+        Only the running acquisition may do this, and only while the
+        allocation still names exactly that experiment, its deletion is
+        recorded, no node or registered host key was ever seen, nothing has
+        released the allocation, and its deployment profile is still its own.
+        The allocation and the acquisition's step and result change together,
+        so no crash leaves an allocation without an identity that its
+        acquisition still believes it submitted. False changes nothing.
+        """
+        async with self._pool.acquire() as conn, conn.transaction():
+            await lock_compute_entry(conn, exclusive=True)
+            await self._fence(conn, operation_id, generation, worker_id, allocation_id)
+            allocation = await conn.fetchrow(
+                "SELECT * FROM agent_compute_allocations WHERE id=$1 FOR UPDATE", allocation_id
+            )
+            if allocation is None:
+                raise StorageConflict(ConflictCode.ALLOCATION_NOT_FOUND)
+            if (
+                allocation["external_id"] != external_id
+                or allocation["observed_state"] != "terminated"
+                or allocation["mode"] != "provision"
+                or allocation["management_mode"] != "manage"
+                or allocation["desired_state"] != "present"
+                or allocation["release_committed_at"] is not None
+            ):
+                return False
+            if await conn.fetchval(
+                """SELECT 1 FROM agent_compute_nodes WHERE allocation_id=$1
+                UNION ALL SELECT 1 FROM agent_compute_node_registrations
+                WHERE allocation_id=$1 AND registered_at IS NOT NULL LIMIT 1""",
+                allocation_id,
+            ):
+                return False
+            if await conn.fetchval(
+                """SELECT 1 FROM agent_cloudlab_autoscaling_members
+                WHERE allocation_id=$1 AND state='released'""",
+                allocation_id,
+            ):
+                return False
+            profile_id = (load_json(allocation["deployment_profile"]) or {}).get("id")
+            if profile_id and await conn.fetchval(
+                """SELECT 1 FROM agent_compute_allocations
+                WHERE deployment_profile->>'id'=$1 AND id<>$2
+                  AND observed_state NOT IN ('terminated','absent')
+                UNION ALL SELECT 1 FROM agent_cloudlab_autoscaling_profile_reservations
+                WHERE deployment_profile=$1 AND allocation_id IS DISTINCT FROM $2 LIMIT 1""",
+                profile_id,
+                allocation_id,
+            ):
+                return False
+            # The deleted experiment's open registration tokens can never
+            # register a node; the next submission opens its own.
+            await conn.execute(
+                """DELETE FROM agent_compute_node_registrations
+                WHERE allocation_id=$1 AND registered_at IS NULL""",
+                allocation_id,
+            )
+            await conn.execute(
+                """UPDATE agent_compute_allocations SET
+                external_id=NULL,configuration=$2::jsonb,observed_state='unknown',
+                provider_state=NULL,expires_at=NULL,expiration_known=FALSE,observed_at=NULL,
+                observation_error=NULL,scope_complete=FALSE,revision=revision+1,updated_at=NOW()
+                WHERE id=$1""",
+                allocation_id,
+                _json(configuration),
+            )
+            await conn.execute(
+                """UPDATE agent_compute_operations
+                SET step='pending',result=result || $2::jsonb,updated_at=NOW()
+                WHERE id=$1""",
+                operation_id,
+                _json(result),
+            )
+            return True
+
     async def _upsert_node(
         self, conn: Any, allocation_id: str, node: dict[str, Any]
     ) -> dict[str, Any]:
