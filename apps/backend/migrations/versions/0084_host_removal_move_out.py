@@ -10,7 +10,7 @@ turns end. Existing pending removals keep that meaning.
 ``removal_leaves_unmoved`` records the administrator's word that groups which
 can never move (a stopped group whose checkpoint failed, say) may stay bound to
 the removed Host; without it such a group holds the removal. See
-``docs/agents/specs/2026-10-16-host-move-out-design.zh-CN.md``.
+"Moving sandboxes out before a lease ends" in ``docs/developer/operations-compute.md``.
 """
 
 from alembic import op

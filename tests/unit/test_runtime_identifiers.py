@@ -1,10 +1,11 @@
 """Runtime identifiers name the project, not a deployment of it.
 
-The first step of docs/agents/specs/2026-11-09-neutral-runtime-identifiers.md:
+The first step of moving runtime identifiers off the deployment's name:
 a temporary file or directory lives only in the process that creates it, so its
 name can leave the FreeInference namespace with no compatibility step. Names
 that outlive a release (Docker labels, sandbox paths, environment variables)
-move later, by the dual-read sequence that spec lays out, and are not checked
+move later, by a dual-read rename (read both names, then stop writing the old
+one), and are not checked
 here.
 """
 

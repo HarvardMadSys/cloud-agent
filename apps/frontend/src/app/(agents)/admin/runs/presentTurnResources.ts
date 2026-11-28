@@ -1,8 +1,7 @@
 // Pure presentation for the whole-turn member execution window.
 //
 // The numbers come from `cloud_agent_host/observe/member_resources.py` through the
-// admin run endpoints, and the rules they must be read under are fixed by
-// `docs/agents/specs/turn-resource-accounting.md`. Three of them live here
+// admin run endpoints. Three of the rules they must be read under live here
 // rather than in the components:
 //
 // - Null is not zero. A metric that was not measured renders as unavailable,

@@ -9,8 +9,7 @@ table lives with the tests, not in an image: nothing at runtime reads it.
 
 Dispositions say where a variable's value should come from, not every fact
 about it. Secrets, restart needs and irreversibility are orthogonal and stay in
-each reason. ``docs/agents/specs/2026-10-29-env-inventory-and-gates.zh-CN.md``
-explains each family and what moving one would take.
+each reason. AGENTS.md section 3 describes the ratchet these dispositions feed.
 """
 
 from __future__ import annotations

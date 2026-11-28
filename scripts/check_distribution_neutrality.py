@@ -45,8 +45,8 @@ CATEGORIES = {
         "A name stored outside this code: Docker labels, container, image and network names, "
         "paths inside sandboxes and on hosts, wrapper binaries baked into images, environment "
         "variables, defaults existing deployments rely on, and the tests that pin them. Renaming "
-        "one strands what older hosts, images or saved state carry, so each goes through the "
-        "dual-read rename in docs/agents/specs/2026-11-09-neutral-runtime-identifiers.md."
+        "one strands what older hosts, images or saved state carry, so each goes through a "
+        "dual-read rename: releases read both names before any release stops writing the old one."
     ),
     "historical-record": (
         "A dated design record or review under docs/agents/, which keeps the names it was "

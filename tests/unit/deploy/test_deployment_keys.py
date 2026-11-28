@@ -6,7 +6,7 @@ keeps what is stored, and generates what is missing only while the bundled
 database volume holds no database. `cloud_agent.deployment.key_files`, run
 when any control-plane process imports `cloud_agent`, reads the files back.
 
-See docs/agents/specs/2026-11-09-no-env-file.zh-CN.md.
+See "Deployment keys" in ENVIRONMENT.md.
 """
 
 from __future__ import annotations

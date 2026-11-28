@@ -4,7 +4,7 @@
 supplies no host signing key, user credential key, compute credential key or
 sandbox manager credential, that first row gets random ones, so a new deployment starts without an operator
 inventing them. An existing row is never given one, empty or not. See
-docs/agents/specs/2026-11-04-first-install-keys.zh-CN.md.
+"Deployment keys" and "Saved settings" in ENVIRONMENT.md.
 """
 
 from __future__ import annotations

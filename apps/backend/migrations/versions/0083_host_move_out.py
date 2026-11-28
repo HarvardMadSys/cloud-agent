@@ -5,7 +5,7 @@ Revises: 0082_team_environments
 
 The ``move_out`` admission hold closes every claim on a Host in its move-out
 window, so each chat's next turn is claimed by another Host from the group's
-checkpoint. See ``docs/agents/specs/2026-10-16-host-move-out-design.zh-CN.md``.
+checkpoint. See "Moving sandboxes out before a lease ends" in ``docs/developer/operations-compute.md``.
 """
 
 from alembic import op

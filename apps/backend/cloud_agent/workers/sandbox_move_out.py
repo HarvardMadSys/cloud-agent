@@ -7,7 +7,7 @@ and hands each covered stopped group over as ``cold``. The next turn of any of
 its chats is claimed by another restore-capable Host and recreated there from
 that checkpoint. A running turn is never interrupted; its group is stopped
 once the turn has settled. See
-``docs/agents/specs/2026-10-16-host-move-out-design.zh-CN.md``.
+"Moving sandboxes out before a lease ends" in ``docs/developer/operations-compute.md``.
 """
 
 from __future__ import annotations

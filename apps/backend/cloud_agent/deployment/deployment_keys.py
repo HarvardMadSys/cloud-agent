@@ -29,7 +29,7 @@ the environment leaves unset from its file when it imports ``cloud_agent``
 which writes the keys an operator must back up apart from the database as
 ``.env`` lines on standard output; that text restores them on another machine.
 
-See docs/agents/specs/2026-11-09-no-env-file.zh-CN.md.
+Operators: see "Deployment keys" in ENVIRONMENT.md.
 """
 
 from __future__ import annotations

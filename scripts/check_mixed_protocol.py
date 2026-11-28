@@ -1,7 +1,7 @@
 """Run this version's host code against the previous release's control plane, and back.
 
-Layer A of the mixed-version test (docs/agents/specs/2026-11-05-host-protocol-v2.zh-CN.md
-§3.2): the host protocol on the wire, with no images. The previous release is
+Layer A of the mixed-version test ("Host and control plane one release apart" in
+docs/developer/deployment-reliability.md): the host protocol on the wire, with no images. The previous release is
 ``git archive``d and given a virtual environment of its own from its own lock
 (``uv sync --frozen``), so its code runs on its own dependencies.
 
