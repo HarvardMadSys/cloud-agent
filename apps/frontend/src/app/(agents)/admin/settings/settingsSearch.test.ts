@@ -19,6 +19,24 @@ const snapshot: AgentAdminSettings = {
       secret: true,
     },
     {
+      key: 'web_base_url',
+      label: 'Web app URL',
+      description: 'The address people open the app at.',
+      category: 'Sign-in',
+      kind: 'string',
+      default: '',
+      secret: false,
+    },
+    {
+      key: 'trust_proxy_headers',
+      label: 'Trust forwarded client addresses',
+      description: 'Record the address a reverse proxy forwards.',
+      category: 'Security',
+      kind: 'boolean',
+      default: false,
+      secret: false,
+    },
+    {
       key: 'runtime_registry_url',
       label: 'Agent package registry',
       description: 'The npm registry agent versions come from.',
@@ -74,13 +92,34 @@ describe('settings search', () => {
   it('searches merged and original application categories, related groups, and descriptions', () => {
     const catalog = items();
     const token = catalog.find((item) => item.applicationKey === 'control_signing_secret');
-    expect(searchSettingsItems(catalog, 'identity access security')).toEqual([token]);
+    expect(searchSettingsItems(catalog, 'security signing')).toEqual([token]);
     expect(searchSettingsItems(catalog, 'encryption keys credential requests')).toEqual([token]);
     expect(token).toMatchObject({
-      tab: 'application-Identity%20%26%20access',
+      tab: 'application-Security',
       targetId: 'application-setting-control_signing_secret',
-      section: 'Identity & access',
+      section: 'Security',
     });
+    const address = catalog.find((item) => item.applicationKey === 'web_base_url');
+    expect(searchSettingsItems(catalog, 'general sign in public addresses')).toEqual([address]);
+    expect(address).toMatchObject({ tab: 'application-General', section: 'General' });
+  });
+
+  it('says which results sit under a collapsed Advanced section, and finds them all by it', () => {
+    const catalog = items();
+    const advanced = searchSettingsItems(catalog, 'advanced');
+    expect(advanced.map((item) => [item.id, item.section])).toEqual([
+      ['application:trust_proxy_headers', 'Security · Advanced'],
+      ['host:terminal_max_sessions', 'Sandbox · Advanced'],
+      ['archive:max_archive_bytes', 'Sandbox archives · Advanced'],
+      ['archive:multipart_threshold_bytes', 'Sandbox archives · Advanced'],
+      ['archive:multipart_part_bytes', 'Sandbox archives · Advanced'],
+    ]);
+    // A result still opens the setting itself; the page expands its section.
+    expect(advanced[0]).toMatchObject({
+      tab: 'application-Security',
+      targetId: 'application-setting-trust_proxy_headers',
+    });
+    expect(catalog.find((item) => item.id === 'archive:s3_uri')?.section).toBe('Sandbox archives');
   });
 
   it('normalizes case, underscores, and punctuation and requires every query token', () => {

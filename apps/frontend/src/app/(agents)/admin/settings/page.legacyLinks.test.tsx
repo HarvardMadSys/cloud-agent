@@ -179,11 +179,8 @@ describe('links into the removed Deployment section', () => {
   ])('opens the settings page normally for %s, which no setting manages', async (hash) => {
     open(`/admin/settings?tab=deployment${hash}`);
     await waitFor(() => expect(window.location.hash).toBe(''));
-    expect(screen.getByRole('tab', { name: 'Appearance' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    expect(screen.getByRole('tabpanel', { name: 'Appearance' })).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel', { name: 'General' })).toBeVisible();
     expectNoDeploymentSection();
     // The former row actions are gone; nothing stands in for what this page cannot manage.
     for (const name of [
@@ -217,7 +214,7 @@ describe('links into the removed Deployment section', () => {
     );
     open('/admin/settings#deployment-github_app_key_file');
     await waitFor(() => expect(window.location.hash).toBe(''));
-    expect(screen.getByRole('tabpanel', { name: 'Appearance' })).toBeVisible();
+    expect(screen.getByRole('tabpanel', { name: 'General' })).toBeVisible();
   });
 
   it('handles a legacy link followed later and does not refocus on refresh', async () => {
