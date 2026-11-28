@@ -14,7 +14,7 @@ import {
   SANDBOX_ARCHIVE_SETTINGS_CAPABILITY,
 } from '@/lib/api/adminArchiveSettings';
 
-import { SettingsSection } from '../SettingsSection';
+import { AdvancedSettings, SettingsSection } from '../SettingsSection';
 import { isS3BucketName } from './settingValues';
 
 const MIB = 1024 * 1024;
@@ -300,6 +300,11 @@ export default function SandboxArchiveSettingsCard({
       description: 'Size of each uploaded part, from 5 MiB through 64 MiB.',
     },
   ];
+  // The upload limits are collapsed under Advanced, except while one of them
+  // holds an unsaved change or an error, which must stay in view.
+  const limitsPending =
+    numericFields.some(({ key }) => draft[key] !== editor.saved[key] || errors[key]) ||
+    errors.form !== undefined;
   // An enabled policy with another bucket reaches only a server that can
   // archive there. An older one is sent no policy: until it is redeployed it
   // takes no work at all, and its sandbox manager goes on archiving the groups
@@ -587,11 +592,14 @@ export default function SandboxArchiveSettingsCard({
           </div>
         </SettingsSection>
 
-        <SettingsSection
-          title="Upload limits"
-          description="Tune archive size limits and multipart uploads."
+        <AdvancedSettings
+          count={numericFields.length}
+          description="Archive size limits and multipart uploads, which most deployments keep at their defaults."
+          pending={limitsPending}
+          className="mt-0"
         >
           <div className="space-y-4">
+            <h3 className="text-base font-semibold text-foreground">Upload limits</h3>
             <div className="grid gap-4 sm:grid-cols-2">
               {numericFields.map(({ key, targetId, label, description }) => (
                 <label key={key} className="text-sm font-medium text-gray-800 dark:text-gray-200">
@@ -629,7 +637,7 @@ export default function SandboxArchiveSettingsCard({
               </p>
             )}
           </div>
-        </SettingsSection>
+        </AdvancedSettings>
 
         <div className="flex items-center gap-3">
           <button

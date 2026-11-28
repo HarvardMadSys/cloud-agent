@@ -97,19 +97,19 @@ describe('settings search over provider settings', () => {
       accountProviderSnapshot({ 'accounts.sms_provider': 'tencent' }),
     );
     render(<AdminSettingsPage />);
-    await screen.findByRole('tab', { name: 'Identity & access' });
+    await screen.findByRole('tab', { name: 'Accounts' });
 
-    expect(searchResults('SMTP host')).toEqual(['Open SMTP host in Identity & access']);
+    expect(searchResults('SMTP host')).toEqual(['Open SMTP host in Accounts']);
     expect(searchResults('Tencent SES sender')).toEqual([]);
     expect(searchResults('Tencent SMS template')).toEqual([]);
     expect(searchResults('SecretKey')).toEqual([]);
     // Searching a hidden provider by name still finds the setting that selects it.
-    expect(searchResults('tencent sms')).toEqual(['Open Phone sign-in in Identity & access']);
-    expect(searchResults('tencent ses')).toEqual(['Open Email provider in Identity & access']);
+    expect(searchResults('tencent sms')).toEqual(['Open Phone sign-in in Accounts']);
+    expect(searchResults('tencent ses')).toEqual(['Open Email provider in Accounts']);
 
     fireEvent.click(
       within(screen.getByRole('region', { name: 'Settings search results' })).getByRole('button', {
-        name: 'Open Email provider in Identity & access',
+        name: 'Open Email provider in Accounts',
       }),
     );
     await waitFor(() => expect(field('accounts.email_provider')).toHaveFocus());
@@ -118,17 +118,15 @@ describe('settings search over provider settings', () => {
   it('follows an unsaved provider choice and never opens a field it hides', async () => {
     vi.mocked(getAgentAdminSettings).mockResolvedValue(accountProviderSnapshot());
     render(<AdminSettingsPage />);
-    await screen.findByRole('tab', { name: 'Identity & access' });
+    await screen.findByRole('tab', { name: 'Accounts' });
     fireEvent.click(screen.getByRole('button', { name: 'Edit Account email settings' }));
     chooseOption(screen.getByRole('combobox', { name: 'Email provider' }), 'Tencent SES');
 
     expect(searchResults('SMTP host')).toEqual([]);
-    expect(searchResults('SecretKey')).toEqual([
-      'Open Tencent Cloud SecretKey in Identity & access',
-    ]);
+    expect(searchResults('SecretKey')).toEqual(['Open Tencent Cloud SecretKey in Accounts']);
     fireEvent.click(
       within(screen.getByRole('region', { name: 'Settings search results' })).getByRole('button', {
-        name: 'Open Tencent Cloud SecretKey in Identity & access',
+        name: 'Open Tencent Cloud SecretKey in Accounts',
       }),
     );
     await waitFor(() => expect(field('accounts.tencent_secret_key')).toHaveFocus());

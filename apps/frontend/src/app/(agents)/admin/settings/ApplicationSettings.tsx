@@ -11,11 +11,14 @@ import {
 } from '@/lib/api/adminSettings';
 import { APIError, getErrorMessage } from '@/lib/utils/errors';
 
+import { AdvancedSettings, usePendingEditors } from '../SettingsSection';
 import { ApplicationSettingGroup, SettingsIcon } from './ApplicationSettingGroup';
-import { applicationCategory, applicationSettingGroup } from './settingsOrganization';
+import { applicationCategory, compareCategories, organizeCategory } from './settingsOrganization';
 import { GOVERNING_SETTINGS, inactiveSettingGovernor, settingReader } from './settingsVisibility';
 
 const BUTTON_CLASS = 'ui-button ui-button-secondary min-h-11';
+const ADVANCED_DESCRIPTION =
+  'Timeouts, intervals, rate limits and other tuning that most deployments keep at their defaults.';
 
 export interface ApplicationSettingsOptions {
   onAccessDenied?: (cause: unknown) => void;
@@ -200,11 +203,14 @@ export function useApplicationSettings({
     }
   };
 
-  const groups = new Map<string, AdminSettingDefinition[]>();
+  const byCategory = new Map<string, AdminSettingDefinition[]>();
   for (const definition of snapshot?.definitions ?? []) {
     const category = applicationCategory(definition);
-    groups.set(category, [...(groups.get(category) ?? []), definition]);
+    byCategory.set(category, [...(byCategory.get(category) ?? []), definition]);
   }
+  const groups = new Map(
+    [...byCategory].sort(([first], [second]) => compareCategories(first, second)),
+  );
   const currentCategory =
     selectedCategory && groups.has(selectedCategory)
       ? selectedCategory
@@ -380,37 +386,6 @@ export function ApplicationSettingsFeedback({ settings }: { settings: Applicatio
   );
 }
 
-/**
- * An application settings category shown on another tab (`HOSTED_CATEGORIES`),
- * under that tab's own heading for it. Absent while the registry has no such
- * category, so an older control plane shows nothing rather than an empty card.
- */
-export function HostedSettingsSection({
-  settings,
-  category,
-  title,
-  active,
-}: {
-  settings: ApplicationSettingsState;
-  category: string;
-  title: string;
-  active: boolean;
-}) {
-  if (!settings.groups.has(category)) return null;
-  return (
-    <section className="ui-card mt-6 p-4 sm:p-6" aria-label={title}>
-      <ApplicationSettingsHeader settings={settings} title={title} />
-      <ApplicationSettingsFeedback settings={settings} />
-      <ApplicationSettingsCategory
-        settings={settings}
-        category={category}
-        active={active}
-        showHeading={false}
-      />
-    </section>
-  );
-}
-
 export function ApplicationSettingsCategory({
   settings,
   category,
@@ -425,22 +400,30 @@ export function ApplicationSettingsCategory({
   const { groups, focusField, clearFocusField, isSettingVisible } = settings;
   const definitions = groups.get(category);
   const id = `application-settings-category-${encodeURIComponent(category)}`;
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedPending, reportPending] = usePendingEditors();
 
-  // Every related group appears exactly once, in registry order. A group whose
-  // fields do not apply stays mounted, hidden, so its unsaved edits survive.
-  const related = new Map<string, AdminSettingDefinition[]>();
-  for (const definition of definitions ?? []) {
-    const group = applicationSettingGroup(definition);
-    related.set(group, [...(related.get(group) ?? []), definition]);
-  }
+  // Every related group appears exactly once: the ones administrators change
+  // most first, then tuning under a collapsed Advanced section. A group whose
+  // fields do not apply, or whose section is collapsed, stays mounted, so its
+  // unsaved edits survive.
+  const organized = organizeCategory(definitions ?? []);
+  const advancedFields = organized.advanced.flatMap(({ fields }) => fields);
+  const shownAdvanced = advancedFields.filter((field) => isSettingVisible(field.key)).length;
+  const focusAdvanced = advancedFields.some((field) => field.key === focusField);
 
   useEffect(() => {
     if (!active || !focusField || !definitions?.some((field) => field.key === focusField)) return;
+    // A link or search result inside Advanced opens it, and focuses once that has rendered.
+    if (focusAdvanced && !advancedOpen) {
+      setAdvancedOpen(true);
+      return;
+    }
     const input = document.getElementById(`application-setting-${focusField}`);
     input?.focus();
     input?.scrollIntoView?.({ block: 'center' });
     clearFocusField();
-  }, [active, focusField, definitions, clearFocusField]);
+  }, [active, focusField, definitions, clearFocusField, focusAdvanced, advancedOpen]);
 
   return (
     <section
@@ -462,14 +445,35 @@ export function ApplicationSettingsCategory({
           {!definitions?.some((field) => isSettingVisible(field.key)) && (
             <p className="py-4 text-sm text-muted">No settings on this page.</p>
           )}
-          {[...related].map(([group, fields]) => (
+          {organized.groups.map(({ title, fields }) => (
             <ApplicationSettingGroup
-              key={group}
-              title={group}
+              key={title}
+              title={title}
               fields={fields}
               settings={settings}
             />
           ))}
+          {organized.advanced.length > 0 && (
+            <div hidden={shownAdvanced === 0}>
+              <AdvancedSettings
+                count={shownAdvanced}
+                description={ADVANCED_DESCRIPTION}
+                open={advancedOpen}
+                onOpenChange={setAdvancedOpen}
+                pending={advancedPending}
+              >
+                {organized.advanced.map(({ title, fields }) => (
+                  <ApplicationSettingGroup
+                    key={title}
+                    title={title}
+                    fields={fields}
+                    settings={settings}
+                    onPendingChange={reportPending}
+                  />
+                ))}
+              </AdvancedSettings>
+            </div>
+          )}
         </div>
       </div>
     </section>

@@ -57,8 +57,17 @@ describe('sandbox archive settings card', () => {
     expect(screen.getByLabelText('AWS region').closest('details')).toBeNull();
     expect(screen.getByLabelText('Expected bucket owner').closest('details')).toBeNull();
     expect(screen.getByLabelText('Customer-managed KMS key ARN').closest('details')).toBeNull();
-    expect(screen.queryByText('Advanced')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Archive storage' })).toBeVisible();
+    // Upload size tuning is collapsed under Advanced until opened.
+    expect(screen.getByText('Advanced').closest('summary')).toHaveTextContent('Advanced3 settings');
+    for (const label of [
+      'Maximum archive bytes',
+      'Multipart threshold bytes',
+      'Multipart part bytes',
+    ]) {
+      expect(screen.getByLabelText(label)).not.toBeVisible();
+    }
+    fireEvent.click(screen.getByText('Advanced'));
     expect(screen.getByRole('heading', { name: 'Upload limits' })).toBeVisible();
     expect(screen.getByLabelText('Maximum archive bytes')).toBeVisible();
     expect(screen.getByLabelText('Multipart threshold bytes')).toBeVisible();
@@ -280,10 +289,14 @@ describe('sandbox archive settings card', () => {
     render(<SandboxArchiveSettingsCard settings={settings()} busy={false} onSave={onSave} />);
 
     const maximum = screen.getByLabelText('Maximum archive bytes');
+    fireEvent.click(screen.getByText('Advanced'));
     expect(maximum).toBeVisible();
     fireEvent.change(maximum, { target: { value: '1073741824' } });
+    // An unsaved limit keeps its section open.
+    fireEvent.click(screen.getByText('Advanced'));
 
     expect(screen.getByLabelText('Maximum archive bytes')).toBe(maximum);
+    expect(maximum).toBeVisible();
     expect(maximum).toHaveValue(1_073_741_824);
     fireEvent.click(screen.getByLabelText('Enable sandbox archives'));
     fireEvent.click(screen.getByRole('button', { name: 'Save archive settings' }));

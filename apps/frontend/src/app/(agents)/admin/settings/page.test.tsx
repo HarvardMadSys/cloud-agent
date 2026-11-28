@@ -140,7 +140,15 @@ function organizedApplicationSnapshot(): AgentAdminSettings {
 
 function expectVisibleSetting(field: HTMLElement) {
   expect(field).toBeVisible();
-  expect(field.closest('details')).toBeNull();
+  expect(field.closest('details:not([open])')).toBeNull();
+}
+
+/** A field that starts collapsed under Advanced, after opening that section from its summary. */
+async function advancedField(label: string) {
+  const field = await screen.findByLabelText(label);
+  expect(field).not.toBeVisible();
+  fireEvent.click(within(field.closest('details')!).getByText('Advanced'));
+  return field;
 }
 
 function deferred<T>() {
@@ -556,7 +564,7 @@ describe('admin Settings', () => {
       target: { value: '2' },
     });
 
-    selectSettingsTab('Appearance');
+    selectSettingsTab('General');
     expect(screen.getByLabelText('Application name')).toHaveValue('My agent');
     expect(screen.getByRole('button', { name: 'Review Branding changes' })).toBeEnabled();
     selectSettingsTab('Agent versions');
@@ -604,8 +612,8 @@ describe('application category tabs', () => {
   });
 
   it.each([
-    ['Sign-in', 'Identity & access', 'Sign-in authorization URL'],
-    ['Security', 'Identity & access', 'Trust forwarded client addresses'],
+    ['Sign-in', 'General', 'Sign-in authorization URL'],
+    ['Appearance', 'General', 'Application name'],
   ])(
     'resolves an existing %s category URL to %s after definitions load',
     async (legacy, merged, label) => {
@@ -649,45 +657,13 @@ describe('application category tabs', () => {
     );
   });
 
-  it('focuses a missing Security field beside the merged Sign-in settings', async () => {
-    vi.mocked(getAgentAdminSettings).mockResolvedValue({
-      ...organizedApplicationSnapshot(),
-      setup: {
-        required: true,
-        groups: [
-          {
-            key: 'security',
-            label: 'Session security',
-            required: true,
-            configured: false,
-            needs_setup: true,
-            missing: [{ key: 'trust_proxy_headers', label: 'Trust forwarded client addresses' }],
-          },
-        ],
-        bootstrap_missing: [],
-      },
-    });
-    renderSettings();
-    const link = await screen.findByRole('link', { name: 'Trust forwarded client addresses' });
-    const input = screen.getByLabelText('Trust forwarded client addresses');
-    expect(input).not.toBeVisible();
-    fireEvent.click(link);
-    await waitFor(() => expect(input).toHaveFocus());
-    expectVisibleSetting(input);
-    expect(screen.getByRole('tabpanel', { name: 'Identity & access' })).toBeVisible();
-    expect(screen.getByLabelText('Sign-in authorization URL')).toBeVisible();
-    expect(new URLSearchParams(window.location.search).get('tab')).toBe(
-      categoryTabId('Identity & access'),
-    );
-  });
-
   it('places every API category beside the other settings tabs with one visible panel', async () => {
     renderSettings();
-    await screen.findByRole('tab', { name: 'Appearance' });
+    await screen.findByRole('tab', { name: 'General' });
     const tablist = screen.getByRole('tablist', { name: 'Settings sections' });
     const names = [
-      'Appearance',
-      'Identity & access',
+      'General',
+      'Accounts',
       'Future / category ✓',
       'Agent versions',
       'Sandbox',
@@ -707,8 +683,8 @@ describe('application category tabs', () => {
     expect(screen.getAllByRole('button', { name: 'Refresh settings', hidden: true })).toHaveLength(
       1,
     );
-    expect(screen.getByRole('heading', { name: 'Appearance', level: 2 })).toBeVisible();
-    expect(screen.queryByRole('heading', { name: 'Appearance', level: 3 })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'General', level: 2 })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'General', level: 3 })).not.toBeInTheDocument();
 
     for (const name of names) {
       selectSettingsTab(name);
@@ -738,7 +714,7 @@ describe('application category tabs', () => {
 
   it('navigates across the dynamic categories and fixed tabs with Arrow, Home, and End keys', async () => {
     renderSettings();
-    const first = await screen.findByRole('tab', { name: 'Appearance' });
+    const first = await screen.findByRole('tab', { name: 'General' });
     first.focus();
     const move = (key: string, name: string) => {
       fireEvent.keyDown(document.activeElement!, { key });
@@ -747,13 +723,13 @@ describe('application category tabs', () => {
       expect(tab).toHaveAttribute('aria-selected', 'true');
       expect(screen.getByRole('tabpanel', { name })).toBeVisible();
     };
-    move('ArrowRight', 'Identity & access');
+    move('ArrowRight', 'Accounts');
     move('ArrowRight', 'Future / category ✓');
     move('ArrowRight', 'Agent versions');
     move('End', 'CloudLab');
-    move('ArrowRight', 'Appearance');
+    move('ArrowRight', 'General');
     move('ArrowLeft', 'CloudLab');
-    move('Home', 'Appearance');
+    move('Home', 'General');
   });
 
   it('retains a direct category URL while loading and resolves it after definitions arrive', async () => {
@@ -812,17 +788,14 @@ describe('application category tabs', () => {
     const settingsLink = screen.getByRole('link', { name: 'Settings' });
     settingsLink.focus();
     await act(async () => pending.resolve(applicationSnapshot()));
-    expect(screen.getByRole('tab', { name: 'Appearance' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
     expect(settingsLink).toHaveFocus();
   });
 
   it('moves focus to the first remaining category when polling removes the focused tab', async () => {
     vi.useFakeTimers();
     renderSettings();
-    await vi.waitFor(() => expect(screen.getByRole('tab', { name: 'Appearance' })).toBeVisible());
+    await vi.waitFor(() => expect(screen.getByRole('tab', { name: 'General' })).toBeVisible());
     selectSettingsTab('Future / category ✓');
     const removedTab = screen.getByRole('tab', { name: 'Future / category ✓' });
     removedTab.focus();
@@ -834,8 +807,8 @@ describe('application category tabs', () => {
     });
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(removedTab).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Appearance' })).toHaveFocus();
-    expect(screen.getByRole('tabpanel', { name: 'Appearance' })).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveFocus();
+    expect(screen.getByRole('tabpanel', { name: 'General' })).toBeVisible();
     expect(getAgentAdminSettings).toHaveBeenCalledTimes(2);
   });
 
@@ -844,11 +817,11 @@ describe('application category tabs', () => {
     async (query) => {
       window.history.replaceState(null, '', `/admin/settings${query}`);
       renderSettings();
-      expect(await screen.findByRole('tab', { name: 'Appearance' })).toHaveAttribute(
+      expect(await screen.findByRole('tab', { name: 'General' })).toHaveAttribute(
         'aria-selected',
         'true',
       );
-      expect(screen.getByRole('tabpanel', { name: 'Appearance' })).toBeVisible();
+      expect(screen.getByRole('tabpanel', { name: 'General' })).toBeVisible();
       expect(getCloudLabDefaults).not.toHaveBeenCalled();
     },
   );
@@ -868,10 +841,10 @@ describe('application category tabs', () => {
       window.history.replaceState(
         null,
         '',
-        `/admin/settings?tab=${encodeURIComponent(categoryTabId('Identity & access'))}`,
+        `/admin/settings?tab=${encodeURIComponent(categoryTabId('Accounts'))}`,
       ),
     );
-    expect(screen.getByRole('tabpanel', { name: 'Identity & access' })).toBeVisible();
+    expect(screen.getByRole('tabpanel', { name: 'Accounts' })).toBeVisible();
     act(() =>
       window.history.replaceState(
         null,
@@ -958,7 +931,7 @@ describe('application category tabs', () => {
     });
     selectSettingsTab('Future / category ✓');
     fireEvent.change(editField('Future limit'), { target: { value: '25' } });
-    selectSettingsTab('Identity & access');
+    selectSettingsTab('Accounts');
     const registration = editField('Registration enabled');
     chooseOption(registration, 'Disabled');
     const current = applicationSnapshot();
@@ -978,14 +951,14 @@ describe('application category tabs', () => {
       1,
       expect.any(AbortSignal),
     );
-    selectSettingsTab('Appearance');
+    selectSettingsTab('General');
     expect(screen.getByRole('textbox', { name: 'Application name' })).toHaveValue(
       'Draft application',
     );
     expect(screen.getByRole('button', { name: 'Review Branding changes' })).toBeEnabled();
     selectSettingsTab('Future / category ✓');
     expect(screen.getByLabelText('Future limit')).toHaveValue(25);
-    selectSettingsTab('Identity & access');
+    selectSettingsTab('Accounts');
     vi.mocked(setAgentAdminSettings).mockResolvedValueOnce({ ...current, revision: 3 });
     editField('Registration enabled');
     fireEvent.click(screen.getByLabelText('More actions for Registration enabled'));
@@ -1007,7 +980,7 @@ describe('application category tabs', () => {
     expect(screen.getByRole('combobox', { name: 'Registration enabled' })).toHaveTextContent(
       'Enabled',
     );
-    selectSettingsTab('Appearance');
+    selectSettingsTab('General');
     expect(screen.getByRole('textbox', { name: 'Application name' })).toHaveValue(
       'Draft application',
     );
@@ -1023,14 +996,14 @@ describe('application category tabs', () => {
     const pending = deferred<AgentAdminSettings>();
     vi.mocked(setAgentAdminSettings).mockReturnValueOnce(pending.promise);
     renderSettings();
-    await screen.findByRole('tab', { name: 'Appearance' });
-    selectSettingsTab('Identity & access');
+    await screen.findByRole('tab', { name: 'General' });
+    selectSettingsTab('Accounts');
     chooseOption(editField('Registration enabled'), 'Disabled');
-    selectSettingsTab('Appearance');
+    selectSettingsTab('General');
     const name = editField('Application name');
     fireEvent.change(name, { target: { value: 'Saved application' } });
     submit(name);
-    selectSettingsTab('Identity & access');
+    selectSettingsTab('Accounts');
     expect(screen.getByLabelText('Registration enabled')).toBeDisabled();
     expect(
       screen.getByRole('button', { name: 'Review Identity & access changes', hidden: true }),
@@ -1056,7 +1029,7 @@ describe('application category tabs', () => {
 
   it('removes every settings panel when the application API revokes access', async () => {
     renderSettings();
-    await screen.findByRole('tab', { name: 'Appearance' });
+    await screen.findByRole('tab', { name: 'General' });
     vi.mocked(getAgentAdminSettings).mockRejectedValueOnce(
       new APIError('FORBIDDEN', 'Forbidden', 403),
     );
@@ -1324,7 +1297,7 @@ describe('global limits', () => {
     list.mockResolvedValue(pool({ host_settings: { terminal_max_sessions: 16 } }));
     setLimit.mockResolvedValue(pool());
     renderSettings('Sandbox');
-    expect(await screen.findByLabelText('Terminals per server for all servers')).toBeVisible();
+    expect(await advancedField('Terminals per server for all servers')).toBeVisible();
     fireEvent.click(await screen.findByRole('button', { name: 'Use deployment default' }));
     await waitFor(() => expect(setLimit).toHaveBeenCalledWith({ terminal_max_sessions: null }));
   });
@@ -1338,7 +1311,7 @@ describe('global limits', () => {
     );
     renderSettings('Sandbox');
     await screen.findByLabelText('Turn time limit for all servers');
-    expect(screen.getByLabelText('Terminals per server for all servers')).toBeVisible();
+    expect(await advancedField('Terminals per server for all servers')).toBeVisible();
     const sandboxCard = screen.getByRole('heading', { name: 'Sandbox' }).parentElement!;
     expect(within(sandboxCard).getAllByText(/runner-a needs a redeploy/)).toHaveLength(2);
   });
@@ -1370,7 +1343,7 @@ describe('global limits', () => {
 
   it('warns before a shorter terminal lifetime closes open terminals', async () => {
     renderSettings('Sandbox');
-    const input = await screen.findByLabelText('Terminal max lifetime for all servers');
+    const input = await advancedField('Terminal max lifetime for all servers');
     expect(input).toBeVisible();
     fireEvent.change(input, { target: { value: '4' } });
     expect(screen.getByText('Open terminals older than 4 h will close.')).toBeInTheDocument();
@@ -1383,7 +1356,7 @@ describe('global limits', () => {
       pool({ hosts: [host({ settings_desired: { terminal_max_sessions: 128 } })] }),
     );
     renderSettings('Sandbox');
-    expect(await screen.findByLabelText('Terminals per server for all servers')).toBeVisible();
+    expect(await advancedField('Terminals per server for all servers')).toBeVisible();
     expect(await screen.findByText(/runner-a sets its own \(128\)/)).toBeInTheDocument();
   });
 
@@ -1434,7 +1407,7 @@ describe('global limits', () => {
       revision: 2,
     });
     renderSettings('Sandbox');
-    const maximum = await screen.findByLabelText('Maximum archive bytes');
+    const maximum = await advancedField('Maximum archive bytes');
     expect(maximum).toBeVisible();
     fireEvent.change(maximum, { target: { value: '1073741824' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save archive settings' }));
@@ -1446,7 +1419,7 @@ describe('global limits', () => {
     updateArchiveSettings.mockResolvedValue(archiveSettings);
     renderSettings('Sandbox');
 
-    const maximum = await screen.findByLabelText('Maximum archive bytes');
+    const maximum = await advancedField('Maximum archive bytes');
     expect(maximum).toBeVisible();
     fireEvent.change(maximum, { target: { value: '02147483648' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save archive settings' }));
@@ -1509,26 +1482,24 @@ describe('settings search', () => {
   it('opens a related application result in its merged category and clears the query', async () => {
     vi.mocked(getAgentAdminSettings).mockResolvedValue(organizedApplicationSnapshot());
     renderSettings();
-    await screen.findByRole('tab', { name: 'Appearance' });
+    await screen.findByRole('tab', { name: 'General' });
     const input = screen.getByLabelText('Trust forwarded client addresses');
     // The field is always rendered; its tab is inactive until search selects it.
     expect(input).not.toBeVisible();
-    expect(input.closest('details')).toBeNull();
+    expect(input.closest('details')).not.toHaveAttribute('open');
 
     const results = searchFor('SECURITY forwarded');
     expect(within(results).getAllByRole('button')).toHaveLength(1);
     fireEvent.click(
       within(results).getByRole('button', {
-        name: 'Open Trust forwarded client addresses in Identity & access',
+        name: 'Open Trust forwarded client addresses in Security · Advanced',
       }),
     );
 
     await waitFor(() => expect(input).toHaveFocus());
     expectVisibleSetting(input);
-    expect(screen.getByRole('tabpanel', { name: 'Identity & access' })).toBeVisible();
-    expect(new URLSearchParams(window.location.search).get('tab')).toBe(
-      categoryTabId('Identity & access'),
-    );
+    expect(screen.getByRole('tabpanel', { name: 'Security' })).toBeVisible();
+    expect(new URLSearchParams(window.location.search).get('tab')).toBe(categoryTabId('Security'));
     expect(screen.getByRole('searchbox', { name: 'Search settings' })).toHaveValue('');
     expect(
       screen.queryByRole('region', { name: 'Settings search results' }),
@@ -1558,7 +1529,7 @@ describe('settings search', () => {
 
     fireEvent.click(
       within(searchFor('application name')).getByRole('button', {
-        name: 'Open Application name in Appearance',
+        name: 'Open Application name in General',
       }),
     );
     await waitFor(() => expect(applicationName).toHaveFocus());
@@ -1573,11 +1544,11 @@ describe('settings search', () => {
     const input = await screen.findByLabelText('Terminals per server for all servers');
     // The field is always rendered; its tab is inactive until search selects it.
     expect(input).not.toBeVisible();
-    expect(input.closest('details')).toBeNull();
+    expect(input.closest('details')).not.toHaveAttribute('open');
 
     fireEvent.click(
       within(searchFor('AGENT_TERMINAL_MAX_SESSIONS')).getByRole('button', {
-        name: 'Open Terminals per server in Sandbox',
+        name: 'Open Terminals per server in Sandbox · Advanced',
       }),
     );
 
@@ -1596,7 +1567,7 @@ describe('settings search', () => {
 
     fireEvent.click(
       within(searchFor('Terminals per server')).getByRole('button', {
-        name: 'Open Terminals per server in Sandbox',
+        name: 'Open Terminals per server in Sandbox · Advanced',
       }),
     );
     await waitFor(() => expect(input).toHaveFocus());
@@ -1691,7 +1662,7 @@ describe('settings search', () => {
     await screen.findByLabelText('Maximum archive bytes');
     fireEvent.click(
       within(searchFor('max_archive_bytes')).getByRole('button', {
-        name: 'Open Maximum archive bytes in Sandbox archives',
+        name: 'Open Maximum archive bytes in Sandbox archives · Advanced',
       }),
     );
 
@@ -1716,7 +1687,7 @@ describe('settings search', () => {
       }),
     );
     renderSettings();
-    await screen.findByRole('tab', { name: 'Appearance' });
+    await screen.findByRole('tab', { name: 'General' });
     const results = searchFor('agent_database_url');
     await waitFor(() =>
       expect(within(results).getByRole('status')).toHaveTextContent('No settings found.'),
@@ -1736,7 +1707,7 @@ describe('settings search', () => {
       })),
     });
     renderSettings();
-    await screen.findByRole('tab', { name: 'Appearance' });
+    await screen.findByRole('tab', { name: 'General' });
     fireEvent.click(
       within(searchFor('future limit')).getByRole('button', {
         name: 'Open Future limit in Future / category ✓',
