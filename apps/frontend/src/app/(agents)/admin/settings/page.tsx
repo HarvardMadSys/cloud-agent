@@ -652,7 +652,13 @@ function SettingsView() {
               />
             )}
           </div>
-          <ProvidedModelsPanel selected={selectedTab === 'models'} onAccessDenied={fail} />
+          <ProvidedModelsPanel selected={selectedTab === 'models'} onAccessDenied={fail}>
+            <HostedApplicationSettings
+              settings={applicationSettings}
+              tab="models"
+              selected={selectedTab === 'models'}
+            />
+          </ProvidedModelsPanel>
           <div
             role="tabpanel"
             id="admin-settings-panel-cloudlab"

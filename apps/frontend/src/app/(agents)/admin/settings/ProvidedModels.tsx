@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { announceModelConnectionsChanged } from '@/components/features/agents/composer/modelConnectionEvents';
 import { useT } from '@/components/providers/LocaleProvider';
@@ -214,13 +214,16 @@ export default function ProvidedModelsSettings({
 /**
  * The Models tab's panel. The section is mounted on the tab's first visit and
  * kept afterwards, so switching tabs asks nothing again and loses no edit.
+ * `children` follow it: the settings this tab hosts, always mounted.
  */
 export function ProvidedModelsPanel({
   selected,
   onAccessDenied,
+  children,
 }: {
   selected: boolean;
   onAccessDenied?: (cause: unknown) => void;
+  children?: ReactNode;
 }) {
   const [visited, setVisited] = useState(selected);
   useEffect(() => {
@@ -235,6 +238,7 @@ export function ProvidedModelsPanel({
       tabIndex={0}
     >
       {visited || selected ? <ProvidedModelsSettings onAccessDenied={onAccessDenied} /> : null}
+      {children}
     </div>
   );
 }

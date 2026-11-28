@@ -68,6 +68,7 @@ from cloud_agent.application.model_connections import (
     model_connections_enabled,
     new_connection_id,
 )
+from cloud_agent.application.model_sign_in import sign_in_offer
 from cloud_agent.crypto.credential_cipher import CredentialCipherError
 from cloud_agent.domain.model_connections import (
     ModelConnectionAccessEnded,
@@ -79,6 +80,7 @@ from cloud_agent.domain.model_connections import (
     is_connection_id,
     taken_model,
 )
+from cloud_agent.schemas.config import ModelSignInOffer
 from cloud_agent_shared.model_connections import (
     MAX_API_KEY_CHARS,
     MAX_MODELS,
@@ -302,6 +304,10 @@ class ModelConnectionList(BaseModel):
     #: How many models one connection may list.
     max_models: int = MAX_MODELS
     connections: list[ModelConnectionView]
+    #: The model provider the owner can create or link an account at for a key,
+    #: saved as a new connection (``/v1/agent/model-sign-in``); absent when the
+    #: deployment offers none or a connection already uses that provider.
+    sign_in: ModelSignInOffer | None = None
 
 
 class DiscoveredModels(BaseModel):
@@ -424,10 +430,12 @@ async def list_connections(
         configured = True
     except CredentialCipherError:
         configured = False
+    offer = sign_in_offer(rows) if configured else None
     return ModelConnectionList(
         configured=configured,
         enabled=model_connections_enabled(),
         connections=[_view(row) for row in rows],
+        sign_in=ModelSignInOffer(name=offer.name, base_url=offer.base_url) if offer else None,
     )
 
 

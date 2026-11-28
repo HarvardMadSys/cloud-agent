@@ -20,6 +20,7 @@ from cloud_agent.api.deps import (
 )
 from cloud_agent.application.model_connection_status import model_efforts, usable_runtimes
 from cloud_agent.application.model_connections import model_connections_enabled
+from cloud_agent.application.model_sign_in import sign_in_offer
 from cloud_agent.application.operator_models import (
     provided_default,
     provided_sources,
@@ -33,6 +34,7 @@ from cloud_agent.schemas import (
     McpConnectionSummary,
     ModelConnectionOption,
     ModelEffortOffer,
+    ModelSignInOffer,
     ProvidedModelSource,
 )
 from cloud_agent.schemas.model_preferences import ModelPreferenceView
@@ -143,6 +145,9 @@ async def get_agent_config(
         preference, [*model_connections, *provided]
     ) or provided_default(provided)
     options = [_connection_option(row) for row in model_connections if row.get("enabled")]
+    # Where the owner can create or link a provider account for a key: none
+    # once one of their connections already uses that provider.
+    offer = sign_in_offer(model_connections)
     sources = [ProvidedModelSource(**source) for source in provided]
     if github.load_status == "unavailable":
         # The create endpoint answers 503 until the App is back, so a form that
@@ -190,6 +195,9 @@ async def get_agent_config(
         default_model=connection_default[0] if connection_default else None,
         default_model_connection_id=connection_default[1] if connection_default else None,
         model_connections_enabled=model_connections_enabled(),
+        model_sign_in=(
+            ModelSignInOffer(name=offer.name, base_url=offer.base_url) if offer else None
+        ),
         # The owner's own enabled connections, and beside them what the
         # deployment provides to this owner: the only models there are.
         model_connections=options,

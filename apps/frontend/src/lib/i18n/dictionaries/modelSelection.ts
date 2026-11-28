@@ -1,9 +1,11 @@
 import { modelConnectionsEn, modelConnectionsZhCN } from './modelConnections';
+import { modelSignInEn, modelSignInZhCN } from './modelSignIn';
 import { modelSourcesEn, modelSourcesZhCN } from './modelSources';
 import { providedModelsEn, providedModelsZhCN } from './providedModels';
 
 export const modelSelectionEn = {
   ...modelConnectionsEn,
+  ...modelSignInEn,
   ...modelSourcesEn,
   ...providedModelsEn,
   'settings.model.title': 'Default model',
@@ -40,6 +42,7 @@ export const modelSelectionEn = {
 
 export const modelSelectionZhCN = {
   ...modelConnectionsZhCN,
+  ...modelSignInZhCN,
   ...modelSourcesZhCN,
   ...providedModelsZhCN,
   'settings.model.title': '默认模型',

@@ -86,6 +86,23 @@ export interface ModelConnectionList {
   /** How many models one connection may list. */
   max_models?: number;
   connections: ModelConnection[];
+  /**
+   * The model provider the owner can create or link an account at for a key
+   * of their own; absent when none is offered or a connection already uses it.
+   */
+  sign_in?: ModelSignInOffer | null;
+}
+
+/** A model provider the owner can sign in to, or sign up at, for a key of their own. */
+export interface ModelSignInOffer {
+  name: string;
+  base_url: string;
+}
+
+/** What a finished sign-in saved, and the configured models it left off. */
+export interface ModelSignInResult {
+  connection: ModelConnection;
+  skipped_models: string[];
 }
 
 /** The server's per-connection limit, when an older answer does not say. */
@@ -229,4 +246,31 @@ export async function discoverModels(
     signal,
   });
   return (await jsonOrThrow<{ models: string[] }>(response)).models;
+}
+
+const SIGN_IN = '/v1/agent/model-sign-in';
+
+/**
+ * Where to send the browser to sign in at the deployment's model provider:
+ * its page, with a state and a challenge the server bound to this owner.
+ */
+export async function startModelSignIn(): Promise<string> {
+  const response = await fetchWithAuth(config.apiBase, SIGN_IN, {
+    method: 'POST',
+    cache: 'no-store',
+  });
+  return (await jsonOrThrow<{ authorization_url: string }>(response)).authorization_url;
+}
+
+/**
+ * Hand the provider's code and the state back: the server exchanges them for
+ * the owner's key and saves the verified connection. Works once per state.
+ */
+export async function finishModelSignIn(code: string, state: string): Promise<ModelSignInResult> {
+  return connectionJson(
+    await fetchWithAuth(config.apiBase, `${SIGN_IN}/finish`, {
+      ...json('POST', { code, state }),
+      cache: 'no-store',
+    }),
+  );
 }

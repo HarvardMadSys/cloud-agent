@@ -1,4 +1,5 @@
 import { fetchWithAuth, jsonOrThrow } from '../client';
+import type { ModelSignInOffer } from '../modelConnections';
 import { config } from '@/config/env';
 import type { GoalLimitsApi } from './goals';
 import type { SourceControlLoadStatus } from './integrations';
@@ -87,6 +88,11 @@ export interface AgentConfigApi {
   provided_sources?: ProvidedModelSourceApi[];
   /** Whether this deployment lets owners add and run on their own connections. */
   model_connections_enabled?: boolean;
+  /**
+   * The model provider this owner can create or link an account at for a key
+   * of their own, saved as a new connection; absent when none is offered.
+   */
+  model_sign_in?: ModelSignInOffer | null;
   /**
    * Neither an enabled connection of the owner's nor a provided one can run
    * anything yet; setup is gated separately.

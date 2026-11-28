@@ -330,6 +330,17 @@ const SETTING_GROUPS: SettingGroup[] = [
     advanced: true,
     keys: ['compute.registration_url', 'compute.poll_seconds', 'compute.observation_seconds'],
   },
+  // Model sign-in (on the Models tab)
+  {
+    title: 'Provider sign-in',
+    keys: [
+      'model_sign_in.name',
+      'model_sign_in.authorize_url',
+      'model_sign_in.key_url',
+      'model_sign_in.base_url',
+      'model_sign_in.models',
+    ],
+  },
 ];
 
 interface SettingPlacement {
@@ -369,6 +380,7 @@ export const HOSTED_CATEGORIES: ReadonlyMap<
   ],
   ['Sandbox', { tab: 'sandbox', section: 'Sandbox', title: 'Sandbox execution' }],
   ['CloudLab', { tab: 'cloudlab', section: 'CloudLab', title: 'Compute services' }],
+  ['Model sign-in', { tab: 'models', section: 'Models', title: 'Provider sign-in' }],
 ]);
 
 /** The settings tab that shows an application settings category. */

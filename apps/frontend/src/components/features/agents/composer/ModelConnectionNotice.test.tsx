@@ -1,13 +1,27 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentConfigApi } from '@/lib/api/agents';
 import { providedSource } from '@/test/connectionConfig';
 
+import { leaveFor } from '../githubAccess';
+import { takeReturnPath } from '../githubReturn';
 import { ModelConnectionNotice } from './ModelConnectionNotice';
+
+const signIn = vi.hoisted(() => ({ start: vi.fn() }));
+const startModelSignIn = signIn.start;
+
+vi.mock('@/lib/api/modelConnections', () => ({ startModelSignIn: signIn.start }));
+vi.mock('../githubAccess', () => ({ leaveFor: vi.fn() }));
+
+beforeEach(() => {
+  sessionStorage.clear();
+  startModelSignIn.mockReset();
+  (leaveFor as unknown as ReturnType<typeof vi.fn>).mockReset();
+});
 
 function config(overrides: Partial<AgentConfigApi> = {}): AgentConfigApi {
   return {
@@ -80,5 +94,71 @@ describe('ModelConnectionNotice', () => {
   it('says nothing before the configuration has loaded', () => {
     const { container } = render(<ModelConnectionNotice config={null} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('offers signing in at the provider first, and setting one up by hand beside it', async () => {
+    window.history.replaceState(null, '', '/?repo=acme%2Fapp');
+    startModelSignIn.mockResolvedValue('https://provider.example/authorize/key?code_challenge=x');
+    render(
+      <ModelConnectionNotice
+        config={config({
+          model_connection_required: true,
+          model_sign_in: { name: 'Example Inference', base_url: 'https://api.provider.example/v1' },
+        })}
+      />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Create a Example Inference account, or link the one you have',
+    );
+    expect(screen.getByRole('link', { name: 'Add a connection by hand' })).toHaveAttribute(
+      'href',
+      '/settings/models#settings-connections',
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create or link a Example Inference account' }),
+    );
+
+    await waitFor(() =>
+      expect(leaveFor).toHaveBeenCalledWith(
+        'https://provider.example/authorize/key?code_challenge=x',
+      ),
+    );
+    // The callback page comes back here.
+    expect(takeReturnPath()).toBe('/?repo=acme%2Fapp');
+  });
+
+  it('says why signing in could not start, and stays', async () => {
+    startModelSignIn.mockRejectedValue(new Error('This deployment does not offer it.'));
+    render(
+      <ModelConnectionNotice
+        config={config({
+          model_connection_required: true,
+          model_sign_in: { name: 'Example Inference', base_url: 'https://api.provider.example/v1' },
+        })}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create or link a Example Inference account' }),
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This deployment does not offer it.',
+    );
+    expect(leaveFor).not.toHaveBeenCalled();
+  });
+
+  it('offers no sign-in where model connections are switched off', () => {
+    render(
+      <ModelConnectionNotice
+        config={config({
+          model_connection_required: true,
+          model_connections_enabled: false,
+          model_sign_in: { name: 'Example Inference', base_url: 'https://api.provider.example/v1' },
+        })}
+      />,
+    );
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });
