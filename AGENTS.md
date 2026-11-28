@@ -195,7 +195,11 @@ requirement, and rules 4 and 5 remain permanent service boundaries.
 5. **No Gateway dependency.** No Python import of `serving.*`, ever, and no
    Gateway sign-in, admission, grant or catalog: those were removed
    ([decision](docs/agents/specs/2026-10-30-independent-accounts-only.md)).
-   A configuration naming them is refused at startup.
+   A configuration naming them is refused at startup. Signing in at a model
+   provider for the owner's own key (`api/model_sign_in.py`) is none of
+   these, under the four conditions its
+   [design](docs/agents/specs/2026-11-28-model-provider-sign-in.md#agentsmd--5)
+   lists; a change that breaks one is a change to this rule.
 
 ## 6. Key concepts
 

@@ -176,6 +176,7 @@ from cloud_agent.schemas.config import (
     AgentConfigResponse,
     ModelConnectionOption,
     ModelEffortOffer,
+    ModelSignInOffer,
     ProvidedModelSource,
 )
 from cloud_agent.schemas.conversations import (
@@ -637,6 +638,7 @@ __all__ = [
     "ModelConnectionOption",
     "ModelEffortOffer",
     "ModelPreferenceView",
+    "ModelSignInOffer",
     "NotificationStateCursor",
     "OAuthConnectRequest",
     "OkResponse",

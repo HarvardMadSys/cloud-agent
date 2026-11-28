@@ -275,6 +275,7 @@ def create_app() -> FastAPI:
         hosts,
         mcp_connections,
         model_connections,
+        model_sign_in,
         owner_usage,
         routes,
         session,
@@ -326,6 +327,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_memory.router)
     app.include_router(user_profile.router)
     app.include_router(model_connections.router)
+    app.include_router(model_sign_in.router)
     app.include_router(teams.router)
     app.include_router(uploads.router)
     app.include_router(mcp_connections.router)

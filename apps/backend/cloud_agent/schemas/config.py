@@ -73,6 +73,17 @@ class ProvidedModelSource(BaseModel):
     model_efforts: dict[str, dict[str, ModelEffortOffer]] = Field(default_factory=dict)
 
 
+class ModelSignInOffer(BaseModel):
+    """A model provider this owner can sign in to for a key of their own.
+
+    Offered while the deployment configures one and the owner has no
+    connection that uses its Base URL. Signing in saves a new connection.
+    """
+
+    name: str
+    base_url: str
+
+
 class AgentConfigResponse(BaseModel):
     """What this deployment will actually accept, for the task composer.
 
@@ -141,6 +152,13 @@ class AgentConfigResponse(BaseModel):
     model_connections_enabled: bool = Field(
         default=False,
         description="Whether this deployment lets owners add and run on their own connections.",
+    )
+    model_sign_in: ModelSignInOffer | None = Field(
+        default=None,
+        description=(
+            "The model provider this owner can create or link an account at for a key of "
+            "their own, saved as a new connection; absent when none is offered."
+        ),
     )
     default_model_connection_id: str | None = Field(
         default=None,

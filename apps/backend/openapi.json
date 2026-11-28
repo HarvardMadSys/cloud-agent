@@ -4067,6 +4067,17 @@
             "title": "Model Connections Enabled",
             "type": "boolean"
           },
+          "model_sign_in": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelSignInOffer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The model provider this owner can create or link an account at for a key of their own, saved as a new connection; absent when none is offered."
+          },
           "plugin_runtimes": {
             "description": "Runtime ids that support plugins installed at sandbox initialization.",
             "items": {
@@ -17763,6 +17774,16 @@
             "default": 16,
             "title": "Max Models",
             "type": "integer"
+          },
+          "sign_in": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelSignInOffer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -17991,6 +18012,84 @@
           "status"
         ],
         "title": "ModelEffortOffer",
+        "type": "object"
+      },
+      "ModelSignInFinish": {
+        "additionalProperties": false,
+        "description": "What the provider sent back to the web app's callback page.",
+        "properties": {
+          "code": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "state"
+        ],
+        "title": "ModelSignInFinish",
+        "type": "object"
+      },
+      "ModelSignInOffer": {
+        "description": "A model provider this owner can sign in to for a key of their own.\n\nOffered while the deployment configures one and the owner has no\nconnection that uses its Base URL. Signing in saves a new connection.",
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "base_url"
+        ],
+        "title": "ModelSignInOffer",
+        "type": "object"
+      },
+      "ModelSignInSaved": {
+        "description": "The connection the sign-in saved, and the configured models it left off.",
+        "properties": {
+          "connection": {
+            "$ref": "#/components/schemas/ModelConnectionView"
+          },
+          "skipped_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "connection",
+          "skipped_models"
+        ],
+        "title": "ModelSignInSaved",
+        "type": "object"
+      },
+      "ModelSignInStart": {
+        "description": "Where to send the browser: the provider's page, with this owner's challenge.",
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "ModelSignInStart",
         "type": "object"
       },
       "ModelStatusView": {
@@ -43670,6 +43769,122 @@
           }
         },
         "summary": "Refresh Efforts",
+        "tags": [
+          "model-connections"
+        ]
+      }
+    },
+    "/v1/agent/model-sign-in": {
+      "post": {
+        "description": "Start signing in at the provider; nothing is saved until it sends the owner back.",
+        "operationId": "start_model_sign_in_v1_agent_model_sign_in_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSignInStart"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Model Sign In",
+        "tags": [
+          "model-connections"
+        ]
+      }
+    },
+    "/v1/agent/model-sign-in/finish": {
+      "post": {
+        "description": "Exchange the provider's code for the owner's key and save the verified connection.\n\nThe state works once, for the owner it was issued to. Every refusal that\ndoes not need the key comes before the code is exchanged.",
+        "operationId": "finish_model_sign_in_v1_agent_model_sign_in_finish_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelSignInFinish"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSignInSaved"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationRefusalBody"
+                }
+              }
+            },
+            "description": "A model has no agent that can use it; nothing was saved."
+          },
+          "429": {
+            "description": "The owner's hourly checks cannot cover the models to verify."
+          },
+          "504": {
+            "description": "Verification outlasted the save's bound; nothing was saved."
+          }
+        },
+        "summary": "Finish Model Sign In",
         "tags": [
           "model-connections"
         ]

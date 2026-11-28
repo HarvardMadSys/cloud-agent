@@ -178,6 +178,7 @@
     "docs/agents/specs/2026-11-09-neutral-runtime-identifiers.md": 136,
     "docs/agents/specs/2026-11-09-no-env-file.zh-CN.md": 1,
     "docs/agents/specs/2026-11-09-operator-provided-model-connections.md": 31,
+    "docs/agents/specs/2026-11-28-model-provider-sign-in.md": 2,
     "docs/agents/specs/cutover.md": 1,
     "docs/agents/specs/gateway-removal.md": 3
   },

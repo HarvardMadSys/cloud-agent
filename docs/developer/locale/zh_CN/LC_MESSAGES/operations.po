@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: HybridInference Cloud Agent \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-26 09:52+0800\n"
+"POT-Creation-Date: 2026-11-28 04:17+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: The HybridInference contributors\n"
 "Language: zh_CN\n"
@@ -30,7 +30,8 @@ msgid ""
 "provides through the model relay."
 msgstr ""
 "这份手册按任务组织，不需要从头读到尾。开通主机、部署 Cloud "
-"Agent、保护保留的工作区、排查任务或网络故障时，来这里找对应的章节。控制平面负责任务 API、数据库、账号与准入、MCP、GitHub 和模型中继，以及管理设置。每一轮都运行在一个模型连接上：可以是所有者用自己的服务商密钥添加的连接，也可以是部署通过模型中继提供的连接。"
+"Agent、保护保留的工作区、排查任务或网络故障时，来这里找对应的章节。控制平面负责任务 API、数据库、账号与准入、MCP、GitHub "
+"和模型中继，以及管理设置。每一轮都运行在一个模型连接上：可以是所有者用自己的服务商密钥添加的连接，也可以是部署通过模型中继提供的连接。"
 
 #: ../developer/operations.md:20
 msgid "Start with the task you need:"
@@ -3485,7 +3486,7 @@ msgstr ""
 " GitHub App 用户令牌转发；针对其他任何东西的请求则不带任何凭据转发；仓库管理、secrets、GraphQL、删除分支和推 tag "
 "一律拒绝。中继看到创建 PR 的请求成功时，会把这个 PR 记到对话上。所有者的令牌在控制平面里续期，所以轮次跑得再久也不会遇到令牌过期。"
 
-#: ../developer/operations.md:1619 ../developer/operations.md:4526
+#: ../developer/operations.md:1619 ../developer/operations.md:4570
 msgid "To turn it on:"
 msgstr "启用步骤："
 
@@ -8650,8 +8651,9 @@ msgid ""
 "-user-model-connections.zh-CN.md), and the owner model connections entry "
 "in [AGENTS.md](../../AGENTS.md) §7."
 msgstr ""
-"所有者在 **Settings → Models**（`/settings/models`；旧的 `/settings/my-settings#settings-connections` "
-"链接会自动跳转过去）添加自己的推理端点：名称、Base URL、API key，以及最多十六个模型 ID。点击 **Verify and save** 后，平台会先验证每个模型，再保存任何内容，并据此判断每个模型支持哪些 "
+"所有者在 **Settings → Models**（`/settings/models`；旧的 `/settings/my-settings"
+"#settings-connections` 链接会自动跳转过去）添加自己的推理端点：名称、Base URL、API key，以及最多十六个模型 "
+"ID。点击 **Verify and save** 后，平台会先验证每个模型，再保存任何内容，并据此判断每个模型支持哪些 "
 "API。之后，这些模型会与部署提供的模型（[部署提供的模型](#provided-models)）一起出现在输入框里，供能使用它们的 agent "
 "选择，并且对该所有者优先于同名的部署提供模型。轮次使用所有者自己的密钥并由其服务商计费。设计、协议矩阵和已接受的风险见[模型连接设计](../agents/specs/2026-10-27"
 "-user-model-connections.zh-CN.md)，以及 [AGENTS.md](../../AGENTS.md) §7 "
@@ -9017,10 +9019,90 @@ msgstr ""
 "数，并注明由服务商计费；不显示费用。哪些计入、哪些不计入，见[用量](#usage)。"
 
 #: ../developer/operations.md:4441
+msgid "Signing in at a provider for a key"
+msgstr ""
+"在服务商处登录以获取密钥"
+
+#: ../developer/operations.md:4443
+msgid ""
+"A deployment can name one model provider where an owner creates an "
+"account, or signs in to the one they have, and comes back with a key of "
+"their own. The owner never copies a key: the composer's set-up notice and"
+" **Settings → Models** show **Create or link a *provider* account** while"
+" the owner has no connection with that provider's Base URL. The flow "
+"follows OpenRouter's PKCE key flow ([design](../agents/specs/2026-11-28"
+"-model-provider-sign-in.md))."
+msgstr ""
+"部署可以指定一个模型服务商：所有者在那里注册账号，或登录已有的账号，回来时就有了属于自己的密钥，全程不需要复制密钥。只要所有者还没有使用该服务商 Base URL 的连接，输入框的设置提示和 **Settings → Models** 就会显示 **Create or link a *provider* account**。流程参照 OpenRouter 的 PKCE 密钥流程（[设计](../agents/specs/2026-11-28-model-provider-sign-in.md)）。"
+
+#: ../developer/operations.md:4451
+msgid ""
+"The browser asks `POST /v1/agent/model-sign-in`. The control plane stores"
+" a single-use state for the owner, with a PKCE verifier only it holds "
+"(encrypted, ten minutes), and answers the provider's authorization page "
+"with `callback_url`, `code_challenge` and `code_challenge_method=S256` "
+"added. The callback is `<web app URL>/settings/models/connected?state=…`."
+msgstr ""
+"浏览器请求 `POST /v1/agent/model-sign-in`。控制平面为该所有者保存一个一次性的 state，以及只有它自己持有的 PKCE verifier（加密保存，有效期十分钟），然后返回服务商授权页面的地址，附上 `callback_url`、`code_challenge` 和 `code_challenge_method=S256`。回调地址是 `<web app URL>/settings/models/connected?state=…`。"
+
+#: ../developer/operations.md:4456
+msgid ""
+"At the provider, the owner signs up or signs in, and approves a key. The "
+"provider sends the browser back to the callback with a one-time `code` "
+"added, or with `error` if the owner declined."
+msgstr ""
+"所有者在服务商那里注册或登录，并批准一个密钥。服务商把浏览器送回回调地址，附上一次性的 `code`；所有者拒绝时则附上 `error`。"
+
+#: ../developer/operations.md:4459
+#, python-brace-format
+msgid ""
+"The callback page sends the code and the state to `POST /v1/agent/model-"
+"sign-in/finish`. The control plane consumes the state for that owner and "
+"re-checks the setting and the owner's connections. It reserves the hourly"
+" checks for the configured models; models already on another of the "
+"owner's connections are skipped. Only then does it exchange the code and "
+"the verifier at the key exchange URL: a JSON POST of `code`, "
+"`code_verifier` and `code_challenge_method`, answered with `{\"key\": "
+"\"…\"}`. That call follows the same address rules as verification."
+msgstr ""
+"回调页面把 code 和 state 发给 `POST /v1/agent/model-sign-in/finish`。控制平面以该所有者的身份消费这个 state，并重新检查设置和该所有者已有的连接。接着为配置的模型预留每小时检查次数；已经在所有者其他连接上的模型会被跳过。这些都通过后，才拿 code 和 verifier 到密钥交换 URL 换取密钥：以 JSON POST 发送 `code`、`code_verifier` 和 `code_challenge_method`，响应为 `{\"key\": \"…\"}`。这次请求遵循与验证相同的地址规则。"
+
+#: ../developer/operations.md:4467
+msgid ""
+"The key is verified on each configured model, and a connection named "
+"after the provider is saved with the models an agent can use. It is an "
+"ordinary connection from then on."
+msgstr ""
+"用这个密钥逐一验证配置的模型，然后以服务商的名字保存一个连接，只包含 agent 能使用的模型。此后它就是一个普通的连接。"
+
+#: ../developer/operations.md:4471
+msgid ""
+"Anything refused before step 3 issues no key. If the provider issues a "
+"key and no model verifies, or verification times out, nothing is saved "
+"here, and the message says the key can be deleted at the provider."
+msgstr ""
+"在第 3 步之前被拒绝的请求都不会签发密钥。如果服务商已经签发了密钥，但没有一个模型通过验证，或者验证超时，这里什么都不保存，提示信息会说明可以到服务商那里删除这个密钥。"
+
+#: ../developer/operations.md:4475
+msgid ""
+"Configure it under **Admin → Settings → Models → Provider sign-in**. Fill"
+" in the provider's name, its authorization page URL, its key exchange "
+"URL, the inference Base URL the connection uses, and up to sixteen model "
+"ids. Then register `<web app URL>/settings/models/connected` as an "
+"allowed callback with the provider. The web app URL "
+"(`AGENT_WEB_BASE_URL`) must be set. With any of these empty, nothing is "
+"offered and both routes refuse. None of these settings has an environment"
+" variable. This obtains the owner's own key and nothing else: it signs no"
+" one in to Cloud Agent, decides no admission, and never runs during a "
+"turn ([AGENTS.md](../../AGENTS.md) §5)."
+msgstr ""
+"在 **Admin → Settings → Models → Provider sign-in** 中配置：填写服务商名称、授权页面 URL、密钥交换 URL、连接使用的推理 Base URL，以及最多十六个模型 ID。然后在服务商那里把 `<web app URL>/settings/models/connected` 登记为允许的回调地址。必须设置 web app URL（`AGENT_WEB_BASE_URL`）。其中任何一项为空，都不会出现入口，两个路由也都会拒绝请求。这些设置都没有对应的环境变量。这个流程只为所有者获取自己的密钥，不做别的：它不让任何人登录 Cloud Agent，不决定准入，也不会在轮次运行期间执行（[AGENTS.md](../../AGENTS.md) §5）。"
+
+#: ../developer/operations.md:4485
 msgid "Provided models"
 msgstr "部署提供的模型"
 
-#: ../developer/operations.md:4443
+#: ../developer/operations.md:4487
 msgid ""
 "A deployment can offer models of its own beside owners' connections. An "
 "administrator saves a provider's Base URL and the deployment's key under "
@@ -9039,7 +9121,7 @@ msgstr ""
 "model-relay.zh-CN.md)，以及 [AGENTS.md](../../AGENTS.md) §7 里“Provided "
 "models”一条。"
 
-#: ../developer/operations.md:4452
+#: ../developer/operations.md:4496
 msgid ""
 "**Where the key is.** Only in the control plane, encrypted under the "
 "settings root key. A member's CLI on a provided model is told its "
@@ -9063,7 +9145,7 @@ msgstr ""
 "会调用的推理和模型列表路径，而且只限连接列出的模型。Stop、轮次结束、residency "
 "轮换、主机被移除，都从下一个请求起生效；不需要到服务商那边撤销任何东西。"
 
-#: ../developer/operations.md:4466
+#: ../developer/operations.md:4510
 msgid ""
 "**Models and prices.** The save reads the provider's model listing (`GET "
 "…/models`) with the key and lists what it lists, in its order. So the "
@@ -9088,7 +9170,7 @@ msgstr ""
 "`pricing` 里给出 `prompt`、`completion`，可能还有 `input_cache_reads` 和 "
 "`input_cache_writes`，单位是美元每百万 token。列表里没有价格的模型，用量只记 token 数。"
 
-#: ../developer/operations.md:4480
+#: ../developer/operations.md:4524
 msgid ""
 "**One model, one source.** A model ID is offered by one provided "
 "connection at most: a save, a new key or **Read models again** whose "
@@ -9105,7 +9187,7 @@ msgstr ""
 "key，让它们不重叠。用户自己的几个连接之间也是同样的规则。如果用户自己某个已启用的连接里有部署也提供的模型，说明用户选择了用自己的 key "
 "跑这个模型：输入框的模型列表里列的是用户自己的那个，部署的那份不再提供给这个用户。别的用户照常能看到。"
 
-#: ../developer/operations.md:4489
+#: ../developer/operations.md:4533
 msgid ""
 "**What a request records.** When an answer ends, the relay reads the "
 "usage record the provider put in it (the three inference APIs each carry "
@@ -9131,7 +9213,7 @@ msgstr ""
 " token 算；请求里的图片、音频、视频不论大小，分别算 85、200、1,000 个 "
 "token。用量表把这类请求单独计数。服务商没有答复的请求（连不上，或者答了错误）不记录，列出模型和计算 token 数也不记录。"
 
-#: ../developer/operations.md:4504
+#: ../developer/operations.md:4548
 msgid ""
 "**Nothing limits use here.** There is no budget, quota or cap on requests"
 " in flight, per owner or per model: the provider's own budget and limits "
@@ -9147,7 +9229,7 @@ msgstr ""
 "不论按所有者还是按模型，都没有额度、配额或进行中请求数的上限：限制花费的是服务商那边对部署这把密钥设的预算和限制，所以要在服务商那边给它设好这两样。它们由所有所有者共用：一个人用得多，就可能把当天的预算用完，或者占满这把密钥的并发，影响所有人。用量表里的费用是中继按列表里的价格和服务商报的"
 " token 数算出来的，不是账单；它可能和服务商实际扣的不一样，比如服务商按时段定价，或者把一个模型分到价格不同的线路上时。"
 
-#: ../developer/operations.md:4514
+#: ../developer/operations.md:4558
 msgid ""
 "Nothing has to be configured on the machines. The control plane always "
 "runs the `model-relay` service, bound to `127.0.0.1:8002` "
@@ -9170,7 +9252,7 @@ msgstr ""
 "`AGENT_SANDBOX_MODEL_RELAY_URL` 和 `AGENT_MODEL_TUNNEL_*`。这样主机就会通告 `model-"
 "relay-v1`；没有它的主机永远领不到跑在部署提供的模型上的轮次，没有任何主机通告它时，管理页会给出提醒。"
 
-#: ../developer/operations.md:4528
+#: ../developer/operations.md:4572
 msgid ""
 "Make sure at least one host advertises the model relay. A server set up "
 "before this release has no model tunnel: prepare a new setup for it under"
@@ -9187,7 +9269,7 @@ msgstr ""
 "密钥（`AGENT_MODEL_TUNNEL_*`），在控制平面机器上为它单独开一个只允许这一个转发、别的什么都不允许的账号，并设置 "
 "`AGENT_SANDBOX_MODEL_RELAY_URL=http://agent-models:8000`："
 
-#: ../developer/operations.md:4541
+#: ../developer/operations.md:4585
 msgid ""
 "In **Admin → Settings → Models**, add the connection: a name, the Base "
 "URL and the key. The save reads what the key lists and verifies it, as "
@@ -9196,11 +9278,11 @@ msgstr ""
 "在 **Admin → Settings → Models** 里添加连接：填名字、Base URL "
 "和密钥。保存时会读取这把密钥列出的模型并验证，规则见上文，然后启用这个连接。"
 
-#: ../developer/operations.md:4545
+#: ../developer/operations.md:4589
 msgid "Things to know when operating it:"
 msgstr "运维时需要知道的几件事："
 
-#: ../developer/operations.md:4547
+#: ../developer/operations.md:4591
 msgid ""
 "**A new key closes nothing.** No process holds the key, so the next "
 "request uses the new one. A new Base URL, disabling and deleting close "
@@ -9209,7 +9291,7 @@ msgstr ""
 "**换密钥不会关闭任何进程。** 没有进程持有密钥，所以下一个请求就用新的。换 Base "
 "URL、停用和删除，会关闭这个连接上的每个成员进程，和所有者自己的连接一样。"
 
-#: ../developer/operations.md:4550
+#: ../developer/operations.md:4594
 msgid ""
 "**The relay is on the path.** Requests and answers of provided models "
 "pass through the control plane; nothing of them is stored or logged. A "
@@ -9225,7 +9307,7 @@ msgstr ""
 "数、费用，以及是不是估算）。重启 `model-relay` 服务（控制平面每次发布都会重启）会中断进行中的应答，agent CLI "
 "会重试，被中断的每个应答按估算记录。所有者自己的连接上的轮次不经过它。"
 
-#: ../developer/operations.md:4558
+#: ../developer/operations.md:4602
 msgid ""
 "**Use that could not be written.** If the database is away when an answer"
 " ends, the answer is still relayed and its record is kept, and written "
@@ -9243,7 +9325,7 @@ msgstr ""
 "`agent_model_relay_charge_lost` 日志。语句发出后连接才断开的写入可能已经记上了，不再重写，记一条带金额的 "
 "`agent_model_relay_charge_unknown`。"
 
-#: ../developer/operations.md:4568
+#: ../developer/operations.md:4612
 msgid ""
 "**A refused key.** If the provider answers `401` to the deployment's key,"
 " the relay answers `502` to the agent, logs "
@@ -9255,20 +9337,20 @@ msgstr ""
 "`agent_model_relay_key_refused` "
 "日志，管理页面显示从什么时候开始。等服务商下一次接受请求，或者密钥被更换后，这个状态就会清除。"
 
-#: ../developer/operations.md:4573
+#: ../developer/operations.md:4617
 msgid ""
 "**Nothing falls back.** A turn on a provided model never moves to the "
 "owner's own connection, or the reverse. A disabled or deleted connection "
 "refuses its turns with that reason."
 msgstr "**不会回退。** 跑在部署提供的模型上的轮次，永远不会换到所有者自己的连接上，反过来也一样。连接被停用或删除后，它的轮次会以这个原因被拒绝。"
 
-#: ../developer/operations.md:4576
+#: ../developer/operations.md:4620
 msgid ""
 "**`AGENT_MODEL_CONNECTIONS_ENABLED`** switches provided models off "
 "together with owners' connections."
 msgstr "**`AGENT_MODEL_CONNECTIONS_ENABLED`** 会把部署提供的模型和所有者的连接一起关掉。"
 
-#: ../developer/operations.md:4578
+#: ../developer/operations.md:4622
 msgid ""
 "**Rolling back.** The release before this one reads a connection saved by"
 " this one as having no daily budget chosen, so it offers it to nobody "
@@ -9285,7 +9367,7 @@ msgstr ""
 "会删除价格、额度和记下的费用；它之前的版本改为限制每个模型的请求次数，在那之后才定价的模型要等设了请求次数上限才向人提供。只要还存在部署提供的连接，或者有轮次、排队消息指向它，降级"
 " `0118` 就会拒绝执行。再往前的版本会把这种轮次的来源当成一个找不到的连接，并拒绝它的下一条消息。"
 
-#: ../developer/operations.md:4586
+#: ../developer/operations.md:4630
 msgid ""
 "**Claude Code and the first-party host.** Claude Code decides some "
 "features from the host name it is pointed at. Through the relay it sees "
@@ -9295,11 +9377,11 @@ msgstr ""
 "**Claude Code 和它自家的主机名。** Claude Code "
 "会根据它被指向的主机名决定一些功能。经过中继后，它看到的是中继的名字，所以即使部署提供的连接指向它厂商自己的 API，行为也和任何第三方端点一样。"
 
-#: ../developer/operations.md:4591
+#: ../developer/operations.md:4635
 msgid "Reusable cloud environments"
 msgstr "可复用的云环境"
 
-#: ../developer/operations.md:4593
+#: ../developer/operations.md:4637
 msgid ""
 "Migration `0065_environments` adds owner configuration, immutable "
 "encrypted versions, fixed workspace bindings, isolated test leases and "
@@ -9315,7 +9397,7 @@ msgstr ""
 "variable/v1` 域下加密。这把密钥要和现有的凭据存储一起备份；不经重新加密就换掉它，旧的绑定就读不出来了。Secrets "
 "无法通过所有者的读取或历史 API 拿到。"
 
-#: ../developer/operations.md:4600
+#: ../developer/operations.md:4644
 msgid ""
 "Repository environments are a standard product feature, available without"
 " an admin switch. Settings, task selection and the Environment tab are "
@@ -9331,7 +9413,7 @@ msgstr ""
 "`AGENT_REPOSITORY_ENVIRONMENTS_ENABLED`，都会被忽略，也不再出现在设置编辑器里。没有配置环境的任务，仍按基础环境运行，不做准备；配置了环境的工作区，仍然要求"
 " runner 和 sandbox manager 实际支持 `environment-v1`。"
 
-#: ../developer/operations.md:4608
+#: ../developer/operations.md:4652
 msgid ""
 "Upgrade every control-plane replica before creating any new environment-"
 "bound workspace; mixed old/new admission, Fork and terminal handlers may "
@@ -9343,7 +9425,7 @@ msgstr ""
 "在创建任何新的、绑定了环境的工作区之前，先把每一个控制平面副本都升级好；如果新旧版本混着处理准入、Fork "
 "和终端请求，绑定信息可能会悄悄丢失。一旦出现了第一个绑定，就不要再回滚到读不懂它的二进制版本。如果非要回滚：先关掉这些执行入口，把环境测试和环境准备都排空，并让已绑定的工作区留在兼容的主机上，或者隔离起来。"
 
-#: ../developer/operations.md:4614
+#: ../developer/operations.md:4658
 msgid ""
 "Roll out the environment-capable runner and sandbox manager together. A "
 "claiming replica must attest `environment-v1`, and the actual "
@@ -9360,7 +9442,7 @@ msgstr ""
 "attempt；它绝不能在缺少变量的情况下运行这些任务。环境测试同样遵守部署固定、计算资源准入、副本证明和主机槽位的限制，并且只拿到只读的源码凭据，拿不到推理、MCP"
 " 或仓库写入的授权。"
 
-#: ../developer/operations.md:4622
+#: ../developer/operations.md:4666
 msgid ""
 "Preparation receipts live in the host credential directory under "
 "`environment-preparation`, outside container mounts and source archives. "
@@ -9375,7 +9457,7 @@ msgstr ""
 "重启时，这份主机状态要保留。安装在每个固定的工作区上只会成功一次；startup 在每次实际启动时运行一次。失败的步骤会一直显示在 "
 "Environment 标签页里，可以针对原来的绑定重试。"
 
-#: ../developer/operations.md:4629
+#: ../developer/operations.md:4673
 msgid ""
 "Manual-action receipts live next to preparation state under `environment-"
 "actions`. They reserve the run before launching a command and retain its "
@@ -9393,7 +9475,7 @@ msgstr ""
 " "
 "`unknown`，绝不会自动重放。换一个幂等键开始新的运行之前，先检查一下它在外部已经造成了哪些影响。这些回执并不能保证外部服务里的副作用恰好只发生一次。"
 
-#: ../developer/operations.md:4638
+#: ../developer/operations.md:4682
 msgid ""
 "The output of a test, a preparation or an action is stored masked and "
 "bounded, with each NUL and unpaired surrogate replaced by U+FFFD: "
@@ -9403,7 +9485,7 @@ msgstr ""
 "测试、准备步骤或操作的输出，会经过遮蔽、限制长度后存储，其中每个 NUL 和落单的代理项都会替换为 U+FFFD：这两种字符 Postgres "
 "都存不了，而拒绝这段输出，会让测试或命令一直完不成。"
 
-#: ../developer/operations.md:4642
+#: ../developer/operations.md:4686
 msgid ""
 "Empty bindings still pin the original task's selection, but require "
 "neither `environment-v1` nor preparation. Each environment test reserves "
@@ -9415,7 +9497,7 @@ msgstr ""
 "上占用一个本地槽位，这样其他空闲槽位还能继续认领编码任务。主机上的孤儿查询是只读的，并且限流；租约过期和历史记录的维护，由控制平面的 reaper"
 " 负责。"
 
-#: ../developer/operations.md:4648
+#: ../developer/operations.md:4692
 msgid ""
 "Cancellation fences the result immediately but keeps the leased slot "
 "until cleanup is confirmed or the lease expires. An expired orphan no "
@@ -9433,7 +9515,7 @@ msgstr ""
 "ID，并在确认清理之前，删掉那些确切的、带标签的容器。不要为了腾容量去删无关的沙箱组，也不要绕过租约和容器身份的检查。已经归档、并且没人再引用的版本，30"
 " 天后回收；已有的工作区和测试绑定，会保留它们当时的加密值，用于遮蔽。"
 
-#: ../developer/operations.md:4657
+#: ../developer/operations.md:4701
 msgid ""
 "Owner-provided credentials can be read and sent outside by user code "
 "through the existing network. Known-value masking does not cover encoded "
@@ -9444,7 +9526,7 @@ msgstr ""
 "所有者提供的凭据，可以被用户代码读取，并通过现有的网络发送出去。按已知值做的遮蔽覆盖不到编码过的 secret、所有者原始的终端和文件，也覆盖不到"
 " Git 推送；平台也不会扫描推送的内容。平台持有的长期凭据、保留的变量名，以及固定的出口规则，仍然受保护。"
 
-#: ../developer/operations.md:4662
+#: ../developer/operations.md:4706
 msgid ""
 "Environment setup, startup and actions share executable package data in "
 "`/workspace/.cloud-agent-tools`, excluded through Git's local exclude "
@@ -9459,11 +9541,11 @@ msgstr ""
 "目录仍然是私有的。显式刷新运行时会保留安装时的输入，并从下一轮开始生效；已经在运行的服务继续用旧值。startup "
 "恢复只是明确放行接下来的一次人工轮次，绝不是一张永久的成功回执。"
 
-#: ../developer/operations.md:4669
+#: ../developer/operations.md:4713
 msgid "Team environments"
 msgstr "团队环境"
 
-#: ../developer/operations.md:4671
+#: ../developer/operations.md:4715
 msgid ""
 "A team's owner and admins can create environments for the team: in "
 "Settings → Environments, **New environment** or **Copy** offers the teams"
@@ -9481,7 +9563,7 @@ msgstr ""
 " 403。创建、编辑和移除团队环境，都会记在团队的审计日志里。设计见[团队](../agents/specs/2026-10-15-team-"
 "shared-workspace-design.zh-CN.md) §6。"
 
-#: ../developer/operations.md:4680
+#: ../developer/operations.md:4724
 msgid ""
 "**Each member's own container.** A team environment is shared "
 "configuration, not a shared workspace. A member's task runs in that "
@@ -9495,7 +9577,7 @@ msgstr ""
 "团队环境共享的是配置，而不是工作区。成员的任务在这个成员自己的容器里运行，用的是团队的变量和脚本、这个成员自己的模型连接和 MCP "
 "连接；这个成员个人的全局变量只在运行时使用（只用于安装的那些会被排除；如果名字相同，以团队的定义为准）。所以安装结果对每位成员都一样，团队才能共享快照。"
 
-#: ../developer/operations.md:4687
+#: ../developer/operations.md:4731
 msgid ""
 "**Secrets are shared.** Every member who can run a task with a team "
 "environment can read its Secrets from inside that task; the dialog says "
@@ -9505,7 +9587,7 @@ msgstr ""
 "**Secrets 是共享的。** 只要能用团队环境运行任务，成员就能在任务里读到它的 "
 "Secrets，对话框里也会说明这一点。请把它们当作整个团队都知道的内容；如果某位成员离开后不应该再持有某个 Secret，就把它轮换掉。"
 
-#: ../developer/operations.md:4691
+#: ../developer/operations.md:4735
 msgid ""
 "**Leaving.** A binding records the team and the member's access "
 "generation. When a member leaves, is removed, or the team is deleted, "
@@ -9524,14 +9606,14 @@ msgstr ""
 " "
 "409；遮蔽仍然会读取它的值。重新加入团队也不会让旧对话恢复，因为代次已经往前走了。如果成员的仓库默认设置指向一个他已经不能再用的团队环境，下次他开始任务时，这个默认设置会被清掉。"
 
-#: ../developer/operations.md:4701
+#: ../developer/operations.md:4745
 msgid ""
 "**Removal.** Removing a team environment clears every member's default "
 "that names it. Conversations already bound keep their fixed "
 "configuration, as with a personal environment."
 msgstr "**移除环境。** 移除一个团队环境，会清掉所有指向它的成员默认设置。已经绑定的对话，和个人环境一样，保持它们固定下来的配置。"
 
-#: ../developer/operations.md:4704
+#: ../developer/operations.md:4748
 msgid ""
 "**Rollback.** Downgrading below `0082_team_environments` is refused while"
 " any team environment exists, archived ones included."

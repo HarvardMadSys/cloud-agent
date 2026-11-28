@@ -569,3 +569,50 @@ describe('reasoning levels', () => {
     );
   });
 });
+
+describe('signing in at the deployment provider', () => {
+  const offer = { name: 'Example Inference', base_url: 'https://api.provider.example/v1' };
+
+  it('offers it above adding a connection by hand, and steps aside while a form is open', async () => {
+    vi.mocked(api.listModelConnections).mockResolvedValue({
+      configured: true,
+      enabled: true,
+      connections: [],
+      sign_in: offer,
+    });
+    renderSettings();
+    const button = await screen.findByRole('button', {
+      name: 'Create or link a Example Inference account',
+    });
+    expect(region()).toHaveTextContent(
+      'Sign up at Example Inference, or sign in to the account you have there',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add connection' }));
+    expect(button).not.toBeInTheDocument();
+  });
+
+  it('offers nothing while connections are switched off', async () => {
+    vi.mocked(api.listModelConnections).mockResolvedValue({
+      configured: true,
+      enabled: false,
+      connections: [connection],
+      sign_in: offer,
+    });
+    renderSettings();
+    await screen.findByRole('article', { name: connection.name });
+    expect(screen.queryByRole('button', { name: /Create or link/ })).not.toBeInTheDocument();
+  });
+
+  it('reads in Chinese', async () => {
+    vi.mocked(api.listModelConnections).mockResolvedValue({
+      configured: true,
+      enabled: true,
+      connections: [],
+      sign_in: offer,
+    });
+    renderSettings('zh-CN');
+    expect(
+      await screen.findByRole('button', { name: '创建或关联 Example Inference 账号' }),
+    ).toBeInTheDocument();
+  });
+});

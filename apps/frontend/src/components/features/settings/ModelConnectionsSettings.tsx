@@ -10,6 +10,7 @@ import {
 } from '@/lib/api/modelConnections';
 import { ModelConnectionCard } from './ModelConnectionCard';
 import { ModelConnectionForm } from './ModelConnectionForm';
+import { ModelSignInCard } from './ModelSignInButton';
 import { ConnectionOps, type Operate, type Settlement } from './connectionOps';
 import { ChevronIcon } from './icons';
 import { MODEL_CONNECTIONS_ANCHOR, MODEL_CONNECTIONS_REQUESTED } from './navigation';
@@ -142,6 +143,7 @@ function Connections() {
       {data && !available ? (
         <p className="mt-3 text-sm text-muted">{t('connections.unavailable')}</p>
       ) : null}
+      <ModelSignInCard list={data} editing={editing !== null} />
       {available && !editing ? (
         <button
           type="button"

@@ -380,6 +380,37 @@ export function ApplicationSettingsFeedback({ settings }: { settings: Applicatio
   );
 }
 
+/**
+ * An application settings category shown on another tab (`HOSTED_CATEGORIES`),
+ * under that tab's own heading for it. Absent while the registry has no such
+ * category, so an older control plane shows nothing rather than an empty card.
+ */
+export function HostedSettingsSection({
+  settings,
+  category,
+  title,
+  active,
+}: {
+  settings: ApplicationSettingsState;
+  category: string;
+  title: string;
+  active: boolean;
+}) {
+  if (!settings.groups.has(category)) return null;
+  return (
+    <section className="ui-card mt-6 p-4 sm:p-6" aria-label={title}>
+      <ApplicationSettingsHeader settings={settings} title={title} />
+      <ApplicationSettingsFeedback settings={settings} />
+      <ApplicationSettingsCategory
+        settings={settings}
+        category={category}
+        active={active}
+        showHeading={false}
+      />
+    </section>
+  );
+}
+
 export function ApplicationSettingsCategory({
   settings,
   category,

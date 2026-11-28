@@ -22,6 +22,7 @@ import {
   ApplicationSettingsCategory,
   ApplicationSettingsFeedback,
   ApplicationSettingsHeader,
+  HostedSettingsSection,
   categoryTabId,
   useApplicationSettings,
 } from './ApplicationSettings';
@@ -32,7 +33,11 @@ import { SettingsSearch } from './SettingsSearchPanel';
 import { useRuntimeUpgrades } from './useRuntimeUpgrades';
 import { useRuntimeVersions } from './useRuntimeVersions';
 import { isLegacyDeploymentHash, legacyDeploymentSetting } from './legacyDeploymentLinks';
-import { HOSTED_CATEGORIES, applicationCategoryName } from './settingsOrganization';
+import {
+  HOSTED_CATEGORIES,
+  MODEL_SIGN_IN_CATEGORY,
+  applicationCategoryName,
+} from './settingsOrganization';
 import {
   buildSettingsSearchItems,
   providedModelsSearchItem,
@@ -621,7 +626,14 @@ function SettingsView() {
               />
             )}
           </div>
-          <ProvidedModelsPanel selected={selectedTab === 'models'} onAccessDenied={fail} />
+          <ProvidedModelsPanel selected={selectedTab === 'models'} onAccessDenied={fail}>
+            <HostedSettingsSection
+              settings={applicationSettings}
+              category={MODEL_SIGN_IN_CATEGORY}
+              title="Provider sign-in"
+              active={selectedTab === 'models'}
+            />
+          </ProvidedModelsPanel>
           <div
             role="tabpanel"
             id="admin-settings-panel-cloudlab"

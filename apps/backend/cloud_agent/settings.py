@@ -21,6 +21,7 @@ from cloud_agent.accounts.settings_registry import ACCOUNT_SETTINGS
 from cloud_agent.crypto.credential_cipher import CredentialCipher, CredentialCipherError
 from cloud_agent.crypto.domain_cipher import settings_root_key
 from cloud_agent.deployment.deployment_setup import BOOTSTRAP as BOOTSTRAP, bootstrap_snapshot
+from cloud_agent.domain.model_sign_in import MODEL_SIGN_IN_SETTINGS
 from cloud_agent.setting_definition import (
     MINIMUM_CREDENTIAL_BYTES as MINIMUM_CREDENTIAL_BYTES,
     Setting,
@@ -728,6 +729,8 @@ MIGRATED_SETTINGS: tuple[Setting, ...] = (
     + ACCOUNT_SETTINGS
 )
 SETTINGS += ACCOUNT_SETTINGS
+#: Administrator-only: none has an environment name, so none is imported.
+SETTINGS += MODEL_SIGN_IN_SETTINGS
 SETTINGS_BY_KEY = {setting.key: setting for setting in SETTINGS}
 SETTINGS_BY_STORAGE_KEY = {setting.storage_key: setting for setting in SETTINGS}
 _SETTINGS_BY_ENV = {setting.env: setting for setting in SETTINGS if setting.env}

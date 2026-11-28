@@ -4438,6 +4438,50 @@ and the owner model connections entry in [AGENTS.md](../../AGENTS.md) §7.
   say the provider bills it; there is no cost. What is and is not counted is
   in [Usage](#usage).
 
+### Signing in at a provider for a key
+
+A deployment can name one model provider where an owner creates an account, or
+signs in to the one they have, and comes back with a key of their own. The
+owner never copies a key: the composer's set-up notice and **Settings →
+Models** show **Create or link a *provider* account** while the owner has no
+connection with that provider's Base URL. The flow follows OpenRouter's PKCE
+key flow
+([design](../agents/specs/2026-11-28-model-provider-sign-in.md)).
+
+1. The browser asks `POST /v1/agent/model-sign-in`. The control plane stores a
+   single-use state for the owner, with a PKCE verifier only it holds
+   (encrypted, ten minutes), and answers the provider's authorization page with
+   `callback_url`, `code_challenge` and `code_challenge_method=S256` added. The
+   callback is `<web app URL>/settings/models/connected?state=…`.
+2. At the provider, the owner signs up or signs in, and approves a key. The
+   provider sends the browser back to the callback with a one-time `code`
+   added, or with `error` if the owner declined.
+3. The callback page sends the code and the state to
+   `POST /v1/agent/model-sign-in/finish`. The control plane consumes the
+   state for that owner and re-checks the setting and the owner's connections.
+   It reserves the hourly checks for the configured models; models already on
+   another of the owner's connections are skipped. Only then does it exchange
+   the code and the verifier at the key exchange URL: a JSON POST of `code`,
+   `code_verifier` and `code_challenge_method`, answered with `{"key": "…"}`.
+   That call follows the same address rules as verification.
+4. The key is verified on each configured model, and a connection named after
+   the provider is saved with the models an agent can use. It is an ordinary
+   connection from then on.
+
+Anything refused before step 3 issues no key. If the provider issues a key and
+no model verifies, or verification times out, nothing is saved here, and the
+message says the key can be deleted at the provider.
+
+Configure it under **Admin → Settings → Models → Provider sign-in**. Fill in
+the provider's name, its authorization page URL, its key exchange URL, the
+inference Base URL the connection uses, and up to sixteen model ids.
+Then register `<web app URL>/settings/models/connected` as an allowed callback
+with the provider. The web app URL (`AGENT_WEB_BASE_URL`) must be set. With any
+of these empty, nothing is offered and both routes refuse. None of these
+settings has an environment variable. This obtains the owner's own key and
+nothing else: it signs no one in to Cloud Agent, decides no admission, and
+never runs during a turn ([AGENTS.md](../../AGENTS.md) §5).
+
 ## Provided models
 
 A deployment can offer models of its own beside owners' connections. An

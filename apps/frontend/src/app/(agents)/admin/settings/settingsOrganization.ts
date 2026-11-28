@@ -96,6 +96,16 @@ const SETTING_GROUPS: SettingGroup[] = [
     keys: ['mcp_github_client_id', 'mcp_github_client_secret'],
   },
   {
+    title: 'Provider sign-in',
+    keys: [
+      'model_sign_in.name',
+      'model_sign_in.authorize_url',
+      'model_sign_in.key_url',
+      'model_sign_in.base_url',
+      'model_sign_in.models',
+    ],
+  },
+  {
     title: 'Compute services',
     keys: [
       'compute.cloudlab_api_url',
@@ -248,12 +258,16 @@ const SETTINGS_BY_KEY = new Map<string, string>(
   SETTING_GROUPS.flatMap(({ title, keys }) => keys.map((key) => [key, title] as const)),
 );
 
+/** The application settings category shown on the Models tab. */
+export const MODEL_SIGN_IN_CATEGORY = 'Model sign-in';
+
 /**
  * Application settings categories shown on another tab rather than their own,
  * because that tab already describes what they configure.
  */
 export const HOSTED_CATEGORIES: ReadonlyMap<string, { tab: string; section: string }> = new Map([
   ['Agent versions', { tab: 'versions', section: 'Agent versions' }],
+  [MODEL_SIGN_IN_CATEGORY, { tab: 'models', section: 'Provider sign-in' }],
 ]);
 
 /** The settings tab that shows an application settings category. */
